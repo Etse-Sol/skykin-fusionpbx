@@ -3997,6 +3997,9 @@ echo "#menu a, #menu_side a, .menu-side a, nav a, .navbar a { color: #ffffff !im
 echo "#menu a:hover, .menu-side a:hover { background: rgba(255,255,255,0.15) !important; color: #ffffff !important; }";
 echo ".dropdown-menu, .dropdown-menu li, .dropdown-menu a, #body_header_user_menu, #body_header_user_menu a { background-color: #ffffff !important; color: #333333 !important; }";
 echo ".dropdown-menu a:hover { background-color: #f0f0f0 !important; color: #0047AB !important; }";
+echo "#body_header_user_menu { background: #ffffff !important; border: 1px solid #ddd !important; box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important; }";
+echo "#body_header_user_menu * { background: transparent !important; color: #333 !important; }";
+echo "#body_header_user_menu a:hover { background: #f5f5f5 !important; color: #0047AB !important; }";
 echo ".btn-primary, input[type=submit], .button-primary { background-color: #0047AB !important; border-color: #0047AB !important; color: #fff !important; }";
 echo "#login_logo { width: 150px; max-width: 150px; height: auto; display: block; margin: 0 auto 5px auto; }";
 
