@@ -3995,6 +3995,8 @@ else { //default: white
 echo "#menu, #menu_side, .menu-side, .nav-side, nav, .navbar, aside, [id*='menu'], [class*='menu-side'] { background: linear-gradient(180deg, #0047AB 0%, #003580 100%) !important; }";
 echo "#menu a, #menu_side a, .menu-side a, nav a, .navbar a { color: #ffffff !important; }";
 echo "#menu a:hover, .menu-side a:hover { background: rgba(255,255,255,0.15) !important; color: #ffffff !important; }";
+echo ".dropdown-menu, .dropdown-menu li, .dropdown-menu a, #body_header_user_menu, #body_header_user_menu a { background-color: #ffffff !important; color: #333333 !important; }";
+echo ".dropdown-menu a:hover { background-color: #f0f0f0 !important; color: #0047AB !important; }";
 echo ".btn-primary, input[type=submit], .button-primary { background-color: #0047AB !important; border-color: #0047AB !important; color: #fff !important; }";
 echo "#login_logo { width: 150px; max-width: 150px; height: auto; display: block; margin: 0 auto 5px auto; }";
 
