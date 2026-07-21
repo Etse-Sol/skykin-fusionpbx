@@ -36,30 +36,42 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     background: linear-gradient(135deg, #0047AB 0%, #00B4D8 100%);
     color: white;
     padding: 0 24px;
-    height: 60px;
+    height: 64px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    gap: 16px;
 }
-.header .logo { font-size: 20px; font-weight: bold; letter-spacing: 1px; }
-.header .logo span { color: #00B4D8; }
-.header .agent-info { display: flex; align-items: center; gap: 12px; }
+.header .logo { font-size: 20px; font-weight: bold; letter-spacing: 1px; white-space: nowrap; flex-shrink: 0; }
+.header .logo span { color: #00e5ff; }
+.header .agent-info {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 30px;
+    padding: 6px 14px 6px 8px;
+    flex-shrink: 0;
+}
 .agent-avatar {
-    width: 36px; height: 36px; border-radius: 50%;
+    width: 34px; height: 34px; border-radius: 50%;
     background: rgba(255,255,255,0.3);
     display: flex; align-items: center; justify-content: center;
-    font-weight: bold; font-size: 14px;
+    font-weight: bold; font-size: 13px;
+    flex-shrink: 0;
+    border: 2px solid rgba(255,255,255,0.5);
 }
+.agent-text-info { display: flex; flex-direction: column; }
+.agent-text-info .agent-name { font-weight: bold; font-size: 13px; line-height: 1.2; white-space: nowrap; }
+.agent-text-info .agent-domain { font-size: 10px; opacity: 0.75; white-space: nowrap; }
 .status-badge {
-    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold;
-    background: #28a745; color: white;
+    padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: bold;
+    background: #28a745; color: white; white-space: nowrap; flex-shrink: 0;
 }
 .status-badge.busy { background: #dc3545; }
 .status-badge.idle { background: #ffc107; color: #333; }
-.header-right { display: flex; align-items: center; gap: 16px; }
-.clock { font-size: 14px; opacity: 0.9; }
+.header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.clock { font-size: 13px; opacity: 0.9; white-space: nowrap; }
 .logout-btn {
     background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4);
     color: white; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 13px;
@@ -215,10 +227,10 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 <div class="header">
     <div class="logo">SKY<span>KIN</span> Technologies</div>
     <div class="agent-info">
-        <div class="agent-avatar" id="agentInitial">A1</div>
-        <div>
-            <div style="font-weight:bold;font-size:14px;" id="agentNameDisplay"><?php echo $agent_name; ?></div>
-            <div style="font-size:11px;opacity:0.8;"><?php echo $domain; ?></div>
+        <div class="agent-avatar" id="agentInitial">--</div>
+        <div class="agent-text-info">
+            <span class="agent-name" id="agentNameDisplay"><?php echo $agent_name; ?></span>
+            <span class="agent-domain"><?php echo $domain; ?></span>
         </div>
         <span class="status-badge" id="agentStatus">Available</span>
     </div>
