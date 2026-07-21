@@ -252,6 +252,8 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .sip-dot.calling    { background: #ffc107; animation: pulse 0.5s infinite; }
 .sip-dot.incall     { background: #28a745; }
 .sip-dot.ringing    { background: #fd7e14; animation: pulse 0.4s infinite; }
+.sip-dot.failed     { background: #dc3545; }
+.sip-dot.connecting { background: #aaa; animation: pulse 1s infinite; }
 .pp-close {
     background: rgba(255,255,255,0.2); border: none; color: white;
     width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 14px;
@@ -1186,9 +1188,31 @@ function initSIP(ext, pass, server, dom) {
             connection_recovery_max_interval: 30
         };
         ua = new JsSIP.UA(config);
-        ua.on('registered',         () => setSipStatus('registered', 'Registered (' + ext + ')'));
+
+        let regTimer = null;
+
+        ua.on('connecting', () => setSipStatus('connecting', 'Connecting...'));
+        ua.on('connected',  () => {
+            setSipStatus('connecting', 'Authenticating...');
+            // Timeout: if not registered within 8s, show error
+            regTimer = setTimeout(() => {
+                setSipStatus('failed', 'No response — check settings');
+                document.getElementById('settingsModal').classList.add('show');
+            }, 8000);
+        });
+        ua.on('disconnected', () => {
+            clearTimeout(regTimer);
+            setSipStatus('failed', 'Cannot reach server (' + server + ':5066)');
+        });
+        ua.on('registered', () => {
+            clearTimeout(regTimer);
+            setSipStatus('registered', 'Registered (' + ext + ')');
+        });
         ua.on('unregistered',       () => setSipStatus('unregistered', 'Not Registered'));
-        ua.on('registrationFailed', (e) => setSipStatus('failed', 'Reg Failed: ' + (e.cause || 'error')));
+        ua.on('registrationFailed', (e) => {
+            clearTimeout(regTimer);
+            setSipStatus('failed', 'Auth Failed: wrong ext or password?');
+        });
         ua.on('newRTCSession', (data) => {
             const session = data.session;
             if (session.direction === 'incoming') handleIncoming(session);
@@ -1237,8 +1261,12 @@ function setSipStatus(state, text) {
         dot.classList.add('ringing');
         badge.classList.add('show');
         fab.classList.add('ringing');
+    } else if (state === 'connecting') {
+        dot.classList.add('connecting');
     } else if (state === 'unregistered' || state === 'failed') {
+        dot.classList.add('failed');
         badge.classList.add('show','unreg');
+        document.getElementById('btnCall').disabled = true;
     }
     document.getElementById('sipStatusText').textContent = text;
 }
