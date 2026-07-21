@@ -805,6 +805,7 @@ startCountdown();
 // ===== WebRTC Softphone =====
 let ua = null;
 let currentSession = null;
+let lastDialedNumber = '';
 let callStartTime = null;
 let callTimerInterval = null;
 let onHold = false;
@@ -927,6 +928,7 @@ function declineCall() {
 function makeCall() {
     const number = document.getElementById('dialInput').value.trim();
     if (!number || !ua) return;
+    lastDialedNumber = number; // save number
     const domain = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
     const options = {
         mediaConstraints: { audio: true, video: false },
@@ -943,36 +945,35 @@ function handleOutgoing(session) {
     document.getElementById('btnHold').style.display = 'none';
 
     session.on('connecting', () => {
-        setSipStatus('calling', 'Connecting...');
-        document.getElementById('dialInput').value = '⏳ Connecting...';
+        setSipStatus('calling', 'Calling: ' + lastDialedNumber);
+        document.getElementById('dialInput').value = 'Calling ' + lastDialedNumber + '...';
     });
     session.on('progress', () => {
-        setSipStatus('ringing', '🔔 Ringing...');
-        document.getElementById('dialInput').value = '🔔 Ringing...';
+        setSipStatus('ringing', 'Ringing: ' + lastDialedNumber);
+        document.getElementById('dialInput').value = 'Ringing ' + lastDialedNumber + '...';
     });
     session.on('confirmed', () => {
-        document.getElementById('dialInput').value = '';
-        startCallUI(session.remote_identity.uri.user);
+        document.getElementById('dialInput').value = lastDialedNumber;
+        startCallUI(lastDialedNumber);
     });
     session.on('ended', () => {
-        document.getElementById('dialInput').value = '';
+        document.getElementById('dialInput').value = lastDialedNumber;
         endCall();
     });
     session.on('failed', (e) => {
         const cause = e.cause || 'Failed';
         let msg = cause;
-        if (cause === 'Busy') msg = '📵 User is Busy';
-        else if (cause === 'Rejected') msg = '❌ Call Rejected';
+        if (cause === 'Busy') msg = '📵 ' + lastDialedNumber + ' is Busy';
+        else if (cause === 'Rejected') msg = '❌ ' + lastDialedNumber + ' Rejected';
         else if (cause === 'Not Found') msg = '❓ Number Not Found';
-        else if (cause === 'Request Timeout') msg = '⏱ No Answer';
-        document.getElementById('dialInput').value = '';
+        else if (cause === 'Request Timeout') msg = '⏱ No Answer from ' + lastDialedNumber;
+        document.getElementById('dialInput').value = lastDialedNumber;
         endCall();
         setSipStatus('registered', msg);
-        // Show cause briefly then clear
         setTimeout(() => setSipStatus('registered', 'Registered'), 4000);
     });
     session.connection?.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
-    setSipStatus('calling', 'Calling ' + document.getElementById('dialInput').value);
+    setSipStatus('calling', 'Calling ' + lastDialedNumber);
 }
 
 function startCallUI(number) {
@@ -981,6 +982,7 @@ function startCallUI(number) {
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display = 'block';
     document.getElementById('callTimer').style.display = 'block';
+    document.getElementById('dialInput').value = number;
     document.getElementById('agentStatus').textContent = 'On Call';
     document.getElementById('agentStatus').className = 'status-badge busy';
     callStartTime = new Date();
