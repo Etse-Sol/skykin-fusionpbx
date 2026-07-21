@@ -937,11 +937,40 @@ function makeCall() {
 }
 
 function handleOutgoing(session) {
-    session.on('connecting', () => setSipStatus('calling', 'Calling...'));
-    session.on('progress', () => setSipStatus('ringing', 'Ringing...'));
-    session.on('confirmed', () => startCallUI(session.remote_identity.uri.user));
-    session.on('ended', endCall);
-    session.on('failed', (e) => { endCall(); setSipStatus('registered', 'Call Failed: ' + (e.cause || '')); });
+    // Show Hang Up immediately when call starts
+    document.getElementById('btnCall').style.display = 'none';
+    document.getElementById('btnHangup').style.display = 'block';
+    document.getElementById('btnHold').style.display = 'none';
+
+    session.on('connecting', () => {
+        setSipStatus('calling', 'Connecting...');
+        document.getElementById('dialInput').value = '⏳ Connecting...';
+    });
+    session.on('progress', () => {
+        setSipStatus('ringing', '🔔 Ringing...');
+        document.getElementById('dialInput').value = '🔔 Ringing...';
+    });
+    session.on('confirmed', () => {
+        document.getElementById('dialInput').value = '';
+        startCallUI(session.remote_identity.uri.user);
+    });
+    session.on('ended', () => {
+        document.getElementById('dialInput').value = '';
+        endCall();
+    });
+    session.on('failed', (e) => {
+        const cause = e.cause || 'Failed';
+        let msg = cause;
+        if (cause === 'Busy') msg = '📵 User is Busy';
+        else if (cause === 'Rejected') msg = '❌ Call Rejected';
+        else if (cause === 'Not Found') msg = '❓ Number Not Found';
+        else if (cause === 'Request Timeout') msg = '⏱ No Answer';
+        document.getElementById('dialInput').value = '';
+        endCall();
+        setSipStatus('registered', msg);
+        // Show cause briefly then clear
+        setTimeout(() => setSipStatus('registered', 'Registered'), 4000);
+    });
     session.connection?.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
     setSipStatus('calling', 'Calling ' + document.getElementById('dialInput').value);
 }
