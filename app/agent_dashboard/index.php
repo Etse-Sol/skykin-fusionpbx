@@ -462,42 +462,42 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     <div class="summary-grid">
         <div class="card green">
             <div class="card-label">Total Calls Today</div>
-            <div class="card-value" id="totalCalls">--</div>
+            <div class="card-value" id="totalCalls">0</div>
             <div class="card-sub">Inbound + Outbound</div>
         </div>
         <div class="card teal">
             <div class="card-label">Avg Call Duration</div>
-            <div class="card-value" id="avgDuration">--</div>
+            <div class="card-value" id="avgDuration">0:00</div>
             <div class="card-sub">Minutes:Seconds</div>
         </div>
         <div class="card">
             <div class="card-label">Total Talk Time</div>
-            <div class="card-value" id="totalTalk">--</div>
+            <div class="card-value" id="totalTalk">0:00</div>
             <div class="card-sub">Today</div>
         </div>
         <div class="card orange">
             <div class="card-label">Idle Duration</div>
-            <div class="card-value" id="idleTime">--</div>
+            <div class="card-value" id="idleTime">0:00</div>
             <div class="card-sub">Between calls</div>
         </div>
         <div class="card red">
             <div class="card-label">Missed Calls</div>
-            <div class="card-value" id="missedCalls">--</div>
+            <div class="card-value" id="missedCalls">0</div>
             <div class="card-sub">Unanswered</div>
         </div>
         <div class="card purple">
             <div class="card-label">Transfers</div>
-            <div class="card-value" id="transfers">--</div>
+            <div class="card-value" id="transfers">0</div>
             <div class="card-sub">Forwarded calls</div>
         </div>
         <div class="card yellow">
             <div class="card-label">Hold Times</div>
-            <div class="card-value" id="holdTimes">--</div>
+            <div class="card-value" id="holdTimes">0:00</div>
             <div class="card-sub">Total hold duration</div>
         </div>
         <div class="card green">
             <div class="card-label">Working Duration</div>
-            <div class="card-value" id="workDuration">--</div>
+            <div class="card-value" id="workDuration">0:00</div>
             <div class="card-sub">Since login</div>
         </div>
     </div>
@@ -885,9 +885,19 @@ function fetchData() {
         +'&ext='+encodeURIComponent(ext)
         +'&from='+encodeURIComponent(from)
         +'&to='+encodeURIComponent(to))
-        .then(r => r.json())
+        .then(r => r.text())
+        .then(text => {
+            // Strip any PHP warnings/notices before the JSON
+            const jsonStart = text.indexOf('{');
+            const clean = jsonStart >= 0 ? text.slice(jsonStart) : '{}';
+            try {
+                return JSON.parse(clean);
+            } catch(e) {
+                return getEmptyData();
+            }
+        })
         .then(data => updateDashboard(data))
-        .catch(() => updateDashboard(getDemoData()));
+        .catch(() => updateDashboard(getEmptyData()));
 }
 
 // ── Fetch recordings ──────────────────────────────
@@ -945,6 +955,22 @@ function playRecording(path) {
     if (recAudio) { recAudio.pause(); recAudio = null; }
     recAudio = new Audio(path);
     recAudio.play().catch(() => alert('Cannot play: ' + path));
+}
+
+// ── Empty data (no calls / API error) ─────────────
+function getEmptyData() {
+    return {
+        total_calls:0, answered_calls:0, missed_calls:0,
+        avg_duration:0, total_talk:0, total_duration:0,
+        listening_duration:0, internal_call_time:0, outbound_time:0,
+        hook_on_times:0, hold_times:0, transfers:0, forwarding_times:0,
+        acw_duration:0, ivr_transfer:0, busy_duration:0, rest_duration:0,
+        over_rest:0, idle_duration:0, interceptions:0, internal_help:0,
+        login_count:1, force_signout:0, listening_count:0, third_party_count:0,
+        force_advisor_count:0, handle_on_behalf:0, ask_help_count:0, call_reason_count:0,
+        queue_waiting:0, agents_online:0, avg_wait:0, sla_rate:0,
+        recent_calls:[]
+    };
 }
 
 // ── Demo data ─────────────────────────────────────
