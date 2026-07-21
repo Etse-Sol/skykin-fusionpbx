@@ -2,22 +2,6 @@
 // SkyKin Technologies - Real-time Agent Dashboard
 session_start();
 
-// FusionPBX DB connection
-$db_host = '127.0.0.1';
-$db_name = 'fusionpbx';
-$db_user = 'fusionpbx';
-$db_pass = file_get_contents('/etc/fusionpbx/config.php') ? '' : '';
-
-// Read DB password from FusionPBX config
-$config_file = '/etc/fusionpbx/config.php';
-if (file_exists($config_file)) {
-    $config = file_get_contents($config_file);
-    preg_match("/database_password.*?'(.*?)'/s", $config, $m);
-    if (!empty($m[1])) $db_pass = $m[1];
-    preg_match("/database_username.*?'(.*?)'/s", $config, $u);
-    if (!empty($u[1])) $db_user = $u[1];
-}
-
 $agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
 $domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
 
@@ -25,6 +9,8 @@ $domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.
 preg_match('/([A-Za-z]+)(\d*)/', $agent_name, $m);
 $initials = strtoupper(substr($m[1] ?? $agent_name, 0, 2));
 if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
+
+$today = date('Y-m-d');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -32,104 +18,103 @@ if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SkyKin Agent Dashboard - <?php echo $agent_name; ?></title>
-<script src="/app/agent_dashboard/js/jssip.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; }
 
-/* Header */
+/* ── Header ── */
 .header {
     background: linear-gradient(135deg, #0047AB 0%, #00B4D8 100%);
-    color: white;
-    padding: 0 24px;
-    height: 64px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    color: white; padding: 0 24px; height: 64px;
+    display: flex; align-items: center; justify-content: space-between;
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-    gap: 16px;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 300; gap: 16px;
 }
 .header .logo { font-size: 20px; font-weight: bold; letter-spacing: 1px; white-space: nowrap; flex-shrink: 0; }
 .header .logo span { color: #00e5ff; }
 .header .agent-info {
     display: flex; align-items: center; gap: 10px;
-    background: rgba(255,255,255,0.15);
-    border-radius: 30px;
-    padding: 6px 14px 6px 8px;
-    flex-shrink: 0;
+    background: rgba(255,255,255,0.15); border-radius: 30px;
+    padding: 6px 14px 6px 8px; flex-shrink: 0;
 }
 .agent-avatar {
     width: 34px; height: 34px; border-radius: 50%;
     background: rgba(255,255,255,0.3);
     display: flex; align-items: center; justify-content: center;
-    font-weight: bold; font-size: 13px;
-    flex-shrink: 0;
+    font-weight: bold; font-size: 13px; flex-shrink: 0;
     border: 2px solid rgba(255,255,255,0.5);
 }
 .agent-text-info { display: flex; flex-direction: column; }
-.agent-text-info .agent-name { font-weight: bold; font-size: 13px; line-height: 1.2; white-space: nowrap; }
-.agent-text-info .agent-domain { font-size: 10px; opacity: 0.75; white-space: nowrap; }
-.status-badge {
-    padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: bold;
-    background: #28a745; color: white; white-space: nowrap; flex-shrink: 0;
-}
-.status-badge.busy { background: #dc3545; }
-.status-badge.idle { background: #ffc107; color: #333; }
+.agent-text-info .agent-name  { font-weight: bold; font-size: 13px; line-height: 1.2; white-space: nowrap; }
+.agent-text-info .agent-domain{ font-size: 10px; opacity: 0.75; white-space: nowrap; }
 .header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .clock { font-size: 13px; opacity: 0.9; white-space: nowrap; }
-.logout-btn {
-    background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4);
-    color: white; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 13px;
+
+/* ── Status Dropdown ── */
+.status-drop-wrap { position: relative; flex-shrink: 0; }
+.status-drop-btn {
+    background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.35);
+    color: white; padding: 6px 14px 6px 10px; border-radius: 20px; cursor: pointer;
+    font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 7px;
 }
-.logout-btn:hover { background: rgba(255,255,255,0.3); }
+.status-drop-btn:hover { background: rgba(255,255,255,0.25); }
+.sdot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.sdot.ready    { background: #28a745; box-shadow: 0 0 0 3px rgba(40,167,69,0.3); animation: pulse 2s infinite; }
+.sdot.notready { background: #dc3545; }
+.sdot.brk      { background: #ffc107; }
+.sdot.incall   { background: #17a2b8; animation: pulse 1s infinite; }
+.status-drop-menu {
+    display: none; position: absolute; right: 0; top: calc(100% + 8px);
+    background: white; border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18); min-width: 180px; overflow: hidden; z-index: 600;
+}
+.status-drop-menu.open { display: block; }
+.s-opt {
+    padding: 12px 16px; font-size: 13px; color: #333; cursor: pointer;
+    display: flex; align-items: center; gap: 10px; transition: background 0.15s;
+}
+.s-opt:hover { background: #f0f5ff; }
+.s-opt.logout { border-top: 1px solid #e9ecef; color: #dc3545; }
+.s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
-/* Layout */
-.main { margin-top: 60px; padding: 20px; margin-bottom: 80px; }
+/* ── Layout ── */
+.main { margin-top: 64px; padding: 20px; margin-bottom: 62px; }
 
-/* Summary Cards */
+/* ── Summary Cards ── */
 .summary-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 14px;
-    margin-bottom: 20px;
+    gap: 14px; margin-bottom: 20px;
 }
 .card {
-    background: white;
-    border-radius: 10px;
-    padding: 16px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    border-left: 4px solid #0047AB;
+    background: white; border-radius: 10px; padding: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-left: 4px solid #0047AB;
     transition: transform 0.2s;
 }
 .card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,71,171,0.12); }
-.card.green { border-left-color: #28a745; }
+.card.green  { border-left-color: #28a745; }
 .card.orange { border-left-color: #fd7e14; }
-.card.red { border-left-color: #dc3545; }
-.card.teal { border-left-color: #00B4D8; }
+.card.red    { border-left-color: #dc3545; }
+.card.teal   { border-left-color: #00B4D8; }
 .card.purple { border-left-color: #6f42c1; }
 .card.yellow { border-left-color: #ffc107; }
-.card-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-.card-value { font-size: 26px; font-weight: bold; color: #0047AB; }
-.card.green .card-value { color: #28a745; }
+.card-label  { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+.card-value  { font-size: 26px; font-weight: bold; color: #0047AB; }
+.card.green  .card-value { color: #28a745; }
 .card.orange .card-value { color: #fd7e14; }
-.card.red .card-value { color: #dc3545; }
-.card.teal .card-value { color: #00B4D8; }
+.card.red    .card-value { color: #dc3545; }
+.card.teal   .card-value { color: #00B4D8; }
 .card.purple .card-value { color: #6f42c1; }
 .card.yellow .card-value { color: #e6a800; }
 .card-sub { font-size: 11px; color: #aaa; margin-top: 4px; }
 
-/* Sections */
+/* ── Section boxes ── */
 .section-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-bottom: 20px;
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 16px; margin-bottom: 20px;
 }
 .section-box {
-    background: white;
-    border-radius: 10px;
-    padding: 18px;
+    background: white; border-radius: 10px; padding: 18px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
 .section-title {
@@ -137,11 +122,9 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     border-bottom: 2px solid #e9ecef; padding-bottom: 10px; margin-bottom: 14px;
     display: flex; align-items: center; gap: 8px;
 }
-.section-title .dot {
-    width: 8px; height: 8px; border-radius: 50%; background: #0047AB; display: inline-block;
-}
+.section-title .dot { width: 8px; height: 8px; border-radius: 50%; background: #0047AB; display: inline-block; }
 
-/* Metric rows */
+/* ── Metric rows ── */
 .metric-row {
     display: flex; justify-content: space-between; align-items: center;
     padding: 8px 0; border-bottom: 1px solid #f5f5f5; font-size: 13px;
@@ -151,43 +134,24 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .metric-val { font-weight: bold; color: #333; }
 .metric-val.good { color: #28a745; }
 .metric-val.warn { color: #fd7e14; }
-.metric-val.bad { color: #dc3545; }
+.metric-val.bad  { color: #dc3545; }
 
-/* Activity Timeline */
-.timeline { margin-top: 4px; }
-.timeline-item {
-    display: flex; gap: 10px; padding: 8px 0;
-    border-bottom: 1px solid #f5f5f5; font-size: 12px;
-}
-.timeline-item:last-child { border-bottom: none; }
-.tl-time { color: #888; min-width: 55px; }
-.tl-icon {
-    width: 20px; height: 20px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px; flex-shrink: 0;
-}
-.tl-icon.call { background: #d4edda; color: #28a745; }
-.tl-icon.missed { background: #f8d7da; color: #dc3545; }
-.tl-icon.transfer { background: #d1ecf1; color: #00B4D8; }
-.tl-icon.hold { background: #fff3cd; color: #e6a800; }
-.tl-text { color: #444; }
-
-/* Progress bars */
+/* ── Progress bars ── */
 .progress-wrap { margin-top: 6px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: #888; margin-bottom: 3px; }
 .progress-bar { height: 6px; background: #e9ecef; border-radius: 3px; overflow: hidden; }
 .progress-fill { height: 100%; border-radius: 3px; transition: width 1s; }
-.progress-fill.blue { background: #0047AB; }
-.progress-fill.green { background: #28a745; }
+.progress-fill.blue   { background: #0047AB; }
+.progress-fill.green  { background: #28a745; }
 .progress-fill.orange { background: #fd7e14; }
 
-/* Full width section */
+/* ── Full section ── */
 .full-section {
     background: white; border-radius: 10px; padding: 18px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 20px;
 }
 
-/* Table */
+/* ── Table ── */
 .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .data-table th {
     background: #f8f9fa; padding: 10px 12px; text-align: left;
@@ -196,46 +160,69 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 }
 .data-table td { padding: 10px 12px; border-bottom: 1px solid #f5f5f5; }
 .data-table tr:hover td { background: #f8fbff; }
-.badge {
-    padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: bold;
-}
-.badge-in { background: #d4edda; color: #28a745; }
-.badge-out { background: #d1ecf1; color: #00B4D8; }
-.badge-missed { background: #f8d7da; color: #dc3545; }
+.badge { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+.badge-in       { background: #d4edda; color: #28a745; }
+.badge-out      { background: #d1ecf1; color: #00B4D8; }
+.badge-missed   { background: #f8d7da; color: #dc3545; }
 .badge-transfer { background: #e2d9f3; color: #6f42c1; }
 
-/* Live indicator */
+/* ── Live dot ── */
 .live-dot {
     display: inline-block; width: 8px; height: 8px;
-    background: #28a745; border-radius: 50%;
-    animation: pulse 1.5s infinite;
-    margin-right: 6px;
+    background: #28a745; border-radius: 50%; animation: pulse 1.5s infinite; margin-right: 6px;
 }
 @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(40,167,69,0.5); }
-    70% { box-shadow: 0 0 0 6px rgba(40,167,69,0); }
+    0%   { box-shadow: 0 0 0 0 rgba(40,167,69,0.5); }
+    70%  { box-shadow: 0 0 0 6px rgba(40,167,69,0); }
     100% { box-shadow: 0 0 0 0 rgba(40,167,69,0); }
 }
 
-/* Softphone Bar */
+/* ── Tab bar (call history / recordings) ── */
+.tab-bar {
+    display: flex; gap: 4px; margin-bottom: 16px;
+    border-bottom: 2px solid #e9ecef; padding-bottom: 0;
+}
+.tab-btn {
+    padding: 8px 20px; font-size: 13px; font-weight: 600;
+    border: none; background: none; cursor: pointer;
+    color: #888; border-bottom: 2px solid transparent; margin-bottom: -2px;
+    transition: all 0.15s; border-radius: 4px 4px 0 0;
+}
+.tab-btn.active { color: #0047AB; border-bottom-color: #0047AB; background: #f0f5ff; }
+.tab-btn:hover:not(.active) { color: #0047AB; background: #f8f9fa; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Date filter ── */
+.date-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.date-filter label { font-size: 12px; color: #888; }
+.date-filter input[type=date] {
+    border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px;
+    font-size: 13px; color: #333; outline: none;
+}
+.date-filter input[type=date]:focus { border-color: #0047AB; }
+.btn-filter       { background: #0047AB; color: white; border: none; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.btn-filter:hover { background: #003a8c; }
+.btn-filter-clear { background: #e9ecef; color: #555; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+
+/* ── Softphone Bar ── */
 .softphone-bar {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
     background: linear-gradient(135deg, #0a0a2e 0%, #0047AB 100%);
     color: white; padding: 10px 24px;
-    display: flex; align-items: center; gap: 12px;
-    box-shadow: 0 -4px 20px rgba(0,71,171,0.3);
-    height: 58px;
+    display: flex; align-items: center; gap: 10px;
+    box-shadow: 0 -4px 20px rgba(0,71,171,0.3); height: 58px;
 }
 .softphone-status {
     display: flex; align-items: center; gap: 8px;
-    font-size: 12px; min-width: 150px; flex-shrink: 0;
+    font-size: 12px; min-width: 140px; flex-shrink: 0;
 }
 .sip-dot { width: 10px; height: 10px; border-radius: 50%; background: #888; flex-shrink: 0; }
 .sip-dot.registered { background: #28a745; animation: pulse 2s infinite; }
-.sip-dot.calling { background: #ffc107; animation: pulse 0.5s infinite; }
-.sip-dot.incall { background: #28a745; }
-.sip-dot.ringing { background: #fd7e14; animation: pulse 0.4s infinite; }
-.dial-input-wrap { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 360px; }
+.sip-dot.calling    { background: #ffc107; animation: pulse 0.5s infinite; }
+.sip-dot.incall     { background: #28a745; }
+.sip-dot.ringing    { background: #fd7e14; animation: pulse 0.4s infinite; }
+.dial-input-wrap { display: flex; align-items: center; gap: 6px; flex: 1; max-width: 320px; }
 .dial-input {
     background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
     color: white; padding: 7px 12px; border-radius: 6px; font-size: 14px;
@@ -243,28 +230,42 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 }
 .dial-input::placeholder { color: rgba(255,255,255,0.4); letter-spacing: 0; }
 .dial-input:focus { border-color: #00B4D8; }
+.btn-dialpad {
+    background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+    color: white; width: 36px; height: 36px; border-radius: 6px; cursor: pointer;
+    font-size: 16px; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.btn-dialpad:hover { background: rgba(255,255,255,0.25); }
 .call-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .btn-call {
     background: #28a745; border: none; color: white;
     padding: 0 20px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; height: 36px;
-    white-space: nowrap;
+    font-size: 13px; font-weight: bold; height: 36px; white-space: nowrap;
 }
 .btn-call:hover { background: #218838; }
 .btn-call:disabled { background: #555; cursor: not-allowed; }
 .btn-hangup {
     background: #dc3545; border: none; color: white;
     padding: 0 16px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none; height: 36px;
-    white-space: nowrap;
+    font-size: 13px; font-weight: bold; display: none; height: 36px; white-space: nowrap;
 }
 .btn-hangup:hover { background: #c82333; }
 .btn-hold {
     background: #ffc107; border: none; color: #333;
     padding: 0 14px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none; height: 36px;
+    font-size: 13px; font-weight: bold; display: none; height: 36px; white-space: nowrap;
+}
+.btn-record {
+    background: rgba(220,53,69,0.2); border: 1px solid rgba(220,53,69,0.5);
+    color: #ff8fa3; padding: 0 12px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; height: 36px; display: none; align-items: center; gap: 6px;
     white-space: nowrap;
 }
+.btn-record.recording { background: #dc3545; color: white; border-color: #dc3545; }
+.btn-record.visible   { display: flex; }
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.btn-record.recording .rec-dot { animation: pulse 1s infinite; }
 .call-timer {
     font-size: 16px; font-weight: bold; color: #00B4D8;
     min-width: 52px; display: none; text-align: center; flex-shrink: 0;
@@ -275,22 +276,21 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
 }
 
-/* Incoming call overlay */
+/* ── Incoming call overlay ── */
 .incoming-overlay {
     display: none; position: fixed; top: 80px; right: 20px; z-index: 9999;
     background: white; border-radius: 12px; padding: 20px 24px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.3); min-width: 260px;
-    border-top: 4px solid #28a745; animation: slideIn 0.3s ease;
-    pointer-events: all;
+    border-top: 4px solid #28a745; animation: slideIn 0.3s ease; pointer-events: all;
 }
 @keyframes slideIn { from { transform: translateX(100px); opacity:0; } to { transform: translateX(0); opacity:1; } }
-.incoming-title { font-size: 12px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+.incoming-title  { font-size: 12px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
 .incoming-number { font-size: 22px; font-weight: bold; color: #0047AB; margin-bottom: 16px; }
 .incoming-actions { display: flex; gap: 10px; }
-.btn-answer { background: #28a745; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; z-index: 9999; position: relative; }
-.btn-decline { background: #dc3545; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; z-index: 9999; position: relative; }
+.btn-answer  { background: #28a745; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; }
+.btn-decline { background: #dc3545; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; }
 
-/* Settings modal */
+/* ── Settings modal ── */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 400; align-items: center; justify-content: center; }
 .modal-overlay.show { display: flex; }
 .modal-box { background: white; border-radius: 12px; padding: 28px; width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
@@ -299,17 +299,66 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .form-group label { font-size: 12px; color: #666; display: block; margin-bottom: 4px; }
 .form-group input { width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; font-size: 14px; }
 .btn-save-settings { background: #0047AB; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 8px; }
-    text-align: center; font-size: 11px; color: #aaa; padding: 16px;
+
+/* ── Dial Pad Modal ── */
+.dialpad-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    z-index: 500; align-items: flex-end; justify-content: center; padding-bottom: 62px;
 }
+.dialpad-overlay.show { display: flex; }
+.dialpad-box {
+    background: white; border-radius: 16px 16px 0 0; padding: 20px 24px 24px;
+    width: 300px; box-shadow: 0 -8px 32px rgba(0,0,0,0.2);
+    animation: slideUp 0.25s ease;
+}
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.dp-display {
+    background: #f0f4ff; border-radius: 8px; padding: 12px 16px;
+    font-size: 24px; font-weight: bold; color: #0047AB;
+    text-align: center; letter-spacing: 3px; min-height: 54px;
+    margin-bottom: 16px; word-break: break-all;
+    display: flex; align-items: center; justify-content: center;
+}
+.dp-display.empty { color: #ccc; font-size: 14px; letter-spacing: 0; font-weight: normal; }
+.dp-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px;
+}
+.dp-key {
+    background: #f0f2f5; border: none; border-radius: 10px;
+    padding: 14px 0; font-size: 18px; font-weight: bold; color: #333;
+    cursor: pointer; text-align: center; transition: background 0.1s;
+    display: flex; flex-direction: column; align-items: center; line-height: 1.2;
+}
+.dp-key:hover  { background: #dce3f0; }
+.dp-key:active { background: #c8d4f0; transform: scale(0.95); }
+.dp-key .dp-sub { font-size: 9px; color: #888; font-weight: normal; margin-top: 1px; }
+.dp-row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dp-call { background: #28a745; color: white; border: none; border-radius: 10px; padding: 14px 0; font-size: 16px; font-weight: bold; cursor: pointer; }
+.dp-call:hover { background: #218838; }
+.dp-del  { background: #fff0f0; color: #dc3545; border: none; border-radius: 10px; padding: 14px 0; font-size: 20px; cursor: pointer; }
+.dp-del:hover  { background: #ffd5d5; }
+.dp-close { margin-top: 10px; width: 100%; background: #f8f9fa; border: none; padding: 10px; border-radius: 8px; cursor: pointer; color: #888; font-size: 13px; }
+.dp-close:hover { background: #e9ecef; }
+
+/* ── Recording History ── */
+.rec-empty { text-align: center; color: #aaa; padding: 30px; font-size: 13px; }
+.rec-play     { background: #0047AB; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.rec-play:hover { background: #003a8c; }
+.rec-download { background: #e9ecef; color: #555; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 4px; }
+
+/* ── Footer ── */
+.footer { text-align: center; font-size: 11px; color: #aaa; padding: 16px; }
 
 @media (max-width: 768px) {
-    .section-grid { grid-template-columns: 1fr; }
-    .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .section-grid  { grid-template-columns: 1fr; }
+    .summary-grid  { grid-template-columns: repeat(2, 1fr); }
+    .dialpad-box   { width: 100%; border-radius: 16px 16px 0 0; }
 }
 </style>
 </head>
 <body>
 
+<!-- ══ HEADER ══ -->
 <div class="header">
     <div class="logo">SKY<span>KIN</span> Technologies</div>
     <div class="agent-info">
@@ -318,16 +367,38 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             <span class="agent-name"><?php echo $agent_name; ?></span>
             <span class="agent-domain"><?php echo $domain; ?></span>
         </div>
-        <span class="status-badge" id="agentStatus">Available</span>
     </div>
     <div class="header-right">
         <span class="live-dot"></span>
         <span style="font-size:12px;">Live</span>
         <div class="clock" id="liveClock"></div>
-        <button class="logout-btn" onclick="window.location='/logout.php'">Logout</button>
+
+        <!-- Ready / Not Ready / Logout dropdown -->
+        <div class="status-drop-wrap">
+            <button class="status-drop-btn" id="statusDropBtn" onclick="toggleStatusMenu()">
+                <span class="sdot ready" id="statusDot"></span>
+                <span id="statusLabel">Ready</span>
+                <span style="font-size:10px;opacity:.7;">▾</span>
+            </button>
+            <div class="status-drop-menu" id="statusDropMenu">
+                <div class="s-opt" onclick="setAgentStatus('ready')">
+                    <span class="opt-dot" style="background:#28a745"></span> Ready
+                </div>
+                <div class="s-opt" onclick="setAgentStatus('notready')">
+                    <span class="opt-dot" style="background:#dc3545"></span> Not Ready
+                </div>
+                <div class="s-opt" onclick="setAgentStatus('break')">
+                    <span class="opt-dot" style="background:#ffc107"></span> On Break
+                </div>
+                <div class="s-opt logout" onclick="window.location='/logout.php'">
+                    <span class="opt-dot" style="background:#dc3545"></span> Logout
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 
+<!-- ══ MAIN ══ -->
 <div class="main">
 
     <!-- Summary Cards -->
@@ -374,75 +445,28 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
         </div>
     </div>
 
-    <!-- Two Column Section -->
+    <!-- Two Column Metrics -->
     <div class="section-grid">
-
-        <!-- Call Time Metrics -->
         <div class="section-box">
             <div class="section-title"><span class="dot"></span> Call Time Metrics</div>
-            <div class="metric-row">
-                <span class="metric-name">Listening Duration</span>
-                <span class="metric-val" id="listeningDuration">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Internal Call Times</span>
-                <span class="metric-val" id="internalCallTime">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Making Calls Times</span>
-                <span class="metric-val" id="outboundTime">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Hook-on Times</span>
-                <span class="metric-val" id="hookOnTimes">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Total Call Duration</span>
-                <span class="metric-val" id="totalDuration">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Arranging State (ACW)</span>
-                <span class="metric-val" id="acwDuration">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Transfer to IVR Times</span>
-                <span class="metric-val" id="ivrTransfer">--</span>
-            </div>
+            <div class="metric-row"><span class="metric-name">Listening Duration</span><span class="metric-val" id="listeningDuration">--</span></div>
+            <div class="metric-row"><span class="metric-name">Internal Call Times</span><span class="metric-val" id="internalCallTime">--</span></div>
+            <div class="metric-row"><span class="metric-name">Making Calls Times</span><span class="metric-val" id="outboundTime">--</span></div>
+            <div class="metric-row"><span class="metric-name">Hook-on Times</span><span class="metric-val" id="hookOnTimes">--</span></div>
+            <div class="metric-row"><span class="metric-name">Total Call Duration</span><span class="metric-val" id="totalDuration">--</span></div>
+            <div class="metric-row"><span class="metric-name">Arranging State (ACW)</span><span class="metric-val" id="acwDuration">--</span></div>
+            <div class="metric-row"><span class="metric-name">Transfer to IVR Times</span><span class="metric-val" id="ivrTransfer">--</span></div>
         </div>
-
-        <!-- Status & Activity Metrics -->
         <div class="section-box">
-            <div class="section-title"><span class="dot" style="background:#28a745"></span> Status & Activity</div>
-            <div class="metric-row">
-                <span class="metric-name">Busy Duration</span>
-                <span class="metric-val warn" id="busyDuration">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Rest Duration</span>
-                <span class="metric-val" id="restDuration">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Over-Rest Duration</span>
-                <span class="metric-val bad" id="overRest">00:00</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Interception Times</span>
-                <span class="metric-val" id="interceptions">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Internal Help Times</span>
-                <span class="metric-val" id="internalHelp">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Login / Logout Count</span>
-                <span class="metric-val" id="loginCount">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Force Sign-out Times</span>
-                <span class="metric-val bad" id="forceSignout">0</span>
-            </div>
+            <div class="section-title"><span class="dot" style="background:#28a745"></span> Status &amp; Activity</div>
+            <div class="metric-row"><span class="metric-name">Busy Duration</span><span class="metric-val warn" id="busyDuration">--</span></div>
+            <div class="metric-row"><span class="metric-name">Rest Duration</span><span class="metric-val" id="restDuration">--</span></div>
+            <div class="metric-row"><span class="metric-name">Over-Rest Duration</span><span class="metric-val bad" id="overRest">00:00</span></div>
+            <div class="metric-row"><span class="metric-name">Interception Times</span><span class="metric-val" id="interceptions">--</span></div>
+            <div class="metric-row"><span class="metric-name">Internal Help Times</span><span class="metric-val" id="internalHelp">--</span></div>
+            <div class="metric-row"><span class="metric-name">Login / Logout Count</span><span class="metric-val" id="loginCount">--</span></div>
+            <div class="metric-row"><span class="metric-name">Force Sign-out Times</span><span class="metric-val bad" id="forceSignout">0</span></div>
         </div>
-
     </div>
 
     <!-- Performance Progress -->
@@ -467,287 +491,98 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     <!-- Advanced Metrics -->
     <div class="section-grid">
         <div class="section-box">
-            <div class="section-title"><span class="dot" style="background:#6f42c1"></span> Monitoring & Supervision</div>
-            <div class="metric-row">
-                <span class="metric-name">Listening Count</span>
-                <span class="metric-val" id="listeningCount">0</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Listen as Third-Party</span>
-                <span class="metric-val" id="thirdPartyCount">0</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Force Advisor Count</span>
-                <span class="metric-val" id="forceAdvisorCount">0</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Handle Call on Behalf</span>
-                <span class="metric-val" id="handleOnBehalf">0</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Ask Help (Chat/Tool)</span>
-                <span class="metric-val" id="askHelpCount">0</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Call Reason Count</span>
-                <span class="metric-val" id="callReasonCount">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Forwarding Times</span>
-                <span class="metric-val" id="forwardingTimes">--</span>
-            </div>
+            <div class="section-title"><span class="dot" style="background:#6f42c1"></span> Monitoring &amp; Supervision</div>
+            <div class="metric-row"><span class="metric-name">Listening Count</span><span class="metric-val" id="listeningCount">0</span></div>
+            <div class="metric-row"><span class="metric-name">Listen as Third-Party</span><span class="metric-val" id="thirdPartyCount">0</span></div>
+            <div class="metric-row"><span class="metric-name">Force Advisor Count</span><span class="metric-val" id="forceAdvisorCount">0</span></div>
+            <div class="metric-row"><span class="metric-name">Handle Call on Behalf</span><span class="metric-val" id="handleOnBehalf">0</span></div>
+            <div class="metric-row"><span class="metric-name">Ask Help (Chat/Tool)</span><span class="metric-val" id="askHelpCount">0</span></div>
+            <div class="metric-row"><span class="metric-name">Call Reason Count</span><span class="metric-val" id="callReasonCount">--</span></div>
+            <div class="metric-row"><span class="metric-name">Forwarding Times</span><span class="metric-val" id="forwardingTimes">--</span></div>
         </div>
-
-        <!-- Queue Status -->
         <div class="section-box">
             <div class="section-title"><span class="dot" style="background:#fd7e14"></span> Queue Status</div>
-            <div class="metric-row">
-                <span class="metric-name">Queue Name</span>
-                <span class="metric-val" id="queueName">Support Queue</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Calls Waiting</span>
-                <span class="metric-val warn" id="callsWaiting">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Agents Online</span>
-                <span class="metric-val good" id="agentsOnline">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">Avg Wait Time</span>
-                <span class="metric-val" id="avgWait">--</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">My Position</span>
-                <span class="metric-val" id="myPosition">Active</span>
-            </div>
-            <div class="metric-row">
-                <span class="metric-name">SLA (Target &lt;30s)</span>
-                <span class="metric-val good" id="slaRate">--%</span>
-            </div>
+            <div class="metric-row"><span class="metric-name">Queue Name</span><span class="metric-val" id="queueName">Support Queue</span></div>
+            <div class="metric-row"><span class="metric-name">Calls Waiting</span><span class="metric-val warn" id="callsWaiting">--</span></div>
+            <div class="metric-row"><span class="metric-name">Agents Online</span><span class="metric-val good" id="agentsOnline">--</span></div>
+            <div class="metric-row"><span class="metric-name">Avg Wait Time</span><span class="metric-val" id="avgWait">--</span></div>
+            <div class="metric-row"><span class="metric-name">My Position</span><span class="metric-val" id="myPosition">Active</span></div>
+            <div class="metric-row"><span class="metric-name">SLA (Target &lt;30s)</span><span class="metric-val good" id="slaRate">--%</span></div>
         </div>
     </div>
 
-    <!-- Recent Call Activity -->
+    <!-- Call History + Recordings (tabbed) -->
     <div class="full-section">
-        <div class="section-title"><span class="dot"></span> Recent Call Activity</div>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Time</th>
-                    <th>Type</th>
-                    <th>Number</th>
-                    <th>Duration</th>
-                    <th>Status</th>
-                    <th>Disposition</th>
-                </tr>
-            </thead>
-            <tbody id="callHistory">
-                <tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px;">Loading call history...</td></tr>
-            </tbody>
-        </table>
+        <div class="tab-bar">
+            <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
+            <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
+        </div>
+
+        <!-- ── Call History Tab ── -->
+        <div class="tab-panel active" id="tabCallHistory">
+            <div class="date-filter">
+                <label>From:</label>
+                <input type="date" id="filterFrom" value="<?php echo $today; ?>">
+                <label>To:</label>
+                <input type="date" id="filterTo" value="<?php echo $today; ?>">
+                <button class="btn-filter" onclick="fetchData()">Filter</button>
+                <button class="btn-filter-clear" onclick="clearDateFilter()">Today</button>
+                <span id="historyCount" style="font-size:12px;color:#aaa;margin-left:4px;"></span>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Date &amp; Time</th>
+                        <th>Type</th>
+                        <th>Number</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Disposition</th>
+                    </tr>
+                </thead>
+                <tbody id="callHistoryBody">
+                    <tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px;">Loading call history...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- ── Recordings Tab ── -->
+        <div class="tab-panel" id="tabRecordings">
+            <div class="date-filter">
+                <label>From:</label>
+                <input type="date" id="recFilterFrom" value="<?php echo $today; ?>">
+                <label>To:</label>
+                <input type="date" id="recFilterTo" value="<?php echo $today; ?>">
+                <button class="btn-filter" onclick="fetchRecordings()">Filter</button>
+                <button class="btn-filter-clear" onclick="clearRecFilter()">Today</button>
+                <span id="recCount" style="font-size:12px;color:#aaa;margin-left:4px;"></span>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Date &amp; Time</th>
+                        <th>Number</th>
+                        <th>Duration</th>
+                        <th>Type</th>
+                        <th>File</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="recordingsBody">
+                    <tr><td colspan="6" class="rec-empty">No recordings found for today.</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
 </div>
 
 <div class="footer">
-    SkyKin Technologies &copy; <?php echo date('Y'); ?> | Agent Dashboard v1.0 | 
+    SkyKin Technologies &copy; <?php echo date('Y'); ?> | Agent Dashboard v2.0 |
     Auto-refresh: <span id="refreshCountdown">10</span>s
 </div>
 
-<script>
-const agentName = '<?php echo $agent_name; ?>';
-const domain = '<?php echo $domain; ?>';
-let loginTime = new Date();
-let refreshInterval = 10;
-let countdown = refreshInterval;
-
-// Live clock
-function updateClock() {
-    const now = new Date();
-    const h = String(now.getHours()).padStart(2,'0');
-    const m = String(now.getMinutes()).padStart(2,'0');
-    const s = String(now.getSeconds()).padStart(2,'0');
-    document.getElementById('liveClock').textContent = h+':'+m+':'+s;
-
-    // Working duration
-    const diff = Math.floor((now - loginTime) / 1000);
-    document.getElementById('workDuration').textContent = formatDuration(diff);
-}
-
-function formatDuration(seconds) {
-    const h = Math.floor(seconds/3600);
-    const m = Math.floor((seconds%3600)/60);
-    const s = seconds%60;
-    if (h > 0) return h+'h '+String(m).padStart(2,'0')+'m';
-    return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
-}
-
-function formatDurationHMS(seconds) {
-    const h = Math.floor(seconds/3600);
-    const m = Math.floor((seconds%3600)/60);
-    const s = seconds%60;
-    if (h > 0) return h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
-    return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
-}
-
-// Fetch data from API
-function fetchData() {
-    const ext = localStorage.getItem('sip_ext') || '';
-    fetch('data.php?agent='+encodeURIComponent(agentName)+'&domain='+encodeURIComponent(domain)+'&ext='+encodeURIComponent(ext))
-        .then(r => r.json())
-        .then(data => updateDashboard(data))
-        .catch(() => {
-            // If API fails, show demo data
-            updateDashboard(getDemoData());
-        });
-}
-
-function getDemoData() {
-    return {
-        total_calls: 24,
-        answered_calls: 21,
-        missed_calls: 3,
-        avg_duration: 187,
-        total_talk: 4488,
-        total_duration: 5200,
-        listening_duration: 4488,
-        internal_call_time: 420,
-        outbound_time: 1820,
-        hook_on_times: 24,
-        hold_times: 340,
-        transfers: 5,
-        forwarding_times: 3,
-        acw_duration: 280,
-        ivr_transfer: 2,
-        busy_duration: 4488,
-        rest_duration: 1200,
-        over_rest: 0,
-        idle_duration: 2800,
-        interceptions: 1,
-        internal_help: 2,
-        login_count: 1,
-        force_signout: 0,
-        listening_count: 0,
-        third_party_count: 0,
-        force_advisor_count: 0,
-        handle_on_behalf: 0,
-        ask_help_count: 0,
-        call_reason_count: 18,
-        queue_waiting: 2,
-        agents_online: 3,
-        avg_wait: 18,
-        sla_rate: 92,
-        recent_calls: [
-            {time:'10:45', type:'Inbound', number:'+251911234567', duration:'3:42', status:'Answered', disposition:'Resolved'},
-            {time:'10:32', type:'Outbound', number:'+251922345678', duration:'2:15', status:'Answered', disposition:'Callback'},
-            {time:'10:18', type:'Inbound', number:'+251933456789', duration:'0:00', status:'Missed', disposition:'Voicemail'},
-            {time:'10:05', type:'Transfer', number:'Ext 102', duration:'1:30', status:'Transferred', disposition:'Internal'},
-            {time:'09:52', type:'Inbound', number:'+251944567890', duration:'5:10', status:'Answered', disposition:'Resolved'},
-        ]
-    };
-}
-
-function updateDashboard(d) {
-    // Summary cards
-    document.getElementById('totalCalls').textContent = d.total_calls || 0;
-    document.getElementById('avgDuration').textContent = formatDurationHMS(d.avg_duration || 0);
-    document.getElementById('totalTalk').textContent = formatDuration(d.total_talk || 0);
-    document.getElementById('idleTime').textContent = formatDuration(d.idle_duration || 0);
-    document.getElementById('missedCalls').textContent = d.missed_calls || 0;
-    document.getElementById('transfers').textContent = d.transfers || 0;
-    document.getElementById('holdTimes').textContent = formatDuration(d.hold_times || 0);
-
-    // Call time metrics
-    document.getElementById('listeningDuration').textContent = formatDuration(d.listening_duration || 0);
-    document.getElementById('internalCallTime').textContent = formatDuration(d.internal_call_time || 0);
-    document.getElementById('outboundTime').textContent = formatDuration(d.outbound_time || 0);
-    document.getElementById('hookOnTimes').textContent = d.hook_on_times || 0;
-    document.getElementById('totalDuration').textContent = formatDuration(d.total_duration || 0);
-    document.getElementById('acwDuration').textContent = formatDuration(d.acw_duration || 0);
-    document.getElementById('ivrTransfer').textContent = d.ivr_transfer || 0;
-
-    // Status metrics
-    document.getElementById('busyDuration').textContent = formatDuration(d.busy_duration || 0);
-    document.getElementById('restDuration').textContent = formatDuration(d.rest_duration || 0);
-    document.getElementById('overRest').textContent = formatDurationHMS(d.over_rest || 0);
-    document.getElementById('interceptions').textContent = d.interceptions || 0;
-    document.getElementById('internalHelp').textContent = d.internal_help || 0;
-    document.getElementById('loginCount').textContent = (d.login_count || 1) + ' / 0';
-    document.getElementById('forceSignout').textContent = d.force_signout || 0;
-
-    // Monitoring
-    document.getElementById('listeningCount').textContent = d.listening_count || 0;
-    document.getElementById('thirdPartyCount').textContent = d.third_party_count || 0;
-    document.getElementById('forceAdvisorCount').textContent = d.force_advisor_count || 0;
-    document.getElementById('handleOnBehalf').textContent = d.handle_on_behalf || 0;
-    document.getElementById('askHelpCount').textContent = d.ask_help_count || 0;
-    document.getElementById('callReasonCount').textContent = d.call_reason_count || 0;
-    document.getElementById('forwardingTimes').textContent = d.forwarding_times || 0;
-
-    // Queue
-    document.getElementById('callsWaiting').textContent = d.queue_waiting || 0;
-    document.getElementById('agentsOnline').textContent = d.agents_online || 0;
-    document.getElementById('avgWait').textContent = (d.avg_wait || 0) + 's';
-    document.getElementById('slaRate').textContent = (d.sla_rate || 0) + '%';
-
-    // Progress bars
-    const answerRate = d.total_calls > 0 ? Math.round((d.answered_calls / d.total_calls) * 100) : 0;
-    document.getElementById('answerRate').textContent = answerRate + '%';
-    document.getElementById('answerRateBar').style.width = answerRate + '%';
-
-    const talkTotal = (d.total_talk || 0) + (d.idle_duration || 0);
-    const talkRatio = talkTotal > 0 ? Math.round(((d.total_talk || 0) / talkTotal) * 100) : 0;
-    document.getElementById('talkRatio').textContent = talkRatio + '%';
-    document.getElementById('talkRatioBar').style.width = talkRatio + '%';
-
-    const targetRate = Math.min(100, Math.round(((d.total_calls || 0) / 30) * 100));
-    document.getElementById('targetRate').textContent = targetRate + '%';
-    document.getElementById('targetRateBar').style.width = targetRate + '%';
-
-    // Recent calls
-    if (d.recent_calls && d.recent_calls.length > 0) {
-        let html = '';
-        d.recent_calls.forEach(c => {
-            const typeBadge = c.type === 'Inbound' ? 'badge-in' :
-                              c.type === 'Outbound' ? 'badge-out' :
-                              c.type === 'Transfer' ? 'badge-transfer' : 'badge-missed';
-            const statusBadge = c.status === 'Missed' ? 'badge-missed' :
-                                c.status === 'Transferred' ? 'badge-transfer' : 'badge-in';
-            html += `<tr>
-                <td>${c.time}</td>
-                <td><span class="badge ${typeBadge}">${c.type}</span></td>
-                <td>${c.number}</td>
-                <td>${c.duration}</td>
-                <td><span class="badge ${statusBadge}">${c.status}</span></td>
-                <td>${c.disposition}</td>
-            </tr>`;
-        });
-        document.getElementById('callHistory').innerHTML = html;
-    }
-}
-
-// Countdown and refresh
-function startCountdown() {
-    countdown = refreshInterval;
-    const timer = setInterval(() => {
-        countdown--;
-        document.getElementById('refreshCountdown').textContent = countdown;
-        if (countdown <= 0) {
-            clearInterval(timer);
-            fetchData();
-            startCountdown();
-        }
-    }, 1000);
-}
-
-// Init
-setInterval(updateClock, 1000);
-updateClock();
-fetchData();
-startCountdown();
-</script>
-<!-- Incoming Call Overlay -->
+<!-- ══ INCOMING CALL OVERLAY ══ -->
 <div class="incoming-overlay" id="incomingOverlay">
     <div class="incoming-title">📞 Incoming Call</div>
     <div class="incoming-number" id="incomingNumber">Unknown</div>
@@ -757,7 +592,7 @@ startCountdown();
     </div>
 </div>
 
-<!-- Settings Modal -->
+<!-- ══ SIP SETTINGS MODAL ══ -->
 <div class="modal-overlay" id="settingsModal">
     <div class="modal-box">
         <div class="modal-title">SIP Phone Settings</div>
@@ -781,118 +616,431 @@ startCountdown();
     </div>
 </div>
 
-<!-- Softphone Bar -->
+<!-- ══ DIAL PAD MODAL ══ -->
+<div class="dialpad-overlay" id="dialpadOverlay">
+    <div class="dialpad-box">
+        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
+        <div class="dp-grid">
+            <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
+            <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
+            <button class="dp-key" onclick="dpKey('3')">3<span class="dp-sub">DEF</span></button>
+            <button class="dp-key" onclick="dpKey('4')">4<span class="dp-sub">GHI</span></button>
+            <button class="dp-key" onclick="dpKey('5')">5<span class="dp-sub">JKL</span></button>
+            <button class="dp-key" onclick="dpKey('6')">6<span class="dp-sub">MNO</span></button>
+            <button class="dp-key" onclick="dpKey('7')">7<span class="dp-sub">PQRS</span></button>
+            <button class="dp-key" onclick="dpKey('8')">8<span class="dp-sub">TUV</span></button>
+            <button class="dp-key" onclick="dpKey('9')">9<span class="dp-sub">WXYZ</span></button>
+            <button class="dp-key" onclick="dpKey('*')">*</button>
+            <button class="dp-key" onclick="dpKey('0')">0<span class="dp-sub">+</span></button>
+            <button class="dp-key" onclick="dpKey('#')">#</button>
+        </div>
+        <div class="dp-row-actions">
+            <button class="dp-call" onclick="dpCall()">&#128222; Call</button>
+            <button class="dp-del"  onclick="dpDelete()">&#9003;</button>
+        </div>
+        <button class="dp-close" onclick="closePad()">Close</button>
+    </div>
+</div>
+
+<!-- ══ SOFTPHONE BAR ══ -->
 <div class="softphone-bar">
     <div class="softphone-status">
         <div class="sip-dot" id="sipDot"></div>
         <span id="sipStatusText">Not Connected</span>
     </div>
     <div class="dial-input-wrap">
-        <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
+        <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number..." maxlength="20">
+        <button class="btn-dialpad" title="Open Dial Pad" onclick="openPad()">⌨</button>
     </div>
     <div class="call-controls">
-        <button class="btn-call" id="btnCall" onclick="makeCall()" disabled>Call</button>
+        <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>Call</button>
         <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">Hang Up</button>
-        <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
+        <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
+        <button class="btn-record" id="btnRecord" onclick="toggleRecord()">
+            <span class="rec-dot"></span> Record
+        </button>
         <div class="call-timer" id="callTimer">00:00</div>
     </div>
     <div class="softphone-setup">
-        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">⚙ Setup Phone</button>
+        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Setup</button>
     </div>
 </div>
 
 <script src="/app/agent_dashboard/js/jssip.min.js"></script>
 <script>
-// ===== WebRTC Softphone =====
-let ua = null;
-let currentSession = null;
-let lastDialedNumber = '';
-let callStartTime = null;
-let callTimerInterval = null;
-let onHold = false;
-let remoteAudio = new Audio();
-remoteAudio.autoplay = true;
+const agentName = '<?php echo $agent_name; ?>';
+const domain    = '<?php echo $domain; ?>';
+let loginTime   = new Date();
+let refreshInterval = 10;
+let countdown   = refreshInterval;
 
-// Load saved settings
+// ── Clock ──────────────────────────────────────────
+function updateClock() {
+    const now = new Date();
+    const h = String(now.getHours()).padStart(2,'0');
+    const m = String(now.getMinutes()).padStart(2,'0');
+    const s = String(now.getSeconds()).padStart(2,'0');
+    document.getElementById('liveClock').textContent = h+':'+m+':'+s;
+    const diff = Math.floor((now - loginTime) / 1000);
+    document.getElementById('workDuration').textContent = formatDuration(diff);
+}
+function formatDuration(seconds) {
+    const h = Math.floor(seconds/3600);
+    const m = Math.floor((seconds%3600)/60);
+    const s = seconds%60;
+    if (h > 0) return h+'h '+String(m).padStart(2,'0')+'m';
+    return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+function formatDurationHMS(seconds) {
+    const h = Math.floor(seconds/3600);
+    const m = Math.floor((seconds%3600)/60);
+    const s = seconds%60;
+    if (h > 0) return h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+    return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+}
+
+// ── Status Dropdown ────────────────────────────────
+let currentAgentStatus = 'ready';
+function toggleStatusMenu() {
+    document.getElementById('statusDropMenu').classList.toggle('open');
+}
+function setAgentStatus(status) {
+    currentAgentStatus = status;
+    const labels = { ready:'Ready', notready:'Not Ready', brk:'On Break', incall:'On Call' };
+    const colors  = { ready:'#28a745', notready:'#dc3545', brk:'#ffc107', incall:'#17a2b8' };
+    const key = status === 'break' ? 'brk' : status;
+    document.getElementById('statusLabel').textContent = labels[key] || status;
+    const dot = document.getElementById('statusDot');
+    dot.className = 'sdot ' + key;
+    dot.style.background = colors[key] || '#888';
+    document.getElementById('statusDropMenu').classList.remove('open');
+}
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.status-drop-wrap')) {
+        document.getElementById('statusDropMenu').classList.remove('open');
+    }
+});
+
+// ── Tabs ───────────────────────────────────────────
+function switchTab(tab) {
+    ['callHistory','recordings'].forEach(t => {
+        document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).classList.remove('active');
+        document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn').classList.remove('active');
+    });
+    document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+    document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1) + 'Btn').classList.add('active');
+    if (tab === 'recordings') fetchRecordings();
+}
+
+// ── Date filters ──────────────────────────────────
+function clearDateFilter() {
+    const today = new Date().toISOString().slice(0,10);
+    document.getElementById('filterFrom').value = today;
+    document.getElementById('filterTo').value   = today;
+    fetchData();
+}
+function clearRecFilter() {
+    const today = new Date().toISOString().slice(0,10);
+    document.getElementById('recFilterFrom').value = today;
+    document.getElementById('recFilterTo').value   = today;
+    fetchRecordings();
+}
+
+// ── Dial Pad ───────────────────────────────────────
+let dpNumber = '';
+function openPad() {
+    dpNumber = document.getElementById('dialInput').value.trim();
+    updateDpDisplay();
+    document.getElementById('dialpadOverlay').classList.add('show');
+}
+function closePad() {
+    document.getElementById('dialpadOverlay').classList.remove('show');
+}
+function dpKey(k) {
+    dpNumber += k;
+    updateDpDisplay();
+    // Also keep dialInput in sync
+    document.getElementById('dialInput').value = dpNumber;
+}
+function dpDelete() {
+    dpNumber = dpNumber.slice(0, -1);
+    updateDpDisplay();
+    document.getElementById('dialInput').value = dpNumber;
+}
+function updateDpDisplay() {
+    const el = document.getElementById('dpDisplay');
+    if (dpNumber) {
+        el.textContent = dpNumber;
+        el.classList.remove('empty');
+    } else {
+        el.textContent = 'Enter number...';
+        el.classList.add('empty');
+    }
+}
+function dpCall() {
+    if (!dpNumber) return;
+    closePad();
+    makeCall(dpNumber);
+}
+// Close dialpad on outside click
+document.getElementById('dialpadOverlay').addEventListener('click', function(e) {
+    if (e.target === this) closePad();
+});
+
+// ── Fetch dashboard data ───────────────────────────
+function fetchData() {
+    const ext  = localStorage.getItem('sip_ext') || '';
+    const from = document.getElementById('filterFrom').value;
+    const to   = document.getElementById('filterTo').value;
+    fetch('data.php?agent='+encodeURIComponent(agentName)
+        +'&domain='+encodeURIComponent(domain)
+        +'&ext='+encodeURIComponent(ext)
+        +'&from='+encodeURIComponent(from)
+        +'&to='+encodeURIComponent(to))
+        .then(r => r.json())
+        .then(data => updateDashboard(data))
+        .catch(() => updateDashboard(getDemoData()));
+}
+
+// ── Fetch recordings ──────────────────────────────
+function fetchRecordings() {
+    const ext  = localStorage.getItem('sip_ext') || '';
+    const from = document.getElementById('recFilterFrom').value;
+    const to   = document.getElementById('recFilterTo').value;
+    fetch('data.php?action=recordings&agent='+encodeURIComponent(agentName)
+        +'&domain='+encodeURIComponent(domain)
+        +'&ext='+encodeURIComponent(ext)
+        +'&from='+encodeURIComponent(from)
+        +'&to='+encodeURIComponent(to))
+        .then(r => r.json())
+        .then(data => updateRecordings(data.recordings || []))
+        .catch(() => updateRecordings(getDemoRecordings()));
+}
+
+function updateRecordings(recs) {
+    document.getElementById('recCount').textContent = recs.length + ' recording(s)';
+    if (!recs.length) {
+        document.getElementById('recordingsBody').innerHTML =
+            '<tr><td colspan="6" class="rec-empty">No recordings found for this date range.</td></tr>';
+        return;
+    }
+    let html = '';
+    recs.forEach(r => {
+        const badge = r.direction === 'inbound' ? 'badge-in' : 'badge-out';
+        const dir   = r.direction === 'inbound' ? 'Inbound' : 'Outbound';
+        html += `<tr>
+            <td>${r.datetime}</td>
+            <td>${r.remote_number}</td>
+            <td>${r.duration}</td>
+            <td><span class="badge ${badge}">${dir}</span></td>
+            <td style="font-size:11px;color:#888;">${r.filename}</td>
+            <td>
+                <button class="rec-play" onclick="playRecording('${r.filepath}')">&#9654; Play</button>
+                <a href="${r.filepath}" download>
+                    <button class="rec-download">&#8595; Save</button>
+                </a>
+            </td>
+        </tr>`;
+    });
+    document.getElementById('recordingsBody').innerHTML = html;
+}
+
+function getDemoRecordings() {
+    return [
+        { datetime:'2026-07-21 10:45', remote_number:'+251911234567', duration:'3:42', direction:'inbound',  filename:'rec_1045_101.wav', filepath:'/recordings/rec_1045_101.wav' },
+        { datetime:'2026-07-21 09:32', remote_number:'+251922345678', duration:'2:15', direction:'outbound', filename:'rec_0932_101.wav', filepath:'/recordings/rec_0932_101.wav' },
+    ];
+}
+
+let recAudio = null;
+function playRecording(path) {
+    if (recAudio) { recAudio.pause(); recAudio = null; }
+    recAudio = new Audio(path);
+    recAudio.play().catch(() => alert('Cannot play: ' + path));
+}
+
+// ── Demo data ─────────────────────────────────────
+function getDemoData() {
+    return {
+        total_calls:24, answered_calls:21, missed_calls:3,
+        avg_duration:187, total_talk:4488, total_duration:5200,
+        listening_duration:4488, internal_call_time:420, outbound_time:1820,
+        hook_on_times:24, hold_times:340, transfers:5, forwarding_times:3,
+        acw_duration:280, ivr_transfer:2, busy_duration:4488, rest_duration:1200,
+        over_rest:0, idle_duration:2800, interceptions:1, internal_help:2,
+        login_count:1, force_signout:0, listening_count:0, third_party_count:0,
+        force_advisor_count:0, handle_on_behalf:0, ask_help_count:0, call_reason_count:18,
+        queue_waiting:2, agents_online:3, avg_wait:18, sla_rate:92,
+        recent_calls:[
+            {time:'10:45 Jul 21', type:'Inbound',  number:'+251911234567', duration:'3:42', status:'Answered',    disposition:'Resolved'},
+            {time:'10:32 Jul 21', type:'Outbound', number:'+251922345678', duration:'2:15', status:'Answered',    disposition:'Callback'},
+            {time:'10:18 Jul 21', type:'Inbound',  number:'+251933456789', duration:'0:00', status:'Missed',      disposition:'Voicemail'},
+            {time:'10:05 Jul 21', type:'Transfer', number:'Ext 102',       duration:'1:30', status:'Transferred', disposition:'Internal'},
+            {time:'09:52 Jul 21', type:'Inbound',  number:'+251944567890', duration:'5:10', status:'Answered',    disposition:'Resolved'},
+        ]
+    };
+}
+
+// ── Update dashboard ──────────────────────────────
+function updateDashboard(d) {
+    document.getElementById('totalCalls').textContent    = d.total_calls || 0;
+    document.getElementById('avgDuration').textContent   = formatDurationHMS(d.avg_duration || 0);
+    document.getElementById('totalTalk').textContent     = formatDuration(d.total_talk || 0);
+    document.getElementById('idleTime').textContent      = formatDuration(d.idle_duration || 0);
+    document.getElementById('missedCalls').textContent   = d.missed_calls || 0;
+    document.getElementById('transfers').textContent     = d.transfers || 0;
+    document.getElementById('holdTimes').textContent     = formatDuration(d.hold_times || 0);
+
+    document.getElementById('listeningDuration').textContent = formatDuration(d.listening_duration || 0);
+    document.getElementById('internalCallTime').textContent  = formatDuration(d.internal_call_time || 0);
+    document.getElementById('outboundTime').textContent      = formatDuration(d.outbound_time || 0);
+    document.getElementById('hookOnTimes').textContent       = d.hook_on_times || 0;
+    document.getElementById('totalDuration').textContent     = formatDuration(d.total_duration || 0);
+    document.getElementById('acwDuration').textContent       = formatDuration(d.acw_duration || 0);
+    document.getElementById('ivrTransfer').textContent       = d.ivr_transfer || 0;
+
+    document.getElementById('busyDuration').textContent  = formatDuration(d.busy_duration || 0);
+    document.getElementById('restDuration').textContent  = formatDuration(d.rest_duration || 0);
+    document.getElementById('overRest').textContent      = formatDurationHMS(d.over_rest || 0);
+    document.getElementById('interceptions').textContent = d.interceptions || 0;
+    document.getElementById('internalHelp').textContent  = d.internal_help || 0;
+    document.getElementById('loginCount').textContent    = (d.login_count || 1) + ' / 0';
+    document.getElementById('forceSignout').textContent  = d.force_signout || 0;
+
+    document.getElementById('listeningCount').textContent    = d.listening_count || 0;
+    document.getElementById('thirdPartyCount').textContent   = d.third_party_count || 0;
+    document.getElementById('forceAdvisorCount').textContent = d.force_advisor_count || 0;
+    document.getElementById('handleOnBehalf').textContent    = d.handle_on_behalf || 0;
+    document.getElementById('askHelpCount').textContent      = d.ask_help_count || 0;
+    document.getElementById('callReasonCount').textContent   = d.call_reason_count || 0;
+    document.getElementById('forwardingTimes').textContent   = d.forwarding_times || 0;
+
+    document.getElementById('callsWaiting').textContent = d.queue_waiting || 0;
+    document.getElementById('agentsOnline').textContent  = d.agents_online || 0;
+    document.getElementById('avgWait').textContent       = (d.avg_wait || 0) + 's';
+    document.getElementById('slaRate').textContent       = (d.sla_rate || 0) + '%';
+
+    const answerRate = d.total_calls > 0 ? Math.round((d.answered_calls / d.total_calls) * 100) : 0;
+    document.getElementById('answerRate').textContent        = answerRate + '%';
+    document.getElementById('answerRateBar').style.width     = answerRate + '%';
+    const talkTotal  = (d.total_talk||0) + (d.idle_duration||0);
+    const talkRatio  = talkTotal > 0 ? Math.round(((d.total_talk||0)/talkTotal)*100) : 0;
+    document.getElementById('talkRatio').textContent         = talkRatio + '%';
+    document.getElementById('talkRatioBar').style.width      = talkRatio + '%';
+    const targetRate = Math.min(100, Math.round(((d.total_calls||0)/30)*100));
+    document.getElementById('targetRate').textContent        = targetRate + '%';
+    document.getElementById('targetRateBar').style.width     = targetRate + '%';
+
+    if (d.recent_calls && d.recent_calls.length > 0) {
+        document.getElementById('historyCount').textContent = d.recent_calls.length + ' call(s)';
+        let html = '';
+        d.recent_calls.forEach(c => {
+            const typeBadge   = c.type==='Inbound' ? 'badge-in' : c.type==='Outbound' ? 'badge-out' : c.type==='Transfer' ? 'badge-transfer' : 'badge-missed';
+            const statusBadge = c.status==='Missed' ? 'badge-missed' : c.status==='Transferred' ? 'badge-transfer' : 'badge-in';
+            html += `<tr>
+                <td>${c.time}</td>
+                <td><span class="badge ${typeBadge}">${c.type}</span></td>
+                <td>${c.number}</td>
+                <td>${c.duration}</td>
+                <td><span class="badge ${statusBadge}">${c.status}</span></td>
+                <td>${c.disposition}</td>
+            </tr>`;
+        });
+        document.getElementById('callHistoryBody').innerHTML = html;
+    } else {
+        document.getElementById('callHistoryBody').innerHTML =
+            '<tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px;">No calls found for this date range.</td></tr>';
+        document.getElementById('historyCount').textContent = '';
+    }
+}
+
+// ── Auto-refresh ──────────────────────────────────
+function startCountdown() {
+    countdown = refreshInterval;
+    const timer = setInterval(() => {
+        countdown--;
+        document.getElementById('refreshCountdown').textContent = countdown;
+        if (countdown <= 0) { clearInterval(timer); fetchData(); startCountdown(); }
+    }, 1000);
+}
+
+// ══════════════════════════════════════════════════
+// WebRTC Softphone (JsSIP)
+// ══════════════════════════════════════════════════
+let ua = null, currentSession = null, lastDialedNumber = '';
+let callStartTime = null, callTimerInterval = null, onHold = false;
+let isRecording = false;
+let remoteAudio = new Audio(); remoteAudio.autoplay = true;
+
 function loadSipSettings() {
-    const ext = localStorage.getItem('sip_ext') || '';
-    const pass = localStorage.getItem('sip_pass') || '';
+    const ext    = localStorage.getItem('sip_ext')    || '';
+    const pass   = localStorage.getItem('sip_pass')   || '';
     const server = localStorage.getItem('sip_server') || '192.168.243.129';
-    const domain = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-    document.getElementById('sipExt').value = ext;
-    document.getElementById('sipPass').value = pass;
+    const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    document.getElementById('sipExt').value    = ext;
+    document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = server;
-    document.getElementById('sipDomain').value = domain;
-    if (ext && pass) initSIP(ext, pass, server, domain);
+    document.getElementById('sipDomain').value = dom;
+    if (ext && pass) initSIP(ext, pass, server, dom);
 }
 
 function saveSipSettings() {
-    const ext = document.getElementById('sipExt').value.trim();
-    const pass = document.getElementById('sipPass').value.trim();
+    const ext    = document.getElementById('sipExt').value.trim();
+    const pass   = document.getElementById('sipPass').value.trim();
     const server = document.getElementById('sipServer').value.trim();
-    const domain = document.getElementById('sipDomain').value.trim();
+    const dom    = document.getElementById('sipDomain').value.trim();
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
-    localStorage.setItem('sip_ext', ext);
-    localStorage.setItem('sip_pass', pass);
+    localStorage.setItem('sip_ext',    ext);
+    localStorage.setItem('sip_pass',   pass);
     localStorage.setItem('sip_server', server);
-    localStorage.setItem('sip_domain', domain);
+    localStorage.setItem('sip_domain', dom);
     document.getElementById('settingsModal').classList.remove('show');
-    initSIP(ext, pass, server, domain);
+    initSIP(ext, pass, server, dom);
 }
 
-function initSIP(ext, pass, server, domain) {
+function initSIP(ext, pass, server, dom) {
     if (ua) { try { ua.stop(); } catch(e) {} }
     setSipStatus('connecting', 'Connecting...');
     try {
         const socket = new JsSIP.WebSocketInterface('ws://' + server + ':5066');
         const config = {
             sockets: [socket],
-            uri: 'sip:' + ext + '@' + domain,
+            uri: 'sip:' + ext + '@' + dom,
             password: pass,
             display_name: '<?php echo $agent_name; ?>',
-            register: true,
-            register_expires: 300,
+            register: true, register_expires: 300,
             connection_recovery_min_interval: 2,
             connection_recovery_max_interval: 30
         };
         ua = new JsSIP.UA(config);
-
-        ua.on('registered', () => setSipStatus('registered', 'Registered (' + ext + ')'));
-        ua.on('unregistered', () => setSipStatus('unregistered', 'Not Registered'));
+        ua.on('registered',         () => setSipStatus('registered', 'Registered (' + ext + ')'));
+        ua.on('unregistered',       () => setSipStatus('unregistered', 'Not Registered'));
         ua.on('registrationFailed', (e) => setSipStatus('failed', 'Reg Failed: ' + (e.cause || 'error')));
-
         ua.on('newRTCSession', (data) => {
             const session = data.session;
-            if (session.direction === 'incoming') {
-                handleIncoming(session);
-            } else {
-                handleOutgoing(session);
-            }
+            if (session.direction === 'incoming') handleIncoming(session);
+            else handleOutgoing(session);
         });
-
         ua.start();
-    } catch(e) {
-        setSipStatus('failed', 'Error: ' + e.message);
-    }
+    } catch(e) { setSipStatus('failed', 'Error: ' + e.message); }
 }
 
 function setSipStatus(state, text) {
     const dot = document.getElementById('sipDot');
-    const statusText = document.getElementById('sipStatusText');
     dot.className = 'sip-dot';
     if (state === 'registered') {
         dot.classList.add('registered');
         document.getElementById('btnCall').disabled = false;
-        document.getElementById('agentStatus').textContent = 'Available';
-        document.getElementById('agentStatus').className = 'status-badge';
+        setAgentStatus('ready');
     } else if (state === 'calling') {
         dot.classList.add('calling');
     } else if (state === 'incall') {
         dot.classList.add('incall');
+        setAgentStatus('incall');
     } else if (state === 'ringing') {
         dot.classList.add('ringing');
     }
-    statusText.textContent = text;
+    document.getElementById('sipStatusText').textContent = text;
 }
 
 function handleIncoming(session) {
@@ -901,7 +1049,6 @@ function handleIncoming(session) {
     document.getElementById('incomingNumber').textContent = callerNumber;
     document.getElementById('incomingOverlay').style.display = 'block';
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
-
     session.on('ended', endCall);
     session.on('failed', endCall);
 }
@@ -909,19 +1056,17 @@ function handleIncoming(session) {
 function answerCall() {
     if (!currentSession) return;
     document.getElementById('incomingOverlay').style.display = 'none';
-    const sipServer = localStorage.getItem('sip_server') || '192.168.243.129';
     const options = {
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { 
-            iceServers: [],
-            iceTransportPolicy: 'all'
-        },
+        pcConfig: { iceServers: [], iceTransportPolicy: 'all' },
         rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false }
     };
     currentSession.answer(options);
-    currentSession.connection.addEventListener('addstream', (e) => {
-        remoteAudio.srcObject = e.streams[0];
-    });
+    try {
+        const pc = currentSession.connection;
+        if (pc.ontrack !== undefined) pc.ontrack = (e) => { if (e.streams[0]) remoteAudio.srcObject = e.streams[0]; };
+        pc.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
+    } catch(e) {}
     startCallUI(currentSession.remote_identity.uri.user);
 }
 
@@ -931,27 +1076,24 @@ function declineCall() {
     currentSession = null;
 }
 
-function makeCall() {
-    const number = document.getElementById('dialInput').value.trim();
+function makeCall(number) {
+    number = number || document.getElementById('dialInput').value.trim();
     if (!number || !ua) return;
-    lastDialedNumber = number; // save number
-    const domain = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    lastDialedNumber = number;
+    const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
     const options = {
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { 
-            iceServers: [],
-            iceTransportPolicy: 'all'
-        },
+        pcConfig: { iceServers: [], iceTransportPolicy: 'all' },
         rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false }
     };
-    currentSession = ua.call('sip:' + number + '@' + domain, options);
+    currentSession = ua.call('sip:' + number + '@' + dom, options);
     handleOutgoing(currentSession);
 }
 
 function handleOutgoing(session) {
-    document.getElementById('btnCall').style.display = 'none';
+    document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
-    document.getElementById('btnHold').style.display = 'none';
+    document.getElementById('btnHold').style.display   = 'none';
 
     session.on('connecting', () => {
         setSipStatus('calling', 'Calling: ' + lastDialedNumber);
@@ -962,27 +1104,20 @@ function handleOutgoing(session) {
         document.getElementById('dialInput').value = 'Ringing ' + lastDialedNumber + '...';
     });
     session.on('confirmed', () => {
-        // Call answered - update UI immediately
         document.getElementById('dialInput').value = lastDialedNumber;
         startCallUI(lastDialedNumber);
-        // Setup audio - try both new and old API
         try {
             const pc = session.connection;
-            if (pc.ontrack !== undefined) {
-                pc.ontrack = (e) => { if (e.streams[0]) remoteAudio.srcObject = e.streams[0]; };
-            }
+            if (pc.ontrack !== undefined) pc.ontrack = (e) => { if (e.streams[0]) remoteAudio.srcObject = e.streams[0]; };
             pc.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
         } catch(e) {}
     });
-    session.on('ended', () => {
-        document.getElementById('dialInput').value = lastDialedNumber;
-        endCall();
-    });
+    session.on('ended', () => { document.getElementById('dialInput').value = lastDialedNumber; endCall(); });
     session.on('failed', (e) => {
         const cause = e.cause || 'Failed';
         let msg = lastDialedNumber + ': ' + cause;
-        if (cause === 'Busy') msg = lastDialedNumber + ' is Busy';
-        else if (cause === 'Rejected') msg = lastDialedNumber + ' Rejected call';
+        if (cause === 'Busy')            msg = lastDialedNumber + ' is Busy';
+        else if (cause === 'Rejected')   msg = lastDialedNumber + ' Rejected call';
         else if (cause === 'Request Timeout') msg = 'No Answer from ' + lastDialedNumber;
         document.getElementById('dialInput').value = lastDialedNumber;
         endCall();
@@ -994,13 +1129,12 @@ function handleOutgoing(session) {
 
 function startCallUI(number) {
     setSipStatus('incall', 'In Call: ' + number);
-    document.getElementById('btnCall').style.display = 'none';
+    document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
-    document.getElementById('btnHold').style.display = 'block';
+    document.getElementById('btnHold').style.display   = 'block';
+    document.getElementById('btnRecord').classList.add('visible');
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number;
-    document.getElementById('agentStatus').textContent = 'On Call';
-    document.getElementById('agentStatus').className = 'status-badge busy';
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
 }
@@ -1008,9 +1142,8 @@ function startCallUI(number) {
 function updateCallTimer() {
     if (!callStartTime) return;
     const elapsed = Math.floor((new Date() - callStartTime) / 1000);
-    const m = Math.floor(elapsed / 60);
-    const s = elapsed % 60;
-    document.getElementById('callTimer').textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+    document.getElementById('callTimer').textContent =
+        String(Math.floor(elapsed/60)).padStart(2,'0') + ':' + String(elapsed%60).padStart(2,'0');
 }
 
 function hangupCall() {
@@ -1021,52 +1154,80 @@ function hangupCall() {
 function toggleHold() {
     if (!currentSession) return;
     if (onHold) {
-        currentSession.unhold();
-        onHold = false;
-        document.getElementById('btnHold').textContent = '⏸ Hold';
+        currentSession.unhold(); onHold = false;
+        document.getElementById('btnHold').textContent = 'Hold';
         document.getElementById('btnHold').style.background = '#ffc107';
+        document.getElementById('btnHold').style.color = '#333';
     } else {
-        currentSession.hold();
-        onHold = true;
-        document.getElementById('btnHold').textContent = '▶ Resume';
+        currentSession.hold(); onHold = true;
+        document.getElementById('btnHold').textContent = 'Resume';
         document.getElementById('btnHold').style.background = '#28a745';
         document.getElementById('btnHold').style.color = 'white';
     }
 }
 
+// ── Recording ─────────────────────────────────────
+// Toggles call recording via FreeSWITCH DTMF (*1 by default)
+// or by sending a record API request to the server
+function toggleRecord() {
+    if (!currentSession) return;
+    isRecording = !isRecording;
+    const btn = document.getElementById('btnRecord');
+    if (isRecording) {
+        btn.classList.add('recording');
+        btn.innerHTML = '<span class="rec-dot"></span> Stop Rec';
+        // Send *1 DTMF to trigger recording on FreeSWITCH
+        try { currentSession.sendDTMF('*1'); } catch(e) {}
+        // Also try server-side record API
+        const ext = localStorage.getItem('sip_ext') || '';
+        fetch('data.php?action=record_start&ext='+encodeURIComponent(ext)+'&domain='+encodeURIComponent(domain))
+            .catch(() => {});
+    } else {
+        btn.classList.remove('recording');
+        btn.innerHTML = '<span class="rec-dot"></span> Record';
+        try { currentSession.sendDTMF('*1'); } catch(e) {}
+        const ext = localStorage.getItem('sip_ext') || '';
+        fetch('data.php?action=record_stop&ext='+encodeURIComponent(ext)+'&domain='+encodeURIComponent(domain))
+            .then(() => { if (document.getElementById('tabRecordings').classList.contains('active')) fetchRecordings(); })
+            .catch(() => {});
+    }
+}
+
 function endCall() {
-    currentSession = null;
-    onHold = false;
-    clearInterval(callTimerInterval);
-    callStartTime = null;
-    document.getElementById('btnCall').style.display = 'block';
+    currentSession = null; onHold = false; isRecording = false;
+    clearInterval(callTimerInterval); callStartTime = null;
+    document.getElementById('btnCall').style.display   = 'block';
     document.getElementById('btnHangup').style.display = 'none';
-    document.getElementById('btnHold').style.display = 'none';
+    document.getElementById('btnHold').style.display   = 'none';
+    document.getElementById('btnRecord').classList.remove('visible','recording');
+    document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> Record';
+    document.getElementById('btnHold').textContent = 'Hold';
     document.getElementById('callTimer').style.display = 'none';
-    document.getElementById('callTimer').textContent = '00:00';
-    document.getElementById('btnHold').textContent = '⏸ Hold';
-    document.getElementById('agentStatus').textContent = 'Available';
-    document.getElementById('agentStatus').className = 'status-badge';
-    setSipStatus('registered', 'Registered');
-    // Refresh dashboard data after 2 seconds to capture completed call
+    document.getElementById('callTimer').textContent   = '00:00';
+    setAgentStatus('ready');
+    setSipStatus('registered', 'Registered (' + (localStorage.getItem('sip_ext')||'') + ')');
     setTimeout(() => { fetchData(); startCountdown(); }, 2000);
 }
 
-// Use event listeners for answer/decline (more reliable than onclick)
+// ── Event wiring ──────────────────────────────────
 document.getElementById('btnAnswer').addEventListener('click', answerCall);
 document.getElementById('btnDecline').addEventListener('click', declineCall);
-
-// Close settings modal on outside click
 document.getElementById('settingsModal').addEventListener('click', function(e) {
     if (e.target === this) this.classList.remove('show');
 });
-
-// Allow Enter key to dial
 document.getElementById('dialInput').addEventListener('keypress', function(e) {
     if (e.key === 'Enter') makeCall();
 });
+document.getElementById('dialInput').addEventListener('input', function() {
+    dpNumber = this.value;
+});
 
+// ── Init ──────────────────────────────────────────
+setInterval(updateClock, 1000);
+updateClock();
+fetchData();
+startCountdown();
 loadSipSettings();
 </script>
-
-
+</body>
+</html>
