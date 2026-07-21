@@ -243,7 +243,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
         <span class="live-dot"></span>
         <span style="font-size:12px;">Live</span>
         <div class="clock" id="liveClock"></div>
-        <button class="logout-btn" onclick="window.location='/'">Logout</button>
+        <button class="logout-btn" onclick="window.location='/logout.php'">Logout</button>
     </div>
 </div>
 
