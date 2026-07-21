@@ -1,26 +1,34 @@
 <?php
 // SkyKin Technologies - Agent Dashboard Data API
-// Fetches real metrics from FusionPBX PostgreSQL database
-
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 
 $agent_name = isset($_GET['agent']) ? $_GET['agent'] : 'Agent1';
 $domain = isset($_GET['domain']) ? $_GET['domain'] : 'client1.skykin.local';
+$ext_override = isset($_GET['ext']) ? $_GET['ext'] : null;
 
-// Read DB credentials from FusionPBX config
-$db_host = '127.0.0.1';
-$db_port = '5432';
-$db_name = 'fusionpbx';
-$db_user = 'fusionpbx';
-$db_pass = '';
-
-$config_file = '/etc/fusionpbx/config.php';
-if (file_exists($config_file)) {
-    include $config_file;
-    if (isset($db_password)) $db_pass = $db_password;
-    if (isset($db_username)) $db_user = $db_username;
-    if (isset($db_host)) $db_host = $db_host;
+// Use FusionPBX's own database connection
+$db = null;
+try {
+    // Include FusionPBX config
+    if (file_exists('/etc/fusionpbx/config.php')) {
+        include '/etc/fusionpbx/config.php';
+    }
+    // Try multiple variable names FusionPBX uses
+    $h = $db_host ?? '127.0.0.1';
+    $p = $db_port ?? '5432';
+    $n = $db_name ?? 'fusionpbx';
+    $u = $db_username ?? $db_user ?? 'fusionpbx';
+    $pw = $db_password ?? $db_pass ?? '';
+    $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}", $u, $pw, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+} catch (Exception $e) {
+    // Try unix socket as fallback
+    try {
+        $db = new PDO("pgsql:host=/var/run/postgresql;dbname=fusionpbx", 'fusionpbx', '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    } catch (Exception $e2) {
+        echo json_encode(['total_calls'=>0,'answered_calls'=>0,'missed_calls'=>0,'avg_duration'=>0,'total_talk'=>0,'total_duration'=>0,'listening_duration'=>0,'internal_call_time'=>0,'outbound_time'=>0,'hook_on_times'=>0,'hold_times'=>0,'transfers'=>0,'forwarding_times'=>0,'acw_duration'=>0,'ivr_transfer'=>0,'busy_duration'=>0,'rest_duration'=>0,'over_rest'=>0,'idle_duration'=>0,'interceptions'=>0,'internal_help'=>0,'login_count'=>1,'force_signout'=>0,'listening_count'=>0,'third_party_count'=>0,'force_advisor_count'=>0,'handle_on_behalf'=>0,'ask_help_count'=>0,'call_reason_count'=>0,'queue_waiting'=>0,'agents_online'=>0,'avg_wait'=>0,'sla_rate'=>0,'recent_calls'=>[],'db_error'=>$e2->getMessage()]);
+        exit;
+    }
 }
 
 $today_start = strtotime(date('Y-m-d') . ' 00:00:00');
@@ -64,20 +72,20 @@ $data = [
 ];
 
 try {
-    $dsn = "pgsql:host={$db_host};port={$db_port};dbname={$db_name}";
-    $pdo = new PDO($dsn, $db_user, $db_pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-
     // Get extension number for this agent
-    $ext_stmt = $pdo->prepare("
-        SELECT e.extension 
-        FROM v_extensions e
-        JOIN v_users u ON u.user_uuid = e.user_uuid
-        WHERE u.username = :agent AND e.domain_name = :domain
-        LIMIT 1
-    ");
-    $ext_stmt->execute([':agent' => $agent_name, ':domain' => $domain]);
-    $ext_row = $ext_stmt->fetch(PDO::FETCH_ASSOC);
-    $extension = $ext_row ? $ext_row['extension'] : null;
+    $extension = $ext_override;
+    if (!$extension) {
+        $ext_stmt = $db->prepare("
+            SELECT e.extension 
+            FROM v_extensions e
+            JOIN v_users u ON u.user_uuid = e.user_uuid
+            WHERE u.username = :agent AND e.domain_name = :domain
+            LIMIT 1
+        ");
+        $ext_stmt->execute([':agent' => $agent_name, ':domain' => $domain]);
+        $ext_row = $ext_stmt->fetch(PDO::FETCH_ASSOC);
+        $extension = $ext_row ? $ext_row['extension'] : null;
+    }
 
     // Allow direct extension override from URL parameter
     if (isset($_GET['ext']) && !empty($_GET['ext'])) {
@@ -86,7 +94,7 @@ try {
 
     if ($extension) {
         // Total calls today for this extension
-        $stmt = $pdo->prepare("
+        $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN billsec > 0 THEN 1 ELSE 0 END) as answered,
@@ -143,7 +151,7 @@ try {
         }
 
         // Recent calls
-        $recent_stmt = $pdo->prepare("
+        $recent_stmt = $db->prepare("
             SELECT 
                 to_char(to_timestamp(start_epoch), 'HH24:MI') as call_time,
                 direction,
@@ -184,7 +192,7 @@ try {
         }
 
         // Agent status from call center
-        $agent_stmt = $pdo->prepare("
+        $agent_stmt = $db->prepare("
             SELECT agent_status, COUNT(*) as cnt
             FROM v_call_center_agents
             WHERE domain_name = :domain
@@ -195,7 +203,7 @@ try {
         $data['agents_online'] = $agent_row ? (int)$agent_row['cnt'] : 1;
 
         // Queue waiting calls
-        $queue_stmt = $pdo->prepare("
+        $queue_stmt = $db->prepare("
             SELECT COUNT(*) as waiting
             FROM v_call_center_calls
             WHERE domain_name = :domain
