@@ -339,45 +339,38 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .form-group input { width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; font-size: 14px; }
 .btn-save-settings { background: #0047AB; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 8px; }
 
-/* ── Dial Pad Modal ── */
-.dialpad-overlay {
-    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45);
-    z-index: 500; align-items: flex-end; justify-content: center; padding-bottom: 62px;
+/* ── Dial Pad (inline inside popup) ── */
+.dp-panel {
+    display: none; padding: 0 16px 16px;
+    animation: fadeIn 0.15s ease;
 }
-.dialpad-overlay.show { display: flex; }
-.dialpad-box {
-    background: white; border-radius: 16px 16px 0 0; padding: 20px 24px 24px;
-    width: 300px; box-shadow: 0 -8px 32px rgba(0,0,0,0.2);
-    animation: slideUp 0.25s ease;
-}
-@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.dp-panel.open { display: block; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
 .dp-display {
-    background: #f0f4ff; border-radius: 8px; padding: 12px 16px;
-    font-size: 24px; font-weight: bold; color: #0047AB;
-    text-align: center; letter-spacing: 3px; min-height: 54px;
-    margin-bottom: 16px; word-break: break-all;
-    display: flex; align-items: center; justify-content: center;
+    background: #f0f4ff; border-radius: 8px; padding: 10px 14px;
+    font-size: 20px; font-weight: bold; color: #0047AB;
+    text-align: center; letter-spacing: 3px; min-height: 44px;
+    margin-bottom: 12px; display: flex; align-items: center; justify-content: center;
+    word-break: break-all;
 }
-.dp-display.empty { color: #ccc; font-size: 14px; letter-spacing: 0; font-weight: normal; }
+.dp-display.empty { color: #ccc; font-size: 12px; letter-spacing: 0; font-weight: normal; }
 .dp-grid {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px;
 }
 .dp-key {
-    background: #f0f2f5; border: none; border-radius: 10px;
-    padding: 14px 0; font-size: 18px; font-weight: bold; color: #333;
+    background: #f0f2f5; border: none; border-radius: 8px;
+    padding: 12px 0; font-size: 16px; font-weight: bold; color: #333;
     cursor: pointer; text-align: center; transition: background 0.1s;
     display: flex; flex-direction: column; align-items: center; line-height: 1.2;
 }
 .dp-key:hover  { background: #dce3f0; }
 .dp-key:active { background: #c8d4f0; transform: scale(0.95); }
-.dp-key .dp-sub { font-size: 9px; color: #888; font-weight: normal; margin-top: 1px; }
-.dp-row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.dp-call { background: #28a745; color: white; border: none; border-radius: 10px; padding: 14px 0; font-size: 16px; font-weight: bold; cursor: pointer; }
+.dp-key .dp-sub { font-size: 8px; color: #999; font-weight: normal; margin-top: 1px; }
+.dp-row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dp-call { background: #28a745; color: white; border: none; border-radius: 8px; padding: 12px 0; font-size: 15px; font-weight: bold; cursor: pointer; }
 .dp-call:hover { background: #218838; }
-.dp-del  { background: #fff0f0; color: #dc3545; border: none; border-radius: 10px; padding: 14px 0; font-size: 20px; cursor: pointer; }
+.dp-del  { background: #fff0f0; color: #dc3545; border: none; border-radius: 8px; padding: 12px 0; font-size: 18px; cursor: pointer; }
 .dp-del:hover  { background: #ffd5d5; }
-.dp-close { margin-top: 10px; width: 100%; background: #f8f9fa; border: none; padding: 10px; border-radius: 8px; cursor: pointer; color: #888; font-size: 13px; }
-.dp-close:hover { background: #e9ecef; }
 
 /* ── Recording History ── */
 .rec-empty { text-align: center; color: #aaa; padding: 30px; font-size: 13px; }
@@ -655,32 +648,6 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     </div>
 </div>
 
-<!-- ══ DIAL PAD MODAL ══ -->
-<div class="dialpad-overlay" id="dialpadOverlay">
-    <div class="dialpad-box">
-        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
-        <div class="dp-grid">
-            <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
-            <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
-            <button class="dp-key" onclick="dpKey('3')">3<span class="dp-sub">DEF</span></button>
-            <button class="dp-key" onclick="dpKey('4')">4<span class="dp-sub">GHI</span></button>
-            <button class="dp-key" onclick="dpKey('5')">5<span class="dp-sub">JKL</span></button>
-            <button class="dp-key" onclick="dpKey('6')">6<span class="dp-sub">MNO</span></button>
-            <button class="dp-key" onclick="dpKey('7')">7<span class="dp-sub">PQRS</span></button>
-            <button class="dp-key" onclick="dpKey('8')">8<span class="dp-sub">TUV</span></button>
-            <button class="dp-key" onclick="dpKey('9')">9<span class="dp-sub">WXYZ</span></button>
-            <button class="dp-key" onclick="dpKey('*')">*</button>
-            <button class="dp-key" onclick="dpKey('0')">0<span class="dp-sub">+</span></button>
-            <button class="dp-key" onclick="dpKey('#')">#</button>
-        </div>
-        <div class="dp-row-actions">
-            <button class="dp-call" onclick="dpCall()">&#128222; Call</button>
-            <button class="dp-del"  onclick="dpDelete()">&#9003;</button>
-        </div>
-        <button class="dp-close" onclick="closePad()">Close</button>
-    </div>
-</div>
-
 <!-- ══ FLOATING PHONE BUTTON ══ -->
 <button class="phone-fab" id="phoneFab" onclick="togglePhonePopup()" title="Open Phone">
     &#128222;
@@ -700,7 +667,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
         <div class="call-timer" id="callTimer">00:00</div>
         <div class="dial-input-wrap">
             <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
-            <button class="btn-dialpad" title="Dial Pad" onclick="openPad()">&#8999;</button>
+            <button class="btn-dialpad" id="btnDialpadToggle" title="Dial Pad" onclick="togglePad()">&#8999;</button>
         </div>
         <div class="call-controls">
             <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>&#128222; Call</button>
@@ -711,6 +678,30 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             </button>
         </div>
     </div>
+
+    <!-- Inline Dial Pad (opens right here inside the popup) -->
+    <div class="dp-panel" id="dpPanel">
+        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
+        <div class="dp-grid">
+            <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
+            <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
+            <button class="dp-key" onclick="dpKey('3')">3<span class="dp-sub">DEF</span></button>
+            <button class="dp-key" onclick="dpKey('4')">4<span class="dp-sub">GHI</span></button>
+            <button class="dp-key" onclick="dpKey('5')">5<span class="dp-sub">JKL</span></button>
+            <button class="dp-key" onclick="dpKey('6')">6<span class="dp-sub">MNO</span></button>
+            <button class="dp-key" onclick="dpKey('7')">7<span class="dp-sub">PQRS</span></button>
+            <button class="dp-key" onclick="dpKey('8')">8<span class="dp-sub">TUV</span></button>
+            <button class="dp-key" onclick="dpKey('9')">9<span class="dp-sub">WXYZ</span></button>
+            <button class="dp-key" onclick="dpKey('*')">*</button>
+            <button class="dp-key" onclick="dpKey('0')">0<span class="dp-sub">+</span></button>
+            <button class="dp-key" onclick="dpKey('#')">#</button>
+        </div>
+        <div class="dp-row-actions">
+            <button class="dp-call" onclick="dpCall()">&#128222; Call</button>
+            <button class="dp-del"  onclick="dpDelete()">&#9003;</button>
+        </div>
+    </div>
+
     <div class="pp-footer">
         <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
     </div>
@@ -796,20 +787,18 @@ function clearRecFilter() {
     fetchRecordings();
 }
 
-// ── Dial Pad ───────────────────────────────────────
+// ── Dial Pad (inline inside popup) ────────────────
 let dpNumber = '';
-function openPad() {
-    dpNumber = document.getElementById('dialInput').value.trim();
-    updateDpDisplay();
-    document.getElementById('dialpadOverlay').classList.add('show');
-}
-function closePad() {
-    document.getElementById('dialpadOverlay').classList.remove('show');
+let padOpen  = false;
+function togglePad() {
+    padOpen = !padOpen;
+    document.getElementById('dpPanel').classList.toggle('open', padOpen);
+    document.getElementById('btnDialpadToggle').style.background = padOpen ? '#0047AB' : '';
+    document.getElementById('btnDialpadToggle').style.color      = padOpen ? 'white'   : '';
 }
 function dpKey(k) {
     dpNumber += k;
     updateDpDisplay();
-    // Also keep dialInput in sync
     document.getElementById('dialInput').value = dpNumber;
 }
 function dpDelete() {
@@ -829,12 +818,16 @@ function updateDpDisplay() {
 }
 function dpCall() {
     if (!dpNumber) return;
-    closePad();
     makeCall(dpNumber);
 }
 // Close dialpad on outside click
-document.getElementById('dialpadOverlay').addEventListener('click', function(e) {
-    if (e.target === this) closePad();
+document.addEventListener('click', function(e) {
+    if (padOpen && !e.target.closest('#dpPanel') && !e.target.closest('#btnDialpadToggle')) {
+        padOpen = false;
+        document.getElementById('dpPanel').classList.remove('open');
+        document.getElementById('btnDialpadToggle').style.background = '';
+        document.getElementById('btnDialpadToggle').style.color = '';
+    }
 });
 
 // ── Fetch dashboard data ───────────────────────────
