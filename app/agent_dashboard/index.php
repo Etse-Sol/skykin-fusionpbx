@@ -372,6 +372,31 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .dp-del  { background: #fff0f0; color: #dc3545; border: none; border-radius: 8px; padding: 12px 0; font-size: 18px; cursor: pointer; }
 .dp-del:hover  { background: #ffd5d5; }
 
+/* ── Pagination ── */
+.pagination-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 0 2px; gap: 12px; flex-wrap: wrap;
+}
+.page-controls { display: flex; align-items: center; gap: 4px; }
+.page-btn {
+    background: white; border: 1px solid #ddd; color: #555;
+    padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    transition: all 0.15s;
+}
+.page-btn:hover:not([disabled]) { background: #0047AB; color: white; border-color: #0047AB; }
+.page-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+.page-numbers { display: flex; gap: 4px; }
+.page-num {
+    background: white; border: 1px solid #ddd; color: #555;
+    min-width: 30px; height: 30px; padding: 0 6px; border-radius: 6px; cursor: pointer;
+    font-size: 12px; display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s;
+}
+.page-num:hover   { background: #e8f0fe; border-color: #0047AB; color: #0047AB; }
+.page-num.active  { background: #0047AB; color: white; border-color: #0047AB; font-weight: bold; }
+.page-num.dots    { border: none; cursor: default; background: none; color: #aaa; }
+.page-num.dots:hover { background: none; color: #aaa; }
+
 /* ── Recording History ── */
 .rec-empty { text-align: center; color: #aaa; padding: 30px; font-size: 13px; }
 .rec-play     { background: #0047AB; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
@@ -576,6 +601,26 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
                     <tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px;">Loading call history...</td></tr>
                 </tbody>
             </table>
+            <!-- Pagination -->
+            <div class="pagination-bar" id="paginationBar" style="display:none;">
+                <span id="pageInfo" style="font-size:12px;color:#888;"></span>
+                <div class="page-controls">
+                    <button class="page-btn" id="btnFirst"    onclick="goPage(1)">&laquo;</button>
+                    <button class="page-btn" id="btnPrev"     onclick="goPage(currentPage-1)">&lsaquo; Prev</button>
+                    <div class="page-numbers" id="pageNumbers"></div>
+                    <button class="page-btn" id="btnNext"     onclick="goPage(currentPage+1)">Next &rsaquo;</button>
+                    <button class="page-btn" id="btnLast"     onclick="goPage(totalPages)">&raquo;</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#888;">
+                    <span>Show</span>
+                    <select id="pageSizeSelect" onchange="changePageSize()" style="border:1px solid #ddd;border-radius:4px;padding:3px 6px;font-size:12px;">
+                        <option value="10" selected>10</option>
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                    </select>
+                    <span>per page</span>
+                </div>
+            </div>
         </div>
 
         <!-- ── Recordings Tab ── -->
@@ -924,8 +969,81 @@ function getDemoData() {
     };
 }
 
-// ── Update dashboard ──────────────────────────────
-function updateDashboard(d) {
+// ── Call History Pagination ───────────────────────
+let allCalls    = [];
+let currentPage = 1;
+let pageSize    = 10;
+let totalPages  = 1;
+
+function renderCallPage(page) {
+    currentPage = Math.max(1, Math.min(page, totalPages));
+    const start = (currentPage - 1) * pageSize;
+    const slice = allCalls.slice(start, start + pageSize);
+
+    document.getElementById('historyCount').textContent =
+        allCalls.length + ' call(s) total';
+
+    if (!allCalls.length) {
+        document.getElementById('callHistoryBody').innerHTML =
+            '<tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px;">No calls found for this date range.</td></tr>';
+        document.getElementById('paginationBar').style.display = 'none';
+        return;
+    }
+
+    let html = '';
+    slice.forEach(c => {
+        const typeBadge   = c.type==='Inbound'  ? 'badge-in'  :
+                            c.type==='Outbound' ? 'badge-out' :
+                            c.type==='Transfer' ? 'badge-transfer' : 'badge-missed';
+        const statusBadge = c.status==='Missed'      ? 'badge-missed' :
+                            c.status==='Transferred' ? 'badge-transfer' : 'badge-in';
+        html += `<tr>
+            <td>${c.time}</td>
+            <td><span class="badge ${typeBadge}">${c.type}</span></td>
+            <td>${c.number}</td>
+            <td>${c.duration}</td>
+            <td><span class="badge ${statusBadge}">${c.status}</span></td>
+            <td>${c.disposition}</td>
+        </tr>`;
+    });
+    document.getElementById('callHistoryBody').innerHTML = html;
+
+    // Show/hide pagination bar
+    const bar = document.getElementById('paginationBar');
+    bar.style.display = totalPages > 1 || allCalls.length > 0 ? 'flex' : 'none';
+
+    // Page info
+    const end = Math.min(start + pageSize, allCalls.length);
+    document.getElementById('pageInfo').textContent =
+        `Showing ${start+1}–${end} of ${allCalls.length}`;
+
+    // Prev / First / Next / Last buttons
+    document.getElementById('btnFirst').disabled = currentPage === 1;
+    document.getElementById('btnPrev').disabled  = currentPage === 1;
+    document.getElementById('btnNext').disabled  = currentPage === totalPages;
+    document.getElementById('btnLast').disabled  = currentPage === totalPages;
+
+    // Page number buttons (show up to 5 around current)
+    let nums = '';
+    const range = 2;
+    for (let i = 1; i <= totalPages; i++) {
+        if (i === 1 || i === totalPages || (i >= currentPage - range && i <= currentPage + range)) {
+            nums += `<button class="page-num${i===currentPage?' active':''}" onclick="goPage(${i})">${i}</button>`;
+        } else if (i === currentPage - range - 1 || i === currentPage + range + 1) {
+            nums += `<span class="page-num dots">…</span>`;
+        }
+    }
+    document.getElementById('pageNumbers').innerHTML = nums;
+}
+
+function goPage(p) {
+    renderCallPage(p);
+}
+function changePageSize() {
+    pageSize = parseInt(document.getElementById('pageSizeSelect').value);
+    totalPages = Math.max(1, Math.ceil(allCalls.length / pageSize));
+    renderCallPage(1);
+}
     document.getElementById('totalCalls').textContent    = d.total_calls || 0;
     document.getElementById('avgDuration').textContent   = formatDurationHMS(d.avg_duration || 0);
     document.getElementById('totalTalk').textContent     = formatDuration(d.total_talk || 0);
@@ -974,27 +1092,11 @@ function updateDashboard(d) {
     document.getElementById('targetRate').textContent        = targetRate + '%';
     document.getElementById('targetRateBar').style.width     = targetRate + '%';
 
-    if (d.recent_calls && d.recent_calls.length > 0) {
-        document.getElementById('historyCount').textContent = d.recent_calls.length + ' call(s)';
-        let html = '';
-        d.recent_calls.forEach(c => {
-            const typeBadge   = c.type==='Inbound' ? 'badge-in' : c.type==='Outbound' ? 'badge-out' : c.type==='Transfer' ? 'badge-transfer' : 'badge-missed';
-            const statusBadge = c.status==='Missed' ? 'badge-missed' : c.status==='Transferred' ? 'badge-transfer' : 'badge-in';
-            html += `<tr>
-                <td>${c.time}</td>
-                <td><span class="badge ${typeBadge}">${c.type}</span></td>
-                <td>${c.number}</td>
-                <td>${c.duration}</td>
-                <td><span class="badge ${statusBadge}">${c.status}</span></td>
-                <td>${c.disposition}</td>
-            </tr>`;
-        });
-        document.getElementById('callHistoryBody').innerHTML = html;
-    } else {
-        document.getElementById('callHistoryBody').innerHTML =
-            '<tr><td colspan="6" style="text-align:center;color:#aaa;padding:20px;">No calls found for this date range.</td></tr>';
-        document.getElementById('historyCount').textContent = '';
-    }
+    // Hand off to paginator
+    allCalls   = d.recent_calls || [];
+    pageSize   = parseInt(document.getElementById('pageSizeSelect').value) || 10;
+    totalPages = Math.max(1, Math.ceil(allCalls.length / pageSize));
+    renderCallPage(1);
 }
 
 // ── Auto-refresh ──────────────────────────────────
