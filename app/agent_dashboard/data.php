@@ -10,17 +10,25 @@ $ext_override = isset($_GET['ext']) ? $_GET['ext'] : null;
 // Use FusionPBX's own database connection
 $db = null;
 try {
-    // Include FusionPBX config
-    if (file_exists('/etc/fusionpbx/config.php')) {
-        include '/etc/fusionpbx/config.php';
+    // Parse FusionPBX config.conf format
+    $db_host = '127.0.0.1';
+    $db_port = '5432';
+    $db_name = 'fusionpbx';
+    $db_user = 'fusionpbx';
+    $db_pass = '';
+
+    $conf = '/etc/fusionpbx/config.conf';
+    if (file_exists($conf)) {
+        foreach (file($conf) as $line) {
+            $line = trim($line);
+            if (strpos($line, 'database.0.host') !== false) $db_host = trim(explode('=', $line)[1]);
+            if (strpos($line, 'database.0.port') !== false) $db_port = trim(explode('=', $line)[1]);
+            if (strpos($line, 'database.0.name') !== false) $db_name = trim(explode('=', $line)[1]);
+            if (strpos($line, 'database.0.username') !== false) $db_user = trim(explode('=', $line)[1]);
+            if (strpos($line, 'database.0.password') !== false) $db_pass = trim(explode('=', $line)[1]);
+        }
     }
-    // Try multiple variable names FusionPBX uses
-    $h = $db_host ?? '127.0.0.1';
-    $p = $db_port ?? '5432';
-    $n = $db_name ?? 'fusionpbx';
-    $u = $db_username ?? $db_user ?? 'fusionpbx';
-    $pw = $db_password ?? $db_pass ?? '';
-    $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}", $u, $pw, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $db = new PDO("pgsql:host={$db_host};port={$db_port};dbname={$db_name}", $db_user, $db_pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 } catch (Exception $e) {
     // Try unix socket as fallback
     try {
