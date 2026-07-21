@@ -245,22 +245,25 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .btn-call {
     background: #28a745; border: none; color: white;
     padding: 8px 20px; border-radius: 6px; cursor: pointer;
-    font-size: 14px; font-weight: bold; transition: background 0.2s;
+    font-size: 13px; font-weight: bold; transition: background 0.2s;
+    white-space: nowrap; min-width: 70px;
 }
 .btn-call:hover { background: #218838; }
 .btn-call:disabled { background: #555; cursor: not-allowed; }
 .btn-hangup {
     background: #dc3545; border: none; color: white;
     padding: 8px 20px; border-radius: 6px; cursor: pointer;
-    font-size: 14px; font-weight: bold; display: none;
+    font-size: 13px; font-weight: bold; display: none;
+    white-space: nowrap; min-width: 80px;
 }
 .btn-hangup:hover { background: #c82333; }
 .btn-hold {
     background: #ffc107; border: none; color: #333;
     padding: 8px 16px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; display: none;
+    font-size: 13px; font-weight: bold; display: none;
+    white-space: nowrap; min-width: 70px;
 }
-.call-timer { font-size: 18px; font-weight: bold; color: #00B4D8; min-width: 60px; display: none; }
+.call-timer { font-size: 16px; font-weight: bold; color: #00B4D8; min-width: 55px; display: none; text-align: center; }
 .softphone-setup { margin-left: auto; }
 .btn-settings {
     background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
@@ -780,9 +783,9 @@ startCountdown();
     </div>
     <div class="dial-input-wrap">
         <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
-        <button class="btn-call" id="btnCall" onclick="makeCall()" disabled>📞 Call</button>
-        <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">📵 Hang up</button>
-        <button class="btn-hold" id="btnHold" onclick="toggleHold()">⏸ Hold</button>
+        <button class="btn-call" id="btnCall" onclick="makeCall()" disabled>Call</button>
+        <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">Hang Up</button>
+        <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
     </div>
     <div class="call-timer" id="callTimer">00:00</div>
     <div class="softphone-setup">
