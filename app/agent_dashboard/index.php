@@ -32,6 +32,7 @@ if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SkyKin Agent Dashboard - <?php echo $agent_name; ?></title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.0/jssip.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; }
@@ -84,7 +85,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .logout-btn:hover { background: rgba(255,255,255,0.3); }
 
 /* Layout */
-.main { margin-top: 60px; padding: 20px; }
+.main { margin-top: 60px; padding: 20px; margin-bottom: 80px; }
 
 /* Summary Cards */
 .summary-grid {
@@ -216,8 +217,79 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     100% { box-shadow: 0 0 0 0 rgba(40,167,69,0); }
 }
 
-/* Footer */
-.footer {
+/* Softphone Bar */
+.softphone-bar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+    background: linear-gradient(135deg, #0a0a2e 0%, #0047AB 100%);
+    color: white; padding: 10px 24px;
+    display: flex; align-items: center; gap: 16px;
+    box-shadow: 0 -4px 20px rgba(0,71,171,0.3);
+}
+.softphone-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; min-width: 140px;
+}
+.sip-dot { width: 10px; height: 10px; border-radius: 50%; background: #888; flex-shrink: 0; }
+.sip-dot.registered { background: #28a745; animation: pulse 2s infinite; }
+.sip-dot.calling { background: #ffc107; animation: pulse 0.5s infinite; }
+.sip-dot.incall { background: #28a745; }
+.sip-dot.ringing { background: #fd7e14; animation: pulse 0.4s infinite; }
+.dial-input-wrap { display: flex; gap: 6px; flex: 1; max-width: 280px; }
+.dial-input {
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
+    color: white; padding: 8px 12px; border-radius: 6px; font-size: 15px;
+    letter-spacing: 2px; flex: 1; outline: none;
+}
+.dial-input::placeholder { color: rgba(255,255,255,0.4); letter-spacing: 0; }
+.dial-input:focus { border-color: #00B4D8; background: rgba(255,255,255,0.15); }
+.btn-call {
+    background: #28a745; border: none; color: white;
+    padding: 8px 20px; border-radius: 6px; cursor: pointer;
+    font-size: 14px; font-weight: bold; transition: background 0.2s;
+}
+.btn-call:hover { background: #218838; }
+.btn-call:disabled { background: #555; cursor: not-allowed; }
+.btn-hangup {
+    background: #dc3545; border: none; color: white;
+    padding: 8px 20px; border-radius: 6px; cursor: pointer;
+    font-size: 14px; font-weight: bold; display: none;
+}
+.btn-hangup:hover { background: #c82333; }
+.btn-hold {
+    background: #ffc107; border: none; color: #333;
+    padding: 8px 16px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; display: none;
+}
+.call-timer { font-size: 18px; font-weight: bold; color: #00B4D8; min-width: 60px; display: none; }
+.softphone-setup { margin-left: auto; }
+.btn-settings {
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
+    color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+
+/* Incoming call overlay */
+.incoming-overlay {
+    display: none; position: fixed; top: 80px; right: 20px; z-index: 300;
+    background: white; border-radius: 12px; padding: 20px 24px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2); min-width: 260px;
+    border-top: 4px solid #28a745; animation: slideIn 0.3s ease;
+}
+@keyframes slideIn { from { transform: translateX(100px); opacity:0; } to { transform: translateX(0); opacity:1; } }
+.incoming-title { font-size: 12px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
+.incoming-number { font-size: 22px; font-weight: bold; color: #0047AB; margin-bottom: 16px; }
+.incoming-actions { display: flex; gap: 10px; }
+.btn-answer { background: #28a745; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; }
+.btn-decline { background: #dc3545; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; }
+
+/* Settings modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 400; align-items: center; justify-content: center; }
+.modal-overlay.show { display: flex; }
+.modal-box { background: white; border-radius: 12px; padding: 28px; width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+.modal-title { font-size: 16px; font-weight: bold; color: #0047AB; margin-bottom: 20px; }
+.form-group { margin-bottom: 14px; }
+.form-group label { font-size: 12px; color: #666; display: block; margin-bottom: 4px; }
+.form-group input { width: 100%; border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; font-size: 14px; }
+.btn-save-settings { background: #0047AB; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 8px; }
     text-align: center; font-size: 11px; color: #aaa; padding: 16px;
 }
 
@@ -665,5 +737,273 @@ updateClock();
 fetchData();
 startCountdown();
 </script>
-</body>
-</html>
+<!-- Incoming Call Overlay -->
+<div class="incoming-overlay" id="incomingOverlay">
+    <div class="incoming-title">📞 Incoming Call</div>
+    <div class="incoming-number" id="incomingNumber">Unknown</div>
+    <div class="incoming-actions">
+        <button class="btn-answer" onclick="answerCall()">Answer</button>
+        <button class="btn-decline" onclick="declineCall()">Decline</button>
+    </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+    <div class="modal-box">
+        <div class="modal-title">SIP Phone Settings</div>
+        <div class="form-group">
+            <label>Extension Number</label>
+            <input type="text" id="sipExt" placeholder="e.g. 101">
+        </div>
+        <div class="form-group">
+            <label>SIP Password</label>
+            <input type="password" id="sipPass" placeholder="Your extension password">
+        </div>
+        <div class="form-group">
+            <label>SIP Server</label>
+            <input type="text" id="sipServer" placeholder="192.168.243.129" value="192.168.243.129">
+        </div>
+        <div class="form-group">
+            <label>Domain</label>
+            <input type="text" id="sipDomain" placeholder="client1.skykin.local" value="<?php echo $domain; ?>">
+        </div>
+        <button class="btn-save-settings" onclick="saveSipSettings()">Connect</button>
+    </div>
+</div>
+
+<!-- Softphone Bar -->
+<div class="softphone-bar">
+    <div class="softphone-status">
+        <div class="sip-dot" id="sipDot"></div>
+        <span id="sipStatusText">Not Connected</span>
+    </div>
+    <div class="dial-input-wrap">
+        <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
+        <button class="btn-call" id="btnCall" onclick="makeCall()" disabled>📞 Call</button>
+        <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">📵 Hang up</button>
+        <button class="btn-hold" id="btnHold" onclick="toggleHold()">⏸ Hold</button>
+    </div>
+    <div class="call-timer" id="callTimer">00:00</div>
+    <div class="softphone-setup">
+        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">⚙ Setup Phone</button>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.0/jssip.min.js"></script>
+<script>
+// ===== WebRTC Softphone =====
+let ua = null;
+let currentSession = null;
+let callStartTime = null;
+let callTimerInterval = null;
+let onHold = false;
+let remoteAudio = new Audio();
+remoteAudio.autoplay = true;
+
+// Load saved settings
+function loadSipSettings() {
+    const ext = localStorage.getItem('sip_ext') || '';
+    const pass = localStorage.getItem('sip_pass') || '';
+    const server = localStorage.getItem('sip_server') || '192.168.243.129';
+    const domain = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    document.getElementById('sipExt').value = ext;
+    document.getElementById('sipPass').value = pass;
+    document.getElementById('sipServer').value = server;
+    document.getElementById('sipDomain').value = domain;
+    if (ext && pass) initSIP(ext, pass, server, domain);
+}
+
+function saveSipSettings() {
+    const ext = document.getElementById('sipExt').value.trim();
+    const pass = document.getElementById('sipPass').value.trim();
+    const server = document.getElementById('sipServer').value.trim();
+    const domain = document.getElementById('sipDomain').value.trim();
+    if (!ext || !pass) { alert('Please enter extension and password'); return; }
+    localStorage.setItem('sip_ext', ext);
+    localStorage.setItem('sip_pass', pass);
+    localStorage.setItem('sip_server', server);
+    localStorage.setItem('sip_domain', domain);
+    document.getElementById('settingsModal').classList.remove('show');
+    initSIP(ext, pass, server, domain);
+}
+
+function initSIP(ext, pass, server, domain) {
+    if (ua) { try { ua.stop(); } catch(e) {} }
+    setSipStatus('connecting', 'Connecting...');
+    try {
+        const socket = new JsSIP.WebSocketInterface('ws://' + server + ':5066');
+        const config = {
+            sockets: [socket],
+            uri: 'sip:' + ext + '@' + domain,
+            password: pass,
+            display_name: '<?php echo $agent_name; ?>',
+            register: true,
+            register_expires: 300,
+            connection_recovery_min_interval: 2,
+            connection_recovery_max_interval: 30
+        };
+        ua = new JsSIP.UA(config);
+
+        ua.on('registered', () => setSipStatus('registered', 'Registered (' + ext + ')'));
+        ua.on('unregistered', () => setSipStatus('unregistered', 'Not Registered'));
+        ua.on('registrationFailed', (e) => setSipStatus('failed', 'Reg Failed: ' + (e.cause || 'error')));
+
+        ua.on('newRTCSession', (data) => {
+            const session = data.session;
+            if (session.direction === 'incoming') {
+                handleIncoming(session);
+            } else {
+                handleOutgoing(session);
+            }
+        });
+
+        ua.start();
+    } catch(e) {
+        setSipStatus('failed', 'Error: ' + e.message);
+    }
+}
+
+function setSipStatus(state, text) {
+    const dot = document.getElementById('sipDot');
+    const statusText = document.getElementById('sipStatusText');
+    dot.className = 'sip-dot';
+    if (state === 'registered') {
+        dot.classList.add('registered');
+        document.getElementById('btnCall').disabled = false;
+        document.getElementById('agentStatus').textContent = 'Available';
+        document.getElementById('agentStatus').className = 'status-badge';
+    } else if (state === 'calling') {
+        dot.classList.add('calling');
+    } else if (state === 'incall') {
+        dot.classList.add('incall');
+    } else if (state === 'ringing') {
+        dot.classList.add('ringing');
+    }
+    statusText.textContent = text;
+}
+
+function handleIncoming(session) {
+    currentSession = session;
+    const callerNumber = session.remote_identity.uri.user;
+    document.getElementById('incomingNumber').textContent = callerNumber;
+    document.getElementById('incomingOverlay').style.display = 'block';
+    setSipStatus('ringing', 'Ringing: ' + callerNumber);
+
+    session.on('ended', endCall);
+    session.on('failed', endCall);
+}
+
+function answerCall() {
+    if (!currentSession) return;
+    document.getElementById('incomingOverlay').style.display = 'none';
+    const options = {
+        mediaConstraints: { audio: true, video: false },
+        pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+    };
+    currentSession.answer(options);
+    currentSession.connection.addEventListener('addstream', (e) => {
+        remoteAudio.srcObject = e.streams[0];
+    });
+    startCallUI(currentSession.remote_identity.uri.user);
+}
+
+function declineCall() {
+    if (currentSession) currentSession.terminate();
+    document.getElementById('incomingOverlay').style.display = 'none';
+    currentSession = null;
+}
+
+function makeCall() {
+    const number = document.getElementById('dialInput').value.trim();
+    if (!number || !ua) return;
+    const domain = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    const options = {
+        mediaConstraints: { audio: true, video: false },
+        pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+    };
+    currentSession = ua.call('sip:' + number + '@' + domain, options);
+    handleOutgoing(currentSession);
+}
+
+function handleOutgoing(session) {
+    session.on('connecting', () => setSipStatus('calling', 'Calling...'));
+    session.on('progress', () => setSipStatus('ringing', 'Ringing...'));
+    session.on('confirmed', () => startCallUI(session.remote_identity.uri.user));
+    session.on('ended', endCall);
+    session.on('failed', (e) => { endCall(); setSipStatus('registered', 'Call Failed: ' + (e.cause || '')); });
+    session.connection?.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
+    setSipStatus('calling', 'Calling ' + document.getElementById('dialInput').value);
+}
+
+function startCallUI(number) {
+    setSipStatus('incall', 'In Call: ' + number);
+    document.getElementById('btnCall').style.display = 'none';
+    document.getElementById('btnHangup').style.display = 'block';
+    document.getElementById('btnHold').style.display = 'block';
+    document.getElementById('callTimer').style.display = 'block';
+    document.getElementById('agentStatus').textContent = 'On Call';
+    document.getElementById('agentStatus').className = 'status-badge busy';
+    callStartTime = new Date();
+    callTimerInterval = setInterval(updateCallTimer, 1000);
+}
+
+function updateCallTimer() {
+    if (!callStartTime) return;
+    const elapsed = Math.floor((new Date() - callStartTime) / 1000);
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    document.getElementById('callTimer').textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+}
+
+function hangupCall() {
+    if (currentSession) { try { currentSession.terminate(); } catch(e) {} }
+    endCall();
+}
+
+function toggleHold() {
+    if (!currentSession) return;
+    if (onHold) {
+        currentSession.unhold();
+        onHold = false;
+        document.getElementById('btnHold').textContent = '⏸ Hold';
+        document.getElementById('btnHold').style.background = '#ffc107';
+    } else {
+        currentSession.hold();
+        onHold = true;
+        document.getElementById('btnHold').textContent = '▶ Resume';
+        document.getElementById('btnHold').style.background = '#28a745';
+        document.getElementById('btnHold').style.color = 'white';
+    }
+}
+
+function endCall() {
+    currentSession = null;
+    onHold = false;
+    clearInterval(callTimerInterval);
+    callStartTime = null;
+    document.getElementById('btnCall').style.display = 'block';
+    document.getElementById('btnHangup').style.display = 'none';
+    document.getElementById('btnHold').style.display = 'none';
+    document.getElementById('callTimer').style.display = 'none';
+    document.getElementById('callTimer').textContent = '00:00';
+    document.getElementById('btnHold').textContent = '⏸ Hold';
+    document.getElementById('agentStatus').textContent = 'Available';
+    document.getElementById('agentStatus').className = 'status-badge';
+    setSipStatus('registered', 'Registered');
+    fetchData();
+}
+
+// Close settings modal on outside click
+document.getElementById('settingsModal').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('show');
+});
+
+// Allow Enter key to dial
+document.getElementById('dialInput').addEventListener('keypress', function(e) {
+    if (e.key === 'Enter') makeCall();
+});
+
+loadSipSettings();
+</script>
+
+
