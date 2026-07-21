@@ -1185,7 +1185,7 @@ function initSIP(ext, pass, server, port, dom) {
     if (ua) { try { ua.stop(); } catch(e) {} }
     setSipStatus('connecting', 'Connecting...');
     try {
-        const socket = new JsSIP.WebSocketInterface('wss://' + server + ':' + port);
+        const socket = new JsSIP.WebSocketInterface('ws://' + server + ':5066');
         const config = {
             sockets: [socket],
             uri: 'sip:' + ext + '@' + dom,
@@ -1196,6 +1196,8 @@ function initSIP(ext, pass, server, port, dom) {
             connection_recovery_max_interval: 30
         };
         ua = new JsSIP.UA(config);
+        // Debug: log SDP to console to diagnose Incompatible SDP
+        JsSIP.debug.enable('JsSIP:*');
 
         let regTimer = null;
 
