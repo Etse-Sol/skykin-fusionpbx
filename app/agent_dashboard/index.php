@@ -688,6 +688,10 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             <input type="text" id="sipServer" placeholder="192.168.243.129" value="192.168.243.129">
         </div>
         <div class="form-group">
+            <label>WSS Port (default 7443)</label>
+            <input type="text" id="sipPort" placeholder="7443" value="7443">
+        </div>
+        <div class="form-group">
             <label>Domain</label>
             <input type="text" id="sipDomain" placeholder="client1.skykin.local" value="<?php echo $domain; ?>">
         </div>
@@ -1151,33 +1155,37 @@ function loadSipSettings() {
     const ext    = localStorage.getItem('sip_ext')    || '';
     const pass   = localStorage.getItem('sip_pass')   || '';
     const server = localStorage.getItem('sip_server') || '192.168.243.129';
+    const port   = localStorage.getItem('sip_port')   || '7443';
     const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = server;
+    document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
-    if (ext && pass) initSIP(ext, pass, server, dom);
+    if (ext && pass) initSIP(ext, pass, server, port, dom);
 }
 
 function saveSipSettings() {
     const ext    = document.getElementById('sipExt').value.trim();
     const pass   = document.getElementById('sipPass').value.trim();
     const server = document.getElementById('sipServer').value.trim();
+    const port   = document.getElementById('sipPort').value.trim() || '7443';
     const dom    = document.getElementById('sipDomain').value.trim();
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
     localStorage.setItem('sip_ext',    ext);
     localStorage.setItem('sip_pass',   pass);
     localStorage.setItem('sip_server', server);
+    localStorage.setItem('sip_port',   port);
     localStorage.setItem('sip_domain', dom);
     document.getElementById('settingsModal').classList.remove('show');
-    initSIP(ext, pass, server, dom);
+    initSIP(ext, pass, server, port, dom);
 }
 
-function initSIP(ext, pass, server, dom) {
+function initSIP(ext, pass, server, port, dom) {
     if (ua) { try { ua.stop(); } catch(e) {} }
     setSipStatus('connecting', 'Connecting...');
     try {
-        const socket = new JsSIP.WebSocketInterface('ws://' + server + ':5066');
+        const socket = new JsSIP.WebSocketInterface('wss://' + server + ':' + port);
         const config = {
             sockets: [socket],
             uri: 'sip:' + ext + '@' + dom,
@@ -1202,7 +1210,7 @@ function initSIP(ext, pass, server, dom) {
         });
         ua.on('disconnected', () => {
             clearTimeout(regTimer);
-            setSipStatus('failed', 'Cannot reach server (' + server + ':5066)');
+            setSipStatus('failed', 'Cannot reach server (' + server + ':' + port + ')');
         });
         ua.on('registered', () => {
             clearTimeout(regTimer);
