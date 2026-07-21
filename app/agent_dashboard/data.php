@@ -1,11 +1,19 @@
 <?php
 // SkyKin Technologies - Agent Dashboard Data API
+error_reporting(0);
+ini_set('display_errors', 0);
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 
-$agent_name = isset($_GET['agent']) ? $_GET['agent'] : 'Agent1';
-$domain = isset($_GET['domain']) ? $_GET['domain'] : 'client1.skykin.local';
-$ext_override = isset($_GET['ext']) ? $_GET['ext'] : null;
+$agent_name  = isset($_GET['agent'])  ? $_GET['agent']  : 'Agent1';
+$domain      = isset($_GET['domain']) ? $_GET['domain'] : 'client1.skykin.local';
+$ext_override= isset($_GET['ext'])    ? $_GET['ext']    : null;
+
+// Date filter (default = today)
+$date_from = isset($_GET['from']) && $_GET['from'] ? $_GET['from'] : date('Y-m-d');
+$date_to   = isset($_GET['to'])   && $_GET['to']   ? $_GET['to']   : date('Y-m-d');
+$today_start = strtotime($date_from . ' 00:00:00');
+$today_end   = strtotime($date_to   . ' 23:59:59');
 
 // Use FusionPBX's own database connection
 $db = null;
@@ -39,44 +47,22 @@ try {
     }
 }
 
-$today_start = strtotime(date('Y-m-d') . ' 00:00:00');
-$today_end   = strtotime(date('Y-m-d') . ' 23:59:59');
+$today_start = isset($today_start) ? $today_start : strtotime(date('Y-m-d') . ' 00:00:00');
+$today_end   = isset($today_end)   ? $today_end   : strtotime(date('Y-m-d') . ' 23:59:59');
 
 $data = [
-    'total_calls' => 0,
-    'answered_calls' => 0,
-    'missed_calls' => 0,
-    'avg_duration' => 0,
-    'total_talk' => 0,
-    'total_duration' => 0,
-    'listening_duration' => 0,
-    'internal_call_time' => 0,
-    'outbound_time' => 0,
-    'hook_on_times' => 0,
-    'hold_times' => 0,
-    'transfers' => 0,
-    'forwarding_times' => 0,
-    'acw_duration' => 0,
-    'ivr_transfer' => 0,
-    'busy_duration' => 0,
-    'rest_duration' => 0,
-    'over_rest' => 0,
-    'idle_duration' => 0,
-    'interceptions' => 0,
-    'internal_help' => 0,
-    'login_count' => 1,
-    'force_signout' => 0,
-    'listening_count' => 0,
-    'third_party_count' => 0,
-    'force_advisor_count' => 0,
-    'handle_on_behalf' => 0,
-    'ask_help_count' => 0,
-    'call_reason_count' => 0,
-    'queue_waiting' => 0,
-    'agents_online' => 0,
-    'avg_wait' => 0,
-    'sla_rate' => 0,
-    'recent_calls' => []
+    'total_calls' => 0, 'answered_calls' => 0, 'missed_calls' => 0,
+    'avg_duration' => 0, 'total_talk' => 0, 'total_duration' => 0,
+    'listening_duration' => 0, 'internal_call_time' => 0, 'outbound_time' => 0,
+    'hook_on_times' => 0, 'hold_times' => 0, 'transfers' => 0,
+    'forwarding_times' => 0, 'acw_duration' => 0, 'ivr_transfer' => 0,
+    'busy_duration' => 0, 'rest_duration' => 0, 'over_rest' => 0,
+    'idle_duration' => 0, 'interceptions' => 0, 'internal_help' => 0,
+    'login_count' => 1, 'force_signout' => 0, 'listening_count' => 0,
+    'third_party_count' => 0, 'force_advisor_count' => 0, 'handle_on_behalf' => 0,
+    'ask_help_count' => 0, 'call_reason_count' => 0,
+    'queue_waiting' => 0, 'agents_online' => 0, 'avg_wait' => 0,
+    'sla_rate' => 0, 'recent_calls' => []
 ];
 
 try {
@@ -173,7 +159,7 @@ try {
             AND (caller_id_number = :ext OR destination_number = :ext)
             AND start_epoch >= :today_start
             ORDER BY start_epoch DESC
-            LIMIT 10
+            LIMIT 500
         ");
         $recent_stmt->execute([
             ':domain' => $domain,

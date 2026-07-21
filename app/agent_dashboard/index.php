@@ -1070,6 +1070,8 @@ function changePageSize() {
     totalPages = Math.max(1, Math.ceil(allCalls.length / pageSize));
     renderCallPage(1);
 }
+
+function updateDashboard(d) {
     document.getElementById('totalCalls').textContent    = d.total_calls || 0;
     document.getElementById('avgDuration').textContent   = formatDurationHMS(d.avg_duration || 0);
     document.getElementById('totalTalk').textContent     = formatDuration(d.total_talk || 0);
