@@ -1259,8 +1259,7 @@ function answerCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
     const options = {
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { iceServers: [], iceTransportPolicy: 'all' },
-        rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false }
+        pcConfig: { iceServers: [] }
     };
     currentSession.answer(options);
     try {
@@ -1284,8 +1283,7 @@ function makeCall(number) {
     const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
     const options = {
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { iceServers: [], iceTransportPolicy: 'all' },
-        rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false }
+        pcConfig: { iceServers: [] }
     };
     currentSession = ua.call('sip:' + number + '@' + dom, options);
     handleOutgoing(currentSession);
