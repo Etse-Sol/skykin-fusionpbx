@@ -79,6 +79,11 @@ try {
     $ext_row = $ext_stmt->fetch(PDO::FETCH_ASSOC);
     $extension = $ext_row ? $ext_row['extension'] : null;
 
+    // Allow direct extension override from URL parameter
+    if (isset($_GET['ext']) && !empty($_GET['ext'])) {
+        $extension = $_GET['ext'];
+    }
+
     if ($extension) {
         // Total calls today for this extension
         $stmt = $pdo->prepare("

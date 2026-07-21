@@ -584,7 +584,8 @@ function formatDurationHMS(seconds) {
 
 // Fetch data from API
 function fetchData() {
-    fetch('data.php?agent='+encodeURIComponent(agentName)+'&domain='+encodeURIComponent(domain))
+    const ext = localStorage.getItem('sip_ext') || '';
+    fetch('data.php?agent='+encodeURIComponent(agentName)+'&domain='+encodeURIComponent(domain)+'&ext='+encodeURIComponent(ext))
         .then(r => r.json())
         .then(data => updateDashboard(data))
         .catch(() => {
@@ -990,7 +991,8 @@ function endCall() {
     document.getElementById('agentStatus').textContent = 'Available';
     document.getElementById('agentStatus').className = 'status-badge';
     setSipStatus('registered', 'Registered');
-    fetchData();
+    // Refresh dashboard data after 2 seconds to capture completed call
+    setTimeout(() => { fetchData(); startCountdown(); }, 2000);
 }
 
 // Close settings modal on outside click
