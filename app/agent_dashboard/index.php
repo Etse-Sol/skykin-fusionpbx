@@ -222,49 +222,54 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
     background: linear-gradient(135deg, #0a0a2e 0%, #0047AB 100%);
     color: white; padding: 10px 24px;
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 12px;
     box-shadow: 0 -4px 20px rgba(0,71,171,0.3);
+    height: 58px;
 }
 .softphone-status {
     display: flex; align-items: center; gap: 8px;
-    font-size: 12px; min-width: 140px;
+    font-size: 12px; min-width: 150px; flex-shrink: 0;
 }
 .sip-dot { width: 10px; height: 10px; border-radius: 50%; background: #888; flex-shrink: 0; }
 .sip-dot.registered { background: #28a745; animation: pulse 2s infinite; }
 .sip-dot.calling { background: #ffc107; animation: pulse 0.5s infinite; }
 .sip-dot.incall { background: #28a745; }
 .sip-dot.ringing { background: #fd7e14; animation: pulse 0.4s infinite; }
-.dial-input-wrap { display: flex; gap: 6px; flex: 1; max-width: 280px; }
+.dial-input-wrap { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 360px; }
 .dial-input {
     background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
-    color: white; padding: 8px 12px; border-radius: 6px; font-size: 15px;
-    letter-spacing: 2px; flex: 1; outline: none;
+    color: white; padding: 7px 12px; border-radius: 6px; font-size: 14px;
+    letter-spacing: 1px; flex: 1; outline: none; height: 36px;
 }
 .dial-input::placeholder { color: rgba(255,255,255,0.4); letter-spacing: 0; }
-.dial-input:focus { border-color: #00B4D8; background: rgba(255,255,255,0.15); }
+.dial-input:focus { border-color: #00B4D8; }
+.call-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .btn-call {
     background: #28a745; border: none; color: white;
-    padding: 8px 20px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; transition: background 0.2s;
-    white-space: nowrap; min-width: 70px;
+    padding: 0 20px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: bold; height: 36px;
+    white-space: nowrap;
 }
 .btn-call:hover { background: #218838; }
 .btn-call:disabled { background: #555; cursor: not-allowed; }
 .btn-hangup {
     background: #dc3545; border: none; color: white;
-    padding: 8px 20px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none;
-    white-space: nowrap; min-width: 80px;
+    padding: 0 16px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: bold; display: none; height: 36px;
+    white-space: nowrap;
 }
 .btn-hangup:hover { background: #c82333; }
 .btn-hold {
     background: #ffc107; border: none; color: #333;
-    padding: 8px 16px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none;
-    white-space: nowrap; min-width: 70px;
+    padding: 0 14px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: bold; display: none; height: 36px;
+    white-space: nowrap;
 }
-.call-timer { font-size: 16px; font-weight: bold; color: #00B4D8; min-width: 55px; display: none; text-align: center; }
-.softphone-setup { margin-left: auto; }
+.call-timer {
+    font-size: 16px; font-weight: bold; color: #00B4D8;
+    min-width: 52px; display: none; text-align: center; flex-shrink: 0;
+}
+.softphone-setup { margin-left: auto; flex-shrink: 0; }
 .btn-settings {
     background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
     color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
@@ -783,11 +788,13 @@ startCountdown();
     </div>
     <div class="dial-input-wrap">
         <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
+    </div>
+    <div class="call-controls">
         <button class="btn-call" id="btnCall" onclick="makeCall()" disabled>Call</button>
         <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">Hang Up</button>
         <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
+        <div class="call-timer" id="callTimer">00:00</div>
     </div>
-    <div class="call-timer" id="callTimer">00:00</div>
     <div class="softphone-setup">
         <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">⚙ Setup Phone</button>
     </div>
