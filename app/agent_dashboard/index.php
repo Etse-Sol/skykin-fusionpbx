@@ -277,17 +277,18 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* Incoming call overlay */
 .incoming-overlay {
-    display: none; position: fixed; top: 80px; right: 20px; z-index: 300;
+    display: none; position: fixed; top: 80px; right: 20px; z-index: 9999;
     background: white; border-radius: 12px; padding: 20px 24px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.2); min-width: 260px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3); min-width: 260px;
     border-top: 4px solid #28a745; animation: slideIn 0.3s ease;
+    pointer-events: all;
 }
 @keyframes slideIn { from { transform: translateX(100px); opacity:0; } to { transform: translateX(0); opacity:1; } }
 .incoming-title { font-size: 12px; color: #888; text-transform: uppercase; margin-bottom: 4px; }
 .incoming-number { font-size: 22px; font-weight: bold; color: #0047AB; margin-bottom: 16px; }
 .incoming-actions { display: flex; gap: 10px; }
-.btn-answer { background: #28a745; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; }
-.btn-decline { background: #dc3545; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; }
+.btn-answer { background: #28a745; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; z-index: 9999; position: relative; }
+.btn-decline { background: #dc3545; color: white; border: none; padding: 10px 24px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; flex: 1; z-index: 9999; position: relative; }
 
 /* Settings modal */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 400; align-items: center; justify-content: center; }
@@ -751,8 +752,8 @@ startCountdown();
     <div class="incoming-title">📞 Incoming Call</div>
     <div class="incoming-number" id="incomingNumber">Unknown</div>
     <div class="incoming-actions">
-        <button class="btn-answer" onclick="answerCall()">Answer</button>
-        <button class="btn-decline" onclick="declineCall()">Decline</button>
+        <button class="btn-answer" id="btnAnswer">Answer</button>
+        <button class="btn-decline" id="btnDecline">Decline</button>
     </div>
 </div>
 
@@ -908,9 +909,14 @@ function handleIncoming(session) {
 function answerCall() {
     if (!currentSession) return;
     document.getElementById('incomingOverlay').style.display = 'none';
+    const sipServer = localStorage.getItem('sip_server') || '192.168.243.129';
     const options = {
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        pcConfig: { 
+            iceServers: [],
+            iceTransportPolicy: 'all'
+        },
+        rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false }
     };
     currentSession.answer(options);
     currentSession.connection.addEventListener('addstream', (e) => {
@@ -932,7 +938,11 @@ function makeCall() {
     const domain = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
     const options = {
         mediaConstraints: { audio: true, video: false },
-        pcConfig: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        pcConfig: { 
+            iceServers: [],
+            iceTransportPolicy: 'all'
+        },
+        rtcOfferConstraints: { offerToReceiveAudio: true, offerToReceiveVideo: false }
     };
     currentSession = ua.call('sip:' + number + '@' + domain, options);
     handleOutgoing(currentSession);
@@ -1035,6 +1045,10 @@ function endCall() {
     // Refresh dashboard data after 2 seconds to capture completed call
     setTimeout(() => { fetchData(); startCountdown(); }, 2000);
 }
+
+// Use event listeners for answer/decline (more reliable than onclick)
+document.getElementById('btnAnswer').addEventListener('click', answerCall);
+document.getElementById('btnDecline').addEventListener('click', declineCall);
 
 // Close settings modal on outside click
 document.getElementById('settingsModal').addEventListener('click', function(e) {
