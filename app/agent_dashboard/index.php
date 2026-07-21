@@ -949,7 +949,6 @@ function makeCall() {
 }
 
 function handleOutgoing(session) {
-    // Show Hang Up immediately when call starts
     document.getElementById('btnCall').style.display = 'none';
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display = 'none';
@@ -963,8 +962,17 @@ function handleOutgoing(session) {
         document.getElementById('dialInput').value = 'Ringing ' + lastDialedNumber + '...';
     });
     session.on('confirmed', () => {
+        // Call answered - update UI immediately
         document.getElementById('dialInput').value = lastDialedNumber;
         startCallUI(lastDialedNumber);
+        // Setup audio - try both new and old API
+        try {
+            const pc = session.connection;
+            if (pc.ontrack !== undefined) {
+                pc.ontrack = (e) => { if (e.streams[0]) remoteAudio.srcObject = e.streams[0]; };
+            }
+            pc.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
+        } catch(e) {}
     });
     session.on('ended', () => {
         document.getElementById('dialInput').value = lastDialedNumber;
@@ -972,17 +980,15 @@ function handleOutgoing(session) {
     });
     session.on('failed', (e) => {
         const cause = e.cause || 'Failed';
-        let msg = cause;
-        if (cause === 'Busy') msg = '📵 ' + lastDialedNumber + ' is Busy';
-        else if (cause === 'Rejected') msg = '❌ ' + lastDialedNumber + ' Rejected';
-        else if (cause === 'Not Found') msg = '❓ Number Not Found';
-        else if (cause === 'Request Timeout') msg = '⏱ No Answer from ' + lastDialedNumber;
+        let msg = lastDialedNumber + ': ' + cause;
+        if (cause === 'Busy') msg = lastDialedNumber + ' is Busy';
+        else if (cause === 'Rejected') msg = lastDialedNumber + ' Rejected call';
+        else if (cause === 'Request Timeout') msg = 'No Answer from ' + lastDialedNumber;
         document.getElementById('dialInput').value = lastDialedNumber;
         endCall();
         setSipStatus('registered', msg);
-        setTimeout(() => setSipStatus('registered', 'Registered'), 4000);
+        setTimeout(() => setSipStatus('registered', 'Registered (' + (localStorage.getItem('sip_ext')||'') + ')'), 4000);
     });
-    session.connection?.addEventListener('addstream', (e) => { remoteAudio.srcObject = e.streams[0]; });
     setSipStatus('calling', 'Calling ' + lastDialedNumber);
 }
 
