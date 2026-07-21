@@ -17,10 +17,10 @@ $db_pass = '';
 
 $config_file = '/etc/fusionpbx/config.php';
 if (file_exists($config_file)) {
-    $config = file_get_contents($config_file);
-    if (preg_match("/database_password['\"]?\s*[,=\s]\s*['\"]([^'\"]+)['\"]/",$config,$m)) $db_pass = $m[1];
-    if (preg_match("/database_username['\"]?\s*[,=\s]\s*['\"]([^'\"]+)['\"]/",$config,$u)) $db_user = $u[1];
-    if (preg_match("/database_host['\"]?\s*[,=\s]\s*['\"]([^'\"]+)['\"]/",$config,$h)) $db_host = $h[1];
+    include $config_file;
+    if (isset($db_password)) $db_pass = $db_password;
+    if (isset($db_username)) $db_user = $db_username;
+    if (isset($db_host)) $db_host = $db_host;
 }
 
 $today_start = strtotime(date('Y-m-d') . ' 00:00:00');
