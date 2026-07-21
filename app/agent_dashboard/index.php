@@ -20,6 +20,11 @@ if (file_exists($config_file)) {
 
 $agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
 $domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
+
+// Generate initials from agent name
+preg_match('/([A-Za-z]+)(\d*)/', $agent_name, $m);
+$initials = strtoupper(substr($m[1] ?? $agent_name, 0, 2));
+if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -227,9 +232,9 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 <div class="header">
     <div class="logo">SKY<span>KIN</span> Technologies</div>
     <div class="agent-info">
-        <div class="agent-avatar" id="agentInitial">--</div>
+        <div class="agent-avatar"><?php echo $initials; ?></div>
         <div class="agent-text-info">
-            <span class="agent-name" id="agentNameDisplay"><?php echo $agent_name; ?></span>
+            <span class="agent-name"><?php echo $agent_name; ?></span>
             <span class="agent-domain"><?php echo $domain; ?></span>
         </div>
         <span class="status-badge" id="agentStatus">Available</span>
@@ -653,11 +658,6 @@ function startCountdown() {
         }
     }, 1000);
 }
-
-// Set agent initials
-const parts = agentName.split(/[^a-zA-Z]+/);
-const initials = parts.length > 1 ? parts[0][0] + parts[1][0] : agentName.substring(0,2);
-document.getElementById('agentInitial').textContent = initials.toUpperCase();
 
 // Init
 setInterval(updateClock, 1000);
