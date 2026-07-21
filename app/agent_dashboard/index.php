@@ -32,7 +32,7 @@ if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SkyKin Agent Dashboard - <?php echo $agent_name; ?></title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.0/jssip.min.js"></script>
+<script src="/app/agent_dashboard/js/jssip.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; }
@@ -789,7 +789,7 @@ startCountdown();
     </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jssip/3.10.0/jssip.min.js"></script>
+<script src="/app/agent_dashboard/js/jssip.min.js"></script>
 <script>
 // ===== WebRTC Softphone =====
 let ua = null;
