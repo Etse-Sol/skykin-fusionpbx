@@ -78,7 +78,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ── Layout ── */
-.main { margin-top: 64px; padding: 20px; margin-bottom: 62px; }
+.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; }
 
 /* ── Summary Cards ── */
 .summary-grid {
@@ -205,76 +205,115 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .btn-filter:hover { background: #003a8c; }
 .btn-filter-clear { background: #e9ecef; color: #555; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; }
 
-/* ── Softphone Bar ── */
-.softphone-bar {
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
-    background: linear-gradient(135deg, #0a0a2e 0%, #0047AB 100%);
-    color: white; padding: 10px 24px;
-    display: flex; align-items: center; gap: 10px;
-    box-shadow: 0 -4px 20px rgba(0,71,171,0.3); height: 58px;
+/* ── Floating Phone Widget ── */
+.phone-fab {
+    position: fixed; bottom: 28px; right: 28px; z-index: 500;
+    width: 58px; height: 58px; border-radius: 50%;
+    background: linear-gradient(135deg, #0047AB, #00B4D8);
+    border: none; cursor: pointer; color: white; font-size: 24px;
+    box-shadow: 0 4px 20px rgba(0,71,171,0.45);
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.2s, box-shadow 0.2s;
 }
-.softphone-status {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 12px; min-width: 140px; flex-shrink: 0;
+.phone-fab:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,71,171,0.55); }
+.phone-fab.incall { background: linear-gradient(135deg, #dc3545, #c82333); animation: fabPulse 1.5s infinite; }
+.phone-fab.ringing { background: linear-gradient(135deg, #28a745, #1e7e34); animation: fabPulse 0.6s infinite; }
+@keyframes fabPulse {
+    0%,100% { box-shadow: 0 4px 20px rgba(0,71,171,0.45); }
+    50%      { box-shadow: 0 4px 32px rgba(0,71,171,0.7), 0 0 0 10px rgba(0,71,171,0.1); }
 }
+.fab-badge {
+    position: absolute; top: -2px; right: -2px;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #28a745; border: 2px solid white; display: none;
+}
+.fab-badge.show { display: block; }
+.fab-badge.unreg { background: #888; }
+.fab-badge.calling { background: #ffc107; animation: pulse 0.5s infinite; }
+
+/* Floating phone popup */
+.phone-popup {
+    position: fixed; bottom: 100px; right: 28px; z-index: 499;
+    width: 300px; background: white; border-radius: 16px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    display: none; flex-direction: column; overflow: hidden;
+    animation: popUp 0.2s ease;
+}
+.phone-popup.open { display: flex; }
+@keyframes popUp { from { opacity:0; transform: scale(0.9) translateY(10px); } to { opacity:1; transform: scale(1) translateY(0); } }
+.pp-header {
+    background: linear-gradient(135deg, #0047AB, #00B4D8);
+    color: white; padding: 14px 16px;
+    display: flex; align-items: center; justify-content: space-between;
+}
+.pp-status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .sip-dot { width: 10px; height: 10px; border-radius: 50%; background: #888; flex-shrink: 0; }
 .sip-dot.registered { background: #28a745; animation: pulse 2s infinite; }
 .sip-dot.calling    { background: #ffc107; animation: pulse 0.5s infinite; }
 .sip-dot.incall     { background: #28a745; }
 .sip-dot.ringing    { background: #fd7e14; animation: pulse 0.4s infinite; }
-.dial-input-wrap { display: flex; align-items: center; gap: 6px; flex: 1; max-width: 320px; }
+.pp-close {
+    background: rgba(255,255,255,0.2); border: none; color: white;
+    width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+}
+.pp-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.dial-input-wrap { display: flex; gap: 6px; }
 .dial-input {
-    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
-    color: white; padding: 7px 12px; border-radius: 6px; font-size: 14px;
-    letter-spacing: 1px; flex: 1; outline: none; height: 36px;
+    flex: 1; border: 1px solid #ddd; border-radius: 8px;
+    padding: 9px 12px; font-size: 15px; letter-spacing: 2px; outline: none; color: #0047AB;
 }
-.dial-input::placeholder { color: rgba(255,255,255,0.4); letter-spacing: 0; }
-.dial-input:focus { border-color: #00B4D8; }
+.dial-input:focus { border-color: #0047AB; }
+.dial-input::placeholder { color: #ccc; letter-spacing: 0; font-size: 13px; }
 .btn-dialpad {
-    background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
-    color: white; width: 36px; height: 36px; border-radius: 6px; cursor: pointer;
-    font-size: 16px; display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
+    background: #f0f2f5; border: 1px solid #ddd; border-radius: 8px;
+    width: 40px; cursor: pointer; font-size: 18px; color: #555;
+    display: flex; align-items: center; justify-content: center;
 }
-.btn-dialpad:hover { background: rgba(255,255,255,0.25); }
-.call-controls { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.btn-dialpad:hover { background: #e2e8f0; }
+.call-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-call {
-    background: #28a745; border: none; color: white;
-    padding: 0 20px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; height: 36px; white-space: nowrap;
+    flex: 1; background: #28a745; border: none; color: white;
+    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    font-size: 14px; font-weight: bold;
 }
 .btn-call:hover { background: #218838; }
-.btn-call:disabled { background: #555; cursor: not-allowed; }
+.btn-call:disabled { background: #ccc; cursor: not-allowed; }
 .btn-hangup {
-    background: #dc3545; border: none; color: white;
-    padding: 0 16px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none; height: 36px; white-space: nowrap;
+    flex: 1; background: #dc3545; border: none; color: white;
+    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    font-size: 14px; font-weight: bold; display: none;
 }
 .btn-hangup:hover { background: #c82333; }
 .btn-hold {
-    background: #ffc107; border: none; color: #333;
-    padding: 0 14px; border-radius: 6px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none; height: 36px; white-space: nowrap;
+    flex: 1; background: #ffc107; border: none; color: #333;
+    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    font-size: 13px; font-weight: bold; display: none;
 }
 .btn-record {
-    background: rgba(220,53,69,0.2); border: 1px solid rgba(220,53,69,0.5);
-    color: #ff8fa3; padding: 0 12px; border-radius: 6px; cursor: pointer;
-    font-size: 12px; height: 36px; display: none; align-items: center; gap: 6px;
-    white-space: nowrap;
+    flex: 1; background: #fff0f0; border: 1px solid #f5c6cb; color: #dc3545;
+    padding: 9px 0; border-radius: 8px; cursor: pointer;
+    font-size: 12px; font-weight: bold; display: none; align-items: center;
+    justify-content: center; gap: 5px;
 }
 .btn-record.recording { background: #dc3545; color: white; border-color: #dc3545; }
 .btn-record.visible   { display: flex; }
 .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
 .btn-record.recording .rec-dot { animation: pulse 1s infinite; }
 .call-timer {
-    font-size: 16px; font-weight: bold; color: #00B4D8;
-    min-width: 52px; display: none; text-align: center; flex-shrink: 0;
+    text-align: center; font-size: 22px; font-weight: bold;
+    color: #0047AB; display: none; padding: 4px 0;
 }
-.softphone-setup { margin-left: auto; flex-shrink: 0; }
+.pp-footer {
+    padding: 10px 16px; border-top: 1px solid #f0f0f0;
+    display: flex; justify-content: flex-end;
+}
 .btn-settings {
-    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
-    color: white; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    background: none; border: none; color: #aaa;
+    cursor: pointer; font-size: 12px; padding: 4px 8px;
+    border-radius: 6px;
 }
+.btn-settings:hover { background: #f0f0f0; color: #555; }
 
 /* ── Incoming call overlay ── */
 .incoming-overlay {
@@ -642,27 +681,38 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     </div>
 </div>
 
-<!-- ══ SOFTPHONE BAR ══ -->
-<div class="softphone-bar">
-    <div class="softphone-status">
-        <div class="sip-dot" id="sipDot"></div>
-        <span id="sipStatusText">Not Connected</span>
+<!-- ══ FLOATING PHONE BUTTON ══ -->
+<button class="phone-fab" id="phoneFab" onclick="togglePhonePopup()" title="Open Phone">
+    &#128222;
+    <span class="fab-badge unreg" id="fabBadge"></span>
+</button>
+
+<!-- ══ PHONE POPUP ══ -->
+<div class="phone-popup" id="phonePopup">
+    <div class="pp-header">
+        <div class="pp-status">
+            <div class="sip-dot" id="sipDot"></div>
+            <span id="sipStatusText">Not Connected</span>
+        </div>
+        <button class="pp-close" onclick="togglePhonePopup()">&#x2715;</button>
     </div>
-    <div class="dial-input-wrap">
-        <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number..." maxlength="20">
-        <button class="btn-dialpad" title="Open Dial Pad" onclick="openPad()">⌨</button>
-    </div>
-    <div class="call-controls">
-        <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>Call</button>
-        <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">Hang Up</button>
-        <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
-        <button class="btn-record" id="btnRecord" onclick="toggleRecord()">
-            <span class="rec-dot"></span> Record
-        </button>
+    <div class="pp-body">
         <div class="call-timer" id="callTimer">00:00</div>
+        <div class="dial-input-wrap">
+            <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
+            <button class="btn-dialpad" title="Dial Pad" onclick="openPad()">&#8999;</button>
+        </div>
+        <div class="call-controls">
+            <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>&#128222; Call</button>
+            <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">&#128222; Hang Up</button>
+            <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
+            <button class="btn-record" id="btnRecord" onclick="toggleRecord()">
+                <span class="rec-dot"></span> Record
+            </button>
+        </div>
     </div>
-    <div class="softphone-setup">
-        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Setup</button>
+    <div class="pp-footer">
+        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
     </div>
 </div>
 
@@ -1025,20 +1075,47 @@ function initSIP(ext, pass, server, dom) {
     } catch(e) { setSipStatus('failed', 'Error: ' + e.message); }
 }
 
+// ── Floating Phone Widget ──────────────────────────
+let phoneOpen = false;
+function togglePhonePopup() {
+    phoneOpen = !phoneOpen;
+    document.getElementById('phonePopup').classList.toggle('open', phoneOpen);
+}
+// Auto-open popup on incoming call or call start
+function openPhonePopup() {
+    phoneOpen = true;
+    document.getElementById('phonePopup').classList.add('open');
+}
+
 function setSipStatus(state, text) {
-    const dot = document.getElementById('sipDot');
+    const dot   = document.getElementById('sipDot');
+    const badge = document.getElementById('fabBadge');
+    const fab   = document.getElementById('phoneFab');
     dot.className = 'sip-dot';
+    badge.className = 'fab-badge';
+    fab.className   = 'phone-fab';
+
     if (state === 'registered') {
         dot.classList.add('registered');
+        badge.classList.add('show');
         document.getElementById('btnCall').disabled = false;
         setAgentStatus('ready');
     } else if (state === 'calling') {
         dot.classList.add('calling');
+        badge.classList.add('show','calling');
+        fab.classList.add('ringing');
+        openPhonePopup();
     } else if (state === 'incall') {
         dot.classList.add('incall');
+        badge.classList.add('show');
+        fab.classList.add('incall');
         setAgentStatus('incall');
     } else if (state === 'ringing') {
         dot.classList.add('ringing');
+        badge.classList.add('show');
+        fab.classList.add('ringing');
+    } else if (state === 'unregistered' || state === 'failed') {
+        badge.classList.add('show','unreg');
     }
     document.getElementById('sipStatusText').textContent = text;
 }
@@ -1048,6 +1125,7 @@ function handleIncoming(session) {
     const callerNumber = session.remote_identity.uri.user;
     document.getElementById('incomingNumber').textContent = callerNumber;
     document.getElementById('incomingOverlay').style.display = 'block';
+    openPhonePopup();
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
     session.on('ended', endCall);
     session.on('failed', endCall);
