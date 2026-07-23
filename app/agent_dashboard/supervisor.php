@@ -1,9 +1,56 @@
 <?php
 // SkyKin Technologies – Supervisor Dashboard
+
+// ── FusionPBX session bootstrap ──────────────────────────────────────────────
+// Include FusionPBX config so we share its session
+if (file_exists('/var/www/fusionpbx/resources/classes/config.php')) {
+    require_once('/var/www/fusionpbx/resources/classes/config.php');
+}
 session_start();
 
-$domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
-$sup_ext = isset($_GET['ext'])   ? htmlspecialchars($_GET['ext'])    : '';
+// ── Auth check ────────────────────────────────────────────────────────────────
+// If not logged in, send to FusionPBX login
+if (empty($_SESSION['user_uuid'])) {
+    $redirect = urlencode($_SERVER['REQUEST_URI']);
+    header('Location: /login/index.php?redirect='.$redirect);
+    exit;
+}
+
+// Allowed roles — 'superadmin' always has access; add 'supervisor' as a custom group
+$allowed_groups = ['superadmin', 'supervisor'];
+$user_groups    = isset($_SESSION['groups']) ? (array)$_SESSION['groups'] : [];
+
+// FusionPBX sometimes stores groups as a comma-separated string
+if (count($user_groups) === 1 && strpos($user_groups[0], ',') !== false) {
+    $user_groups = array_map('trim', explode(',', $user_groups[0]));
+}
+
+$has_access = !empty(array_intersect($allowed_groups, $user_groups));
+
+if (!$has_access) {
+    http_response_code(403);
+    echo '<!DOCTYPE html><html><head><meta charset="UTF-8">
+    <title>Access Denied – SkyKin</title>
+    <style>body{font-family:Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}
+    .box{background:#fff;padding:40px 48px;border-radius:14px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.1)}
+    h2{color:#c62828;margin-bottom:10px} p{color:#666;font-size:14px} a{color:#0047AB;font-size:13px}
+    .badge{background:#ffebee;color:#c62828;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;display:inline-block;margin-bottom:16px}
+    </style></head><body><div class="box">
+    <div class="badge">ACCESS DENIED</div>
+    <h2>Supervisor Access Required</h2>
+    <p>Your account (<strong>'.htmlspecialchars($_SESSION['username'] ?? 'Unknown').'</strong>) does not have the <strong>supervisor</strong> or <strong>superadmin</strong> role.</p>
+    <p style="margin-top:8px;font-size:12px;color:#aaa">Ask your administrator to assign you the <strong>supervisor</strong> group in FusionPBX &rarr; Accounts &rarr; Users.</p>
+    <br><a href="/app/agent_dashboard/index.php">Go to Agent Dashboard</a> &nbsp;|&nbsp; <a href="/login/index.php">Login as different user</a>
+    </div></body></html>';
+    exit;
+}
+
+// ── Pull identity from session ────────────────────────────────────────────────
+$logged_in_user   = $_SESSION['username']    ?? '';
+$logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
+
+$domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain'])  : $logged_in_domain;
+$sup_ext = isset($_GET['ext'])    ? htmlspecialchars($_GET['ext'])     : '';
 $today   = date('Y-m-d');
 
 // ── DB helper ────────────────────────────────────────────────────────────────
@@ -449,7 +496,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
     <div class="header-right">
         <span><span class="live-dot"></span>Live</span>
         <span class="clock" id="supClock">--:--:--</span>
-        <span style="opacity:.8;font-size:12px"><?php echo $domain; ?></span>
+        <span style="opacity:.8;font-size:12px"><?php echo htmlspecialchars($logged_in_user); ?></span>
+        <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
+        <a href="/login/index.php?logout=1" style="color:rgba(255,255,255,.7);font-size:11px;text-decoration:none">Sign out</a>
     </div>
 </div>
 
