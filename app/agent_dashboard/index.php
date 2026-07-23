@@ -125,6 +125,41 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     exit;
 }
 
+// ?? ACW History API ??????????????????????????????????????????????????????????
+if (isset($_GET['action']) && $_GET['action'] === 'acw_history') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $ext       = isset($_GET['ext'])  ? trim($_GET['ext'])  : '';
+    $date_from = isset($_GET['from']) ? $_GET['from']       : date('Y-m-d');
+    $date_to   = isset($_GET['to'])   ? $_GET['to']         : date('Y-m-d');
+    $db = null;
+    try {
+        $conf='/etc/fusionpbx/config.conf'; $h='127.0.0.1'; $p='5432'; $n='fusionpbx'; $u='fusionpbx'; $pw='';
+        if (file_exists($conf)) foreach (file($conf) as $ln) {
+            $ln=trim($ln);
+            if (strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
+            if (strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
+            if (strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
+            if (strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
+            if (strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
+        }
+        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
+            id SERIAL PRIMARY KEY, agent_id VARCHAR(50), caller_id VARCHAR(50),
+            call_type VARCHAR(20), duration INTEGER, disposition VARCHAR(100),
+            call_reason VARCHAR(200), notes TEXT, recording_filename VARCHAR(255),
+            created_at TIMESTAMP DEFAULT NOW())");
+        $s = $db->prepare("SELECT to_char(created_at,'HH24:MI') as time,
+            caller_id,call_type,duration,disposition,call_reason,notes
+            FROM skykin_acw WHERE agent_id=:ext
+            AND DATE(created_at)>=:df AND DATE(created_at)<=:dt
+            ORDER BY created_at DESC LIMIT 200");
+        $s->execute([':ext'=>$ext,':df'=>$date_from,':dt'=>$date_to]);
+        echo json_encode(['records'=>$s->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Exception $e) { echo json_encode(['records'=>[],'error'=>$e->getMessage()]); }
+    exit;
+}
+
 // ?? Save ACW (After-Call Work) to DB ????????????????????????????????????????
 if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
     error_reporting(0);
@@ -869,6 +904,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
         <div class="tab-bar">
             <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
             <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
+            <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
         </div>
 
         <!-- ?? Call History Tab ?? -->
@@ -946,9 +982,36 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
                 </tbody>
             </table>
         </div>
-    </div>
 
-</div>
+        <!-- ACW History Tab -->
+        <div class="tab-panel" id="tabAcw" style="display:none">
+            <div class="date-filter">
+                <label>From:</label>
+                <input type="date" id="acwFilterFrom" value="<?php echo $today; ?>">
+                <label>To:</label>
+                <input type="date" id="acwFilterTo" value="<?php echo $today; ?>">
+                <button class="btn-filter" onclick="fetchAcwHistory()">Filter</button>
+                <button class="btn-filter-clear" onclick="document.getElementById('acwFilterFrom').value='<?php echo $today; ?>';document.getElementById('acwFilterTo').value='<?php echo $today; ?>';fetchAcwHistory()">Today</button>
+                <span id="acwCount" style="font-size:12px;color:#aaa;margin-left:4px;"></span>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Caller</th>
+                        <th>Type</th>
+                        <th>Duration</th>
+                        <th>Disposition</th>
+                        <th>Reason</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody id="acwHistoryBody">
+                    <tr><td colspan="7" class="rec-empty">No ACW records yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
 
 <div class="footer">
     SkyKin Technologies &copy; <?php echo date('Y'); ?> | Agent Dashboard v2.0 |
@@ -1123,13 +1186,18 @@ document.addEventListener('click', function(e) {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['callHistory','recordings'].forEach(t => {
-        document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1)).classList.remove('active');
-        document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn').classList.remove('active');
+    ['callHistory','recordings','acw'].forEach(t => {
+        const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
+        const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
+        if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
+        if (btn)   btn.classList.remove('active');
     });
-    document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
-    document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1) + 'Btn').classList.add('active');
+    const activePanel = document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1));
+    const activeBtn   = document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1) + 'Btn');
+    if (activePanel) { activePanel.style.display = ''; activePanel.classList.add('active'); }
+    if (activeBtn)   activeBtn.classList.add('active');
     if (tab === 'recordings') fetchRecordings();
+    if (tab === 'acw')        fetchAcwHistory();
 }
 
 // ?? Date filters ??????????????????????????????????
@@ -1144,6 +1212,36 @@ function clearRecFilter() {
     document.getElementById('recFilterFrom').value = today;
     document.getElementById('recFilterTo').value   = today;
     fetchRecordings();
+}
+
+function fetchAcwHistory() {
+    const ext  = localStorage.getItem('sip_ext') || serverExt || '';
+    const from = document.getElementById('acwFilterFrom').value;
+    const to   = document.getElementById('acwFilterTo').value;
+    fetch('index.php?action=acw_history&ext='+encodeURIComponent(ext)+'&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to))
+        .then(r => r.json())
+        .then(d => {
+            const rows = d.records || [];
+            document.getElementById('acwCount').textContent = rows.length + ' record(s)';
+            if (!rows.length) {
+                document.getElementById('acwHistoryBody').innerHTML =
+                    '<tr><td colspan="7" class="rec-empty">No ACW records found for this date range.</td></tr>';
+                return;
+            }
+            document.getElementById('acwHistoryBody').innerHTML = rows.map(r => `
+                <tr>
+                    <td>${r.time}</td>
+                    <td>${r.caller_id}</td>
+                    <td><span class="badge-${r.call_type==='Inbound'?'in':'out'}">${r.call_type}</span></td>
+                    <td>${Math.floor(r.duration/60)}:${String(r.duration%60).padStart(2,'0')}</td>
+                    <td>${r.disposition}</td>
+                    <td>${r.call_reason}</td>
+                    <td style="max-width:200px;white-space:normal;font-size:11px;color:#666">${r.notes||'?'}</td>
+                </tr>`).join('');
+        }).catch(() => {
+            document.getElementById('acwHistoryBody').innerHTML =
+                '<tr><td colspan="7" class="rec-empty">Error loading ACW history.</td></tr>';
+        });
 }
 
 // ?? Dial Pad (inline inside popup) ????????????????
