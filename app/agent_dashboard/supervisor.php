@@ -85,8 +85,11 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
     $today_end   = strtotime(date('Y-m-d').' 23:59:59');
     try {
         $db = getDB();
-        // All extensions in domain
-        $s = $db->prepare("SELECT extension, effective_caller_id_name FROM v_extensions WHERE domain_name=:d ORDER BY extension");
+        // All extensions in domain — join v_domains since v_extensions uses domain_uuid
+        $s = $db->prepare("SELECT e.extension, e.effective_caller_id_name
+            FROM v_extensions e
+            JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+            WHERE d.domain_name=:d ORDER BY e.extension");
         $s->execute([':d'=>$domain]);
         $exts = $s->fetchAll(PDO::FETCH_ASSOC);
 
@@ -238,9 +241,11 @@ if (isset($_GET['action']) && $_GET['action']==='leaderboard') {
         $s->execute([':d'=>$domain,':ts'=>$ts,':te'=>$te]);
         $rows = $s->fetchAll(PDO::FETCH_ASSOC);
 
-        // Enrich with names
+        // Enrich with names — join v_domains since v_extensions uses domain_uuid
         $names = [];
-        $sn = $db->prepare("SELECT extension, effective_caller_id_name FROM v_extensions WHERE domain_name=:d");
+        $sn = $db->prepare("SELECT e.extension, e.effective_caller_id_name
+            FROM v_extensions e JOIN v_domains d ON d.domain_uuid=e.domain_uuid
+            WHERE d.domain_name=:d");
         $sn->execute([':d'=>$domain]);
         foreach($sn->fetchAll(PDO::FETCH_ASSOC) as $r) $names[$r['extension']] = $r['effective_caller_id_name'];
 
