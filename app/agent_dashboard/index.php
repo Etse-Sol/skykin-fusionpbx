@@ -273,34 +273,41 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     display: flex; align-items: center; justify-content: center;
 }
 .btn-dialpad:hover { background: #e2e8f0; }
-.call-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.call-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
 .btn-call {
-    flex: 1; background: #28a745; border: none; color: white;
-    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    grid-column: span 2;
+    background: #28a745; border: none; color: white;
+    padding: 12px 0; border-radius: 8px; cursor: pointer;
     font-size: 14px; font-weight: bold;
 }
 .btn-call:hover { background: #218838; }
 .btn-call:disabled { background: #ccc; cursor: not-allowed; }
 .btn-hangup {
-    flex: 1; background: #dc3545; border: none; color: white;
-    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    grid-column: span 2;
+    background: #dc3545; border: none; color: white;
+    padding: 12px 0; border-radius: 8px; cursor: pointer;
     font-size: 14px; font-weight: bold; display: none;
 }
 .btn-hangup:hover { background: #c82333; }
 .btn-hold {
-    flex: 1; background: #ffc107; border: none; color: #333;
-    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    background: #ffc107; border: none; color: #333;
+    padding: 12px 0; border-radius: 8px; cursor: pointer;
     font-size: 13px; font-weight: bold; display: none;
 }
 .btn-mute {
-    flex: 1; background: #6c757d; border: none; color: white;
-    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    background: #6c757d; border: none; color: white;
+    padding: 12px 0; border-radius: 8px; cursor: pointer;
     font-size: 13px; font-weight: bold; display: none;
 }
 .btn-mute.muted { background: #dc3545; }
 .btn-record {
-    flex: 1; background: #fff0f0; border: 1px solid #f5c6cb; color: #dc3545;
-    padding: 9px 0; border-radius: 8px; cursor: pointer;
+    grid-column: span 2;
+    background: #fff0f0; border: 1px solid #f5c6cb; color: #dc3545;
+    padding: 11px 0; border-radius: 8px; cursor: pointer;
     font-size: 12px; font-weight: bold; display: none; align-items: center;
     justify-content: center; gap: 5px;
 }
