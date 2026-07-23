@@ -86,10 +86,19 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
     try {
         $db = getDB();
         // All extensions in domain — join v_domains since v_extensions uses domain_uuid
+        // Exclude extensions assigned to supervisor/admin users
         $s = $db->prepare("SELECT e.extension, e.effective_caller_id_name
             FROM v_extensions e
             JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-            WHERE d.domain_name=:d ORDER BY e.extension");
+            WHERE d.domain_name=:d
+            AND e.extension_uuid NOT IN (
+                SELECT eu.extension_uuid FROM v_extension_users eu
+                JOIN v_users u ON u.user_uuid = eu.user_uuid
+                JOIN v_user_groups ug ON ug.user_uuid = u.user_uuid
+                JOIN v_groups g ON g.group_uuid = ug.group_uuid
+                WHERE g.group_name IN ('superadmin','admin','supervisor')
+            )
+            ORDER BY e.extension");
         $s->execute([':d'=>$domain]);
         $exts = $s->fetchAll(PDO::FETCH_ASSOC);
 
