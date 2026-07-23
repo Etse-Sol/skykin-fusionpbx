@@ -125,7 +125,62 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     exit;
 }
 
-// ?? Normal page render below ?????????????????????????????????????????????????
+// ?? Save ACW (After-Call Work) to DB ????????????????????????????????????????
+if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    header('Access-Control-Allow-Origin: *');
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    $db = null;
+    try {
+        $conf = '/etc/fusionpbx/config.conf';
+        $h='127.0.0.1'; $p='5432'; $n='fusionpbx'; $u='fusionpbx'; $pw='';
+        if (file_exists($conf)) {
+            foreach (file($conf) as $ln) {
+                $ln = trim($ln);
+                if (strpos($ln,'database.0.host')     !== false) $h  = trim(explode('=',$ln,2)[1]);
+                if (strpos($ln,'database.0.port')     !== false) $p  = trim(explode('=',$ln,2)[1]);
+                if (strpos($ln,'database.0.name')     !== false) $n  = trim(explode('=',$ln,2)[1]);
+                if (strpos($ln,'database.0.username') !== false) $u  = trim(explode('=',$ln,2)[1]);
+                if (strpos($ln,'database.0.password') !== false) $pw = trim(explode('=',$ln,2)[1]);
+            }
+        }
+        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}", $u, $pw, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+
+        // Create ACW table if it doesn't exist
+        $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
+            id SERIAL PRIMARY KEY,
+            agent_id VARCHAR(50),
+            caller_id VARCHAR(50),
+            call_type VARCHAR(20),
+            duration INTEGER,
+            disposition VARCHAR(100),
+            call_reason VARCHAR(200),
+            notes TEXT,
+            recording_filename VARCHAR(255),
+            created_at TIMESTAMP DEFAULT NOW()
+        )");
+
+        $s = $db->prepare("INSERT INTO skykin_acw
+            (agent_id,caller_id,call_type,duration,disposition,call_reason,notes,recording_filename)
+            VALUES (:a,:c,:ct,:d,:disp,:cr,:notes,:rec)");
+        $s->execute([
+            ':a'    => $input['agent_id']            ?? '',
+            ':c'    => $input['caller_id']            ?? '',
+            ':ct'   => $input['call_type']            ?? 'Outbound',
+            ':d'    => (int)($input['duration']       ?? 0),
+            ':disp' => $input['disposition']          ?? 'Completed',
+            ':cr'   => $input['call_reason']          ?? '',
+            ':notes'=> $input['notes']                ?? '',
+            ':rec'  => $input['recording_filename']   ?? '',
+        ]);
+        echo json_encode(['saved'=>true]);
+    } catch (Exception $e) {
+        echo json_encode(['saved'=>false,'error'=>$e->getMessage()]);
+    }
+    exit;
+}
 
 $agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
 $domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
@@ -1628,7 +1683,7 @@ function submitAcw() {
     const callReason  = document.getElementById('acwCallReason').value.trim() || 'General';
     const notes       = document.getElementById('acwNotes').value.trim();
     const agentId     = localStorage.getItem('sip_ext') || '101';
-    fetch('http://192.168.243.129:8001/api/calls/end', {
+    fetch('index.php?action=save_acw', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
@@ -1639,7 +1694,7 @@ function submitAcw() {
         })
     }).then(() => fetchData()).catch(() => {});
     closeAcwModal();
-    showToast('? Wrap-up submitted. You are now Available.');
+    showToast('Wrap-up submitted. You are now Available.');
 }
 
 // ?? Toast ?????????????????????????????????????????
