@@ -1676,9 +1676,12 @@ window.sipBridge.sendDtmf = function(tone) {
         if (sender?.dtmf) sender.dtmf.insertDTMF(tone, 100, 500);
     }
 };
-</script>
-</body>
-</html>
+
+function saveSipSettings() {
+    const ext    = document.getElementById('sipExt').value.trim();
+    const pass   = document.getElementById('sipPass').value.trim();
+    const server = document.getElementById('sipServer').value.trim();
+    const port   = document.getElementById('sipPort').value.trim();
     const dom    = document.getElementById('sipDomain').value.trim();
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
     localStorage.setItem('sip_ext',    ext);
@@ -1691,7 +1694,6 @@ window.sipBridge.sendDtmf = function(tone) {
 }
 
 function initSIP(ext, pass, server, port, dom) {
-    if (ua) { try { ua.stop(); } catch(e) {} }
     setSipStatus('connecting', 'Connecting...');
     if (window.sipBridge && window.sipBridge.init) {
         window.sipBridge.init(ext, pass, server, port, dom);
@@ -1750,9 +1752,6 @@ function setSipStatus(state, text) {
     document.getElementById('sipStatusText').textContent = text;
 }
 
-
-        String(Math.floor(elapsed/60)).padStart(2,'0') + ':' + String(elapsed%60).padStart(2,'0');
-}
 
 function hangupCall() {
     if (window.sipBridge && window.sipBridge.hangup) window.sipBridge.hangup();
