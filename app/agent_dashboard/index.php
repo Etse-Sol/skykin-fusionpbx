@@ -292,6 +292,12 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     padding: 10px 0; border-radius: 8px; cursor: pointer;
     font-size: 13px; font-weight: bold; display: none;
 }
+.btn-mute {
+    flex: 1; background: #6c757d; border: none; color: white;
+    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    font-size: 13px; font-weight: bold; display: none;
+}
+.btn-mute.muted { background: #dc3545; }
 .btn-record {
     flex: 1; background: #fff0f0; border: 1px solid #f5c6cb; color: #dc3545;
     padding: 9px 0; border-radius: 8px; cursor: pointer;
@@ -720,7 +726,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 <!-- ?? INCOMING CALL OVERLAY ?? -->
 <div class="incoming-overlay" id="incomingOverlay">
-    <div class="incoming-title">?? Incoming Call</div>
+    <div class="incoming-title">&#128222; Incoming Call</div>
     <div class="incoming-number" id="incomingNumber">Unknown</div>
     <div class="incoming-actions">
         <button class="btn-answer" id="btnAnswer">Answer</button>
@@ -781,6 +787,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>&#128222; Call</button>
             <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">&#128222; Hang Up</button>
             <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
+            <button class="btn-mute"   id="btnMute"   onclick="toggleMute()">Mute</button>
             <button class="btn-record" id="btnRecord" onclick="toggleRecord()">
                 <span class="rec-dot"></span> Record
             </button>
@@ -1211,6 +1218,7 @@ function startCountdown() {
 // SIP / WebRTC Softphone (SIP.js 0.21 via ESM CDN)
 // ??????????????????????????????????????????????????
 let currentSession = null, lastDialedNumber = '', lastCallType = 'Outbound';
+let isMuted = false;
 let callStartTime = null, callTimerInterval = null, onHold = false;
 let isRecording = false;
 let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFilename = 'demo_recording.wav';
@@ -1325,7 +1333,7 @@ function makeCall(number) {
     lastDialedNumber = number;
     lastCallType = 'Outbound';
     if (sipBridge.makeCall) sipBridge.makeCall(number);
-    else showToast('?? SIP not ready. Open Phone Settings to connect.');
+    else showToast('SIP not ready. Open Phone Settings to connect.');
 }
 
 function startCallUI(number) {
@@ -1333,6 +1341,7 @@ function startCallUI(number) {
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display   = 'block';
+    document.getElementById('btnMute').style.display   = 'block';
     document.getElementById('btnRecord').classList.add('visible');
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number;
@@ -1365,6 +1374,18 @@ function toggleHold() {
     }
 }
 
+function toggleMute() {
+    if (isMuted) {
+        if (sipBridge.unmute) sipBridge.unmute(); isMuted = false;
+        document.getElementById('btnMute').textContent = 'Mute';
+        document.getElementById('btnMute').classList.remove('muted');
+    } else {
+        if (sipBridge.mute) sipBridge.mute(); isMuted = true;
+        document.getElementById('btnMute').textContent = 'Unmute';
+        document.getElementById('btnMute').classList.add('muted');
+    }
+}
+
 function toggleRecord() {
     isRecording = !isRecording;
     const btn = document.getElementById('btnRecord');
@@ -1383,11 +1404,14 @@ function endCall() {
     const callDur = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
     const callerNum = lastDialedNumber || document.getElementById('dialInput').value || '';
     const recFile = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
-    currentSession = null; onHold = false; isRecording = false;
+    currentSession = null; onHold = false; isRecording = false; isMuted = false;
     clearInterval(callTimerInterval); callStartTime = null;
     document.getElementById('btnCall').style.display   = 'block';
     document.getElementById('btnHangup').style.display = 'none';
     document.getElementById('btnHold').style.display   = 'none';
+    document.getElementById('btnMute').style.display   = 'none';
+    document.getElementById('btnMute').textContent     = 'Mute';
+    document.getElementById('btnMute').classList.remove('muted');
     document.getElementById('btnRecord').classList.remove('visible','recording');
     document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> Record';
     document.getElementById('btnHold').textContent = 'Hold';
@@ -1395,7 +1419,8 @@ function endCall() {
     document.getElementById('callTimer').textContent   = '00:00';
     setAgentStatus('acw');
     openAcwModal(callerNum, callDur, lastCallType, recFile);
-    setTimeout(() => { fetchData(); startCountdown(); }, 2000);
+    setTimeout(() => { fetchData(); startCountdown(); }, 4000);
+    setTimeout(() => fetchData(), 8000);
 }
 
 // ?? ACW Modal ?????????????????????????????????????
@@ -1448,7 +1473,7 @@ function showToast(msg) {
 (function connectSocket() {
     if (typeof io === 'undefined') return;
     const socket = io('http://192.168.243.129:8001', { transports: ['websocket','polling'] });
-    socket.on('connect', () => showToast('?? Live events connected'));
+    socket.on('connect', () => showToast('Live events connected'));
     socket.on('call_bridged', function(data) {
         const callerNum = data.callerId || data.caller_id || '';
         lastCallType = 'Inbound'; lastDialedNumber = callerNum;
@@ -1485,8 +1510,8 @@ startCountdown();
 <div id="acwModal" class="acw-overlay">
     <div class="acw-modal">
         <div class="acw-hdr">
-            <h3>?? After-Call Work (Wrap-Up)</h3>
-            <button onclick="closeAcwModal()">?</button>
+            <h3>After-Call Work (Wrap-Up)</h3>
+            <button onclick="closeAcwModal()">&times;</button>
         </div>
         <div class="acw-body">
             <div class="acw-summary">
@@ -1526,7 +1551,7 @@ startCountdown();
 'use strict';
 if (typeof SIPjs === 'undefined') {
     console.error('SIPjs bundle not found at /app/agent_dashboard/js/sipjs.bundle.js ? build it on the VM.');
-    if (window.showToast) window.showToast('?? SIP library missing. Run build command on VM (see console).');
+    if (window.showToast) window.showToast('SIP library missing. Run build command on VM (see console).');
     return;
 }
 const {
@@ -1580,7 +1605,7 @@ function bindSession(s) {
                 : (window.lastDialedNumber || '');
             window.startCallUI && window.startCallUI(num);
             attachAudio(s);
-            window.showToast && window.showToast('?? Call connected via WebRTC');
+            window.showToast && window.showToast('Call connected');
         }
         if (state === SessionState.Terminated || state === SessionState.Terminating) {
             stopRec();
@@ -1630,7 +1655,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 };
 
 window.sipBridge.makeCall = function(number) {
-    if (!ua) { window.showToast && window.showToast('? SIP not initialized'); return; }
+    if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
     if (!uri) return;
     const inv = new Inviter(ua, uri, {
@@ -1659,7 +1684,7 @@ window.sipBridge.hangup = function() {
 window.sipBridge.answer = function() {
     if (session instanceof Invitation) {
         session.accept({ sessionDescriptionHandlerOptions: { constraints: { audio:true, video:false } } })
-               .catch(e => window.showToast && window.showToast('? ' + e.message));
+               .catch(e => window.showToast && window.showToast('Answer failed: ' + e.message));
     }
 };
 
@@ -1669,6 +1694,18 @@ window.sipBridge.hold = function() {
 
 window.sipBridge.unhold = function() {
     session?.invite({ sessionDescriptionHandlerModifiers: [] }).catch(()=>{});
+};
+
+window.sipBridge.mute = function() {
+    if (!session) return;
+    const pc = session.sessionDescriptionHandler?.peerConnection;
+    if (pc) pc.getSenders().forEach(s => { if (s.track?.kind === 'audio') s.track.enabled = false; });
+};
+
+window.sipBridge.unmute = function() {
+    if (!session) return;
+    const pc = session.sessionDescriptionHandler?.peerConnection;
+    if (pc) pc.getSenders().forEach(s => { if (s.track?.kind === 'audio') s.track.enabled = true; });
 };
 
 window.sipBridge.sendDtmf = function(tone) {
