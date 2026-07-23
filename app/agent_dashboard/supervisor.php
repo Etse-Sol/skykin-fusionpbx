@@ -136,20 +136,26 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             foreach($s3->fetchAll(PDO::FETCH_ASSOC) as $r) $ccStatus[$r['agent_name']] = $r;
         } catch(Exception $ignored){}
 
-        // SIP registrations — shows who is currently registered/online
+        // SIP registrations via FreeSWITCH CLI (not in PostgreSQL)
         $registered = [];
         try {
-            $s5 = $db->prepare("SELECT reg_user FROM v_registrations WHERE realm=:d");
-            $s5->execute([':d'=>$domain]);
-            foreach($s5->fetchAll(PDO::FETCH_ASSOC) as $r) $registered[$r['reg_user']] = true;
-        } catch(Exception $ignored){
-            // Try alternate column names
-            try {
-                $s5b = $db->prepare("SELECT \"user\" as reg_user FROM v_registrations WHERE realm=:d");
-                $s5b->execute([':d'=>$domain]);
-                foreach($s5b->fetchAll(PDO::FETCH_ASSOC) as $r) $registered[$r['reg_user']] = true;
-            } catch(Exception $ignored2){}
-        }
+            $fs_out = shell_exec("fs_cli -x 'show registrations' 2>/dev/null");
+            if ($fs_out) {
+                // Each line like: ext|realm|... parse extension column
+                foreach (explode("\n", $fs_out) as $line) {
+                    $line = trim($line);
+                    if (!$line || strpos($line,'reg_user')!==false || strpos($line,'row')!==false) continue;
+                    $parts = explode('|', $line);
+                    if (count($parts) >= 2) {
+                        $reg_user = trim($parts[0]);
+                        $realm    = trim($parts[1]);
+                        if (stripos($realm, $domain) !== false || $domain === $realm) {
+                            $registered[$reg_user] = true;
+                        }
+                    }
+                }
+            }
+        } catch(Exception $ignored){}
 
         // Latest active call per extension from CDR (approximate)
         $s4 = $db->prepare("SELECT DISTINCT ON (caller_id_number) caller_id_number as ext,
@@ -238,15 +244,22 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $answered = (int)($totals['answered']??0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
-        // Agents online — count SIP registrations for this domain
-        $s3 = $db->prepare("SELECT COUNT(DISTINCT reg_user) as cnt FROM v_registrations WHERE realm=:d");
+        // Agents online — count SIP registrations via FreeSWITCH CLI
+        $online_count = 0;
         try {
-            $s3->execute([':d'=>$domain]);
-        } catch(Exception $e) {
-            $s3 = $db->prepare("SELECT COUNT(*) as cnt FROM v_registrations WHERE realm=:d");
-            $s3->execute([':d'=>$domain]);
-        }
-        $online = $s3->fetch(PDO::FETCH_ASSOC);
+            $fs_out = shell_exec("fs_cli -x 'show registrations' 2>/dev/null");
+            if ($fs_out) {
+                foreach (explode("\n", $fs_out) as $line) {
+                    $line = trim($line);
+                    if (!$line || strpos($line,'reg_user')!==false) continue;
+                    $parts = explode('|', $line);
+                    if (count($parts) >= 2 && stripos(trim($parts[1]), $domain) !== false) {
+                        $online_count++;
+                    }
+                }
+            }
+        } catch(Exception $ignored){}
+        $online = ['cnt' => $online_count];
 
         echo json_encode([
             'queues'         => $queues,
