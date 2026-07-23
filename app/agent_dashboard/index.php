@@ -1516,11 +1516,14 @@ loadSipSettings();
 <!-- Remote audio for WebRTC calls -->
 <audio id="remoteAudio" autoplay style="display:none"></audio>
 
-<!-- SIP.js 0.21.2 via ESM — registers window.sipBridge -->
-<script type="module">
-import {
+<!-- SIP.js 0.21 local bundle (built from /opt/call_center node_modules) -->
+<script src="/app/agent_dashboard/js/sipjs.bundle.js"></script>
+<script>
+(function() {
+'use strict';
+const {
     UserAgent, Registerer, Inviter, Invitation, SessionState, Web
-} from 'https://esm.sh/sip.js@0.21.2';
+} = SIPjs;
 
 let ua = null, reg = null, session = null;
 const pbxDomain = () => localStorage.getItem('sip_domain') || 'client1.skykin.local';
