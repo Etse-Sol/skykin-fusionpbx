@@ -1257,7 +1257,11 @@ function saveSipSettings() {
 
 function initSIP(ext, pass, server, port, dom) {
     setSipStatus('connecting', 'Connecting...');
-    sipBridge.init(ext, pass, server, port, dom);
+    if (sipBridge.init) {
+        sipBridge.init(ext, pass, server, port, dom);
+    } else {
+        setSipStatus('failed', 'SIP library not loaded');
+    }
 }
 
 // ?? Floating Phone Widget ??????????????????????????
@@ -1470,12 +1474,11 @@ document.getElementById('dialInput').addEventListener('input', function() {
     dpNumber = this.value;
 });
 
-// ?? Init ??????????????????????????????????????????
+// Init
 setInterval(updateClock, 1000);
 updateClock();
 fetchData();
 startCountdown();
-loadSipSettings();
 </script>
 
 <!-- ACW Wrap-Up Modal -->
@@ -1676,164 +1679,8 @@ window.sipBridge.sendDtmf = function(tone) {
         if (sender?.dtmf) sender.dtmf.insertDTMF(tone, 100, 500);
     }
 };
+})();
 
-function saveSipSettings() {
-    const ext    = document.getElementById('sipExt').value.trim();
-    const pass   = document.getElementById('sipPass').value.trim();
-    const server = document.getElementById('sipServer').value.trim();
-    const port   = document.getElementById('sipPort').value.trim();
-    const dom    = document.getElementById('sipDomain').value.trim();
-    if (!ext || !pass) { alert('Please enter extension and password'); return; }
-    localStorage.setItem('sip_ext',    ext);
-    localStorage.setItem('sip_pass',   pass);
-    localStorage.setItem('sip_server', server);
-    localStorage.setItem('sip_port',   port);
-    localStorage.setItem('sip_domain', dom);
-    document.getElementById('settingsModal').classList.remove('show');
-    initSIP(ext, pass, server, port, dom);
-}
-
-function initSIP(ext, pass, server, port, dom) {
-    setSipStatus('connecting', 'Connecting...');
-    if (window.sipBridge && window.sipBridge.init) {
-        window.sipBridge.init(ext, pass, server, port, dom);
-    } else {
-        setSipStatus('failed', 'SIP library not loaded');
-        showToast('SIP library missing ? build sipjs.bundle.js on VM first.');
-    }
-}
-
-// ?? Floating Phone Widget ??????????????????????????
-let phoneOpen = false;
-function togglePhonePopup() {
-    phoneOpen = !phoneOpen;
-    document.getElementById('phonePopup').classList.toggle('open', phoneOpen);
-}
-// Auto-open popup on incoming call or call start
-function openPhonePopup() {
-    phoneOpen = true;
-    document.getElementById('phonePopup').classList.add('open');
-}
-
-function setSipStatus(state, text) {
-    const dot   = document.getElementById('sipDot');
-    const badge = document.getElementById('fabBadge');
-    const fab   = document.getElementById('phoneFab');
-    dot.className = 'sip-dot';
-    badge.className = 'fab-badge';
-    fab.className   = 'phone-fab';
-
-    if (state === 'registered') {
-        dot.classList.add('registered');
-        badge.classList.add('show');
-        document.getElementById('btnCall').disabled = false;
-        setAgentStatus('ready');
-    } else if (state === 'calling') {
-        dot.classList.add('calling');
-        badge.classList.add('show','calling');
-        fab.classList.add('ringing');
-        openPhonePopup();
-    } else if (state === 'incall') {
-        dot.classList.add('incall');
-        badge.classList.add('show');
-        fab.classList.add('incall');
-        setAgentStatus('incall');
-    } else if (state === 'ringing') {
-        dot.classList.add('ringing');
-        badge.classList.add('show');
-        fab.classList.add('ringing');
-    } else if (state === 'connecting') {
-        dot.classList.add('connecting');
-    } else if (state === 'unregistered' || state === 'failed') {
-        dot.classList.add('failed');
-        badge.classList.add('show','unreg');
-        document.getElementById('btnCall').disabled = true;
-    }
-    document.getElementById('sipStatusText').textContent = text;
-}
-
-
-function hangupCall() {
-    if (window.sipBridge && window.sipBridge.hangup) window.sipBridge.hangup();
-    endCall();
-}
-
-function toggleHold() {
-    if (!window.sipBridge) return;
-    if (onHold) {
-        window.sipBridge.unhold(); onHold = false;
-        document.getElementById('btnHold').textContent = 'Hold';
-        document.getElementById('btnHold').style.background = '#ffc107';
-        document.getElementById('btnHold').style.color = '#333';
-    } else {
-        window.sipBridge.hold(); onHold = true;
-        document.getElementById('btnHold').textContent = 'Resume';
-        document.getElementById('btnHold').style.background = '#28a745';
-        document.getElementById('btnHold').style.color = 'white';
-    }
-}
-
-// ?? Recording ?????????????????????????????????????
-// Toggles call recording via FreeSWITCH DTMF (*1 by default)
-// or by sending a record API request to the server
-function toggleRecord() {
-    if (!currentSession) return;
-    isRecording = !isRecording;
-    const btn = document.getElementById('btnRecord');
-    if (isRecording) {
-        btn.classList.add('recording');
-        btn.innerHTML = '<span class="rec-dot"></span> Stop Rec';
-        // Send *1 DTMF to trigger recording on FreeSWITCH
-        try { currentSession.sendDTMF('*1'); } catch(e) {}
-        // Also try server-side record API
-        const ext = localStorage.getItem('sip_ext') || '';
-        fetch('data.php?action=record_start&ext='+encodeURIComponent(ext)+'&domain='+encodeURIComponent(domain))
-            .catch(() => {});
-    } else {
-        btn.classList.remove('recording');
-        btn.innerHTML = '<span class="rec-dot"></span> Record';
-        try { currentSession.sendDTMF('*1'); } catch(e) {}
-        const ext = localStorage.getItem('sip_ext') || '';
-        fetch('data.php?action=record_stop&ext='+encodeURIComponent(ext)+'&domain='+encodeURIComponent(domain))
-            .then(() => { if (document.getElementById('tabRecordings').classList.contains('active')) fetchRecordings(); })
-            .catch(() => {});
-    }
-}
-
-function endCall() {
-    currentSession = null; onHold = false; isRecording = false;
-    clearInterval(callTimerInterval); callStartTime = null;
-    document.getElementById('btnCall').style.display   = 'block';
-    document.getElementById('btnHangup').style.display = 'none';
-    document.getElementById('btnHold').style.display   = 'none';
-    document.getElementById('btnRecord').classList.remove('visible','recording');
-    document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> Record';
-    document.getElementById('btnHold').textContent = 'Hold';
-    document.getElementById('callTimer').style.display = 'none';
-    document.getElementById('callTimer').textContent   = '00:00';
-    setAgentStatus('ready');
-    setSipStatus('registered', 'Registered (' + (localStorage.getItem('sip_ext')||'') + ')');
-    setTimeout(() => { fetchData(); startCountdown(); }, 2000);
-}
-
-// ?? Event wiring ??????????????????????????????????
-document.getElementById('btnAnswer').addEventListener('click', answerCall);
-document.getElementById('btnDecline').addEventListener('click', declineCall);
-document.getElementById('settingsModal').addEventListener('click', function(e) {
-    if (e.target === this) this.classList.remove('show');
-});
-document.getElementById('dialInput').addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') makeCall();
-});
-document.getElementById('dialInput').addEventListener('input', function() {
-    dpNumber = this.value;
-});
-
-// ?? Init ??????????????????????????????????????????
-setInterval(updateClock, 1000);
-updateClock();
-fetchData();
-startCountdown();
 loadSipSettings();
 </script>
 </body>
