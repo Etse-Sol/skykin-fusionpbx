@@ -18,14 +18,19 @@ if (empty($_SESSION['user_uuid'])) {
 
 // Allowed roles — superadmin, admin, or supervisor (custom group) can open this page
 $allowed_groups = ['superadmin', 'admin', 'supervisor'];
-$user_groups    = isset($_SESSION['groups']) ? (array)$_SESSION['groups'] : [];
+$raw_groups     = isset($_SESSION['groups']) ? $_SESSION['groups'] : [];
 
-// FusionPBX sometimes stores groups as a comma-separated string
-if (count($user_groups) === 1 && strpos($user_groups[0], ',') !== false) {
-    $user_groups = array_map('trim', explode(',', $user_groups[0]));
-}
-
-$has_access = !empty(array_intersect($allowed_groups, $user_groups));
+// FusionPBX stores groups in various formats — flatten everything to a simple string array
+$user_groups = [];
+array_walk_recursive($raw_groups, function($val) use (&$user_groups) {
+    if (is_string($val)) {
+        foreach (array_map('trim', explode(',', $val)) as $g) {
+            if ($g !== '') $user_groups[] = strtolower($g);
+        }
+    }
+});
+$allowed_lower = array_map('strtolower', $allowed_groups);
+$has_access = !empty(array_intersect($allowed_lower, $user_groups));
 
 if (!$has_access) {
     http_response_code(403);
