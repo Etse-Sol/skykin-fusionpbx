@@ -2,10 +2,10 @@
 // SkyKin Technologies – Supervisor Dashboard
 
 // ── FusionPBX session bootstrap ──────────────────────────────────────────────
-// Include FusionPBX config so we share its session
-if (file_exists('/var/www/fusionpbx/resources/classes/config.php')) {
-    require_once('/var/www/fusionpbx/resources/classes/config.php');
-}
+// Share FusionPBX session by using its session name and save path
+$fpbx_session_path = '/var/lib/php/sessions';
+if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
+session_name('PHPSESSID');
 session_start();
 
 // ── Auth check ────────────────────────────────────────────────────────────────
