@@ -1,0 +1,1 @@
+<script>navigator.mediaDevices.getUserMedia({audio:true}).then(s=>{document.body.innerHTML="<h1 style=color:green>MIC OK - mic works!</h1>";s.getTracks().forEach(t=>t.stop())}).catch(e=>{document.body.innerHTML="<h1 style=color:red>BLOCKED: "+e.name+"</h1>"})</script>

@@ -1,0 +1,4 @@
+:root { --primary: #0047AB; --secondary: #00B4D8; }
+#menu, .menu-side, nav.navbar, .navbar, header { background: linear-gradient(180deg, #0047AB 0%, #00B4D8 100%) !important; }
+#menu a, .menu-side a { color: #fff !important; }
+.btn-primary, input[type=submit] { background-color: #0047AB !important; border-color: #0047AB !important; }

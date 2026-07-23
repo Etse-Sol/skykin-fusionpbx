@@ -260,7 +260,7 @@
 				$login_logo_source = $settings->get('theme', 'logo');
 			}
 			else {
-				$login_logo_source = PROJECT_PATH.'/themes/default/images/logo_login.png';
+				$theme_name = $settings->get("domain", "template"); if(empty($theme_name)){$theme_name="default";} $login_logo_source = PROJECT_PATH."/themes/".$theme_name."/images/logo_login.png";
 			}
 		//determine logo dimensions
 			if (!empty($settings->get('theme', 'login_logo_width')) && $settings->get('theme', 'login_logo_width') != '') {

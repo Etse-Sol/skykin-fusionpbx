@@ -318,7 +318,7 @@
 	$user_setting['special'] = $settings->get('users', 'password_special', false);
 
 //add the header
-	$document['title'] = $text['title-login'];
+	$document['title'] = 'SkyKin Technologies - Call Center';
 	include "resources/header.php";
 
 //show the content
