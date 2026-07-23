@@ -11,6 +11,50 @@ $initials = strtoupper(substr($m[1] ?? $agent_name, 0, 2));
 if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 
 $today = date('Y-m-d');
+
+// ?? Resolve the agent's extension from FusionPBX DB ??????????????????????????
+$agent_ext = '';
+try {
+    $conf = '/etc/fusionpbx/config.conf';
+    $db_host = '127.0.0.1'; $db_port = '5432';
+    $db_name = 'fusionpbx'; $db_user = 'fusionpbx'; $db_pass = '';
+    if (file_exists($conf)) {
+        foreach (file($conf) as $line) {
+            $line = trim($line);
+            if (strpos($line, 'database.0.host')     !== false) $db_host = trim(explode('=', $line, 2)[1]);
+            if (strpos($line, 'database.0.port')     !== false) $db_port = trim(explode('=', $line, 2)[1]);
+            if (strpos($line, 'database.0.name')     !== false) $db_name = trim(explode('=', $line, 2)[1]);
+            if (strpos($line, 'database.0.username') !== false) $db_user = trim(explode('=', $line, 2)[1]);
+            if (strpos($line, 'database.0.password') !== false) $db_pass = trim(explode('=', $line, 2)[1]);
+        }
+    }
+    $pdb = new PDO("pgsql:host={$db_host};port={$db_port};dbname={$db_name}", $db_user, $db_pass,
+                   [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+
+    // 1) Try: username match (case-insensitive)
+    $s = $pdb->prepare("SELECT e.extension FROM v_extensions e
+                         JOIN v_users u ON u.user_uuid = e.user_uuid
+                         WHERE LOWER(u.username) = LOWER(:a) AND e.domain_name = :d LIMIT 1");
+    $s->execute([':a' => $agent_name, ':d' => $domain]);
+    $row = $s->fetch(PDO::FETCH_ASSOC);
+    if ($row) $agent_ext = $row['extension'];
+
+    // 2) Try: description or caller-ID name contains agent name
+    if (!$agent_ext) {
+        $s2 = $pdb->prepare("SELECT extension FROM v_extensions
+                              WHERE domain_name = :d
+                              AND (LOWER(description) LIKE :p OR LOWER(effective_caller_id_name) LIKE :p)
+                              LIMIT 1");
+        $s2->execute([':d' => $domain, ':p' => '%' . strtolower($agent_name) . '%']);
+        $row2 = $s2->fetch(PDO::FETCH_ASSOC);
+        if ($row2) $agent_ext = $row2['extension'];
+    }
+
+    // 3) If agent_name is purely numeric treat it as an extension
+    if (!$agent_ext && preg_match('/^\d{2,6}$/', $agent_name)) {
+        $agent_ext = $agent_name;
+    }
+} catch (Exception $e) { /* silent ? JS will fall back to localStorage */ }
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -833,6 +877,12 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 <script>
 const agentName = '<?php echo $agent_name; ?>';
 const domain    = '<?php echo $domain; ?>';
+const serverExt = '<?php echo $agent_ext; ?>';   // resolved server-side from DB
+
+// Pre-seed localStorage from server if not yet saved
+if (serverExt && !localStorage.getItem('sip_ext')) {
+    localStorage.setItem('sip_ext', serverExt);
+}
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
@@ -961,7 +1011,7 @@ document.addEventListener('click', function(e) {
 
 // ?? Fetch dashboard data ???????????????????????????
 function fetchData() {
-    const ext  = localStorage.getItem('sip_ext') || '';
+    const ext  = localStorage.getItem('sip_ext') || serverExt || '';
     const from = document.getElementById('filterFrom').value;
     const to   = document.getElementById('filterTo').value;
     fetch('data.php?agent='+encodeURIComponent(agentName)
