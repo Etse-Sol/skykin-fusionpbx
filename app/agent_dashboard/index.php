@@ -317,7 +317,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 }
 .btn-settings:hover { background: #f0f0f0; color: #555; }
 
-/* Incoming Call overlay ?? */
+/* ?? Incoming call overlay ?? */
 .incoming-overlay {
     display: none; position: fixed; top: 80px; right: 20px; z-index: 9999;
     background: white; border-radius: 12px; padding: 20px 24px;
@@ -718,9 +718,9 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     Auto-refresh: <span id="refreshCountdown">10</span>s
 </div>
 
-<!-- Incoming Call OVERLAY ?? -->
+<!-- ?? INCOMING CALL OVERLAY ?? -->
 <div class="incoming-overlay" id="incomingOverlay">
-    <div class="incoming-title">Incoming Call</div>
+    <div class="incoming-title">?? Incoming Call</div>
     <div class="incoming-number" id="incomingNumber">Unknown</div>
     <div class="incoming-actions">
         <button class="btn-answer" id="btnAnswer">Answer</button>
@@ -1216,7 +1216,7 @@ let isRecording = false;
 let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFilename = 'demo_recording.wav';
 
 // SIP.js module will populate window.sipBridge when loaded
-const sipBridge = {};
+window.sipBridge = {}; var sipBridge = window.sipBridge;
 
 function loadSipSettings() {
     const ext    = localStorage.getItem('sip_ext')    || '';
@@ -1321,7 +1321,7 @@ function makeCall(number) {
     lastDialedNumber = number;
     lastCallType = 'Outbound';
     if (sipBridge.makeCall) sipBridge.makeCall(number);
-    else showToast('SIP not ready. Open Phone Settings to connect.');
+    else showToast('?? SIP not ready. Open Phone Settings to connect.');
 }
 
 function startCallUI(number) {
@@ -1444,7 +1444,7 @@ function showToast(msg) {
 (function connectSocket() {
     if (typeof io === 'undefined') return;
     const socket = io('http://192.168.243.129:8001', { transports: ['websocket','polling'] });
-    socket.on('connect', () => showToast('Live events connected'));
+    socket.on('connect', () => showToast('?? Live events connected'));
     socket.on('call_bridged', function(data) {
         const callerNum = data.callerId || data.caller_id || '';
         lastCallType = 'Inbound'; lastDialedNumber = callerNum;
@@ -1482,7 +1482,7 @@ loadSipSettings();
 <div id="acwModal" class="acw-overlay">
     <div class="acw-modal">
         <div class="acw-hdr">
-            <h3>After-Call Work (Wrap-Up)</h3>
+            <h3>?? After-Call Work (Wrap-Up)</h3>
             <button onclick="closeAcwModal()">?</button>
         </div>
         <div class="acw-body">
@@ -1523,7 +1523,7 @@ loadSipSettings();
 'use strict';
 if (typeof SIPjs === 'undefined') {
     console.error('SIPjs bundle not found at /app/agent_dashboard/js/sipjs.bundle.js ? build it on the VM.');
-    if (window.showToast) window.showToast('SIP library missing. Run build command on VM (see console).');
+    if (window.showToast) window.showToast('?? SIP library missing. Run build command on VM (see console).');
     return;
 }
 const {
@@ -1577,7 +1577,7 @@ function bindSession(s) {
                 : (window.lastDialedNumber || '');
             window.startCallUI && window.startCallUI(num);
             attachAudio(s);
-            window.showToast && window.showToast('Call connected via WebRTC');
+            window.showToast && window.showToast('?? Call connected via WebRTC');
         }
         if (state === SessionState.Terminated || state === SessionState.Terminating) {
             stopRec();
