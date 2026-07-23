@@ -16,8 +16,8 @@ if (empty($_SESSION['user_uuid'])) {
     exit;
 }
 
-// Allowed roles — 'superadmin' always has access; add 'supervisor' as a custom group
-$allowed_groups = ['superadmin', 'supervisor'];
+// Allowed roles — superadmin, admin, or supervisor (custom group) can open this page
+$allowed_groups = ['superadmin', 'admin', 'supervisor'];
 $user_groups    = isset($_SESSION['groups']) ? (array)$_SESSION['groups'] : [];
 
 // FusionPBX sometimes stores groups as a comma-separated string
@@ -39,7 +39,7 @@ if (!$has_access) {
     <div class="badge">ACCESS DENIED</div>
     <h2>Supervisor Access Required</h2>
     <p>Your account (<strong>'.htmlspecialchars($_SESSION['username'] ?? 'Unknown').'</strong>) does not have the <strong>supervisor</strong> or <strong>superadmin</strong> role.</p>
-    <p style="margin-top:8px;font-size:12px;color:#aaa">Ask your administrator to assign you the <strong>supervisor</strong> group in FusionPBX &rarr; Accounts &rarr; Users.</p>
+    <p style="margin-top:8px;font-size:12px;color:#aaa">Ask your administrator to assign you the <strong>admin</strong> or <strong>supervisor</strong> group in FusionPBX &rarr; Accounts &rarr; Users.</p>
     <br><a href="/app/agent_dashboard/index.php">Go to Agent Dashboard</a> &nbsp;|&nbsp; <a href="/login/index.php">Login as different user</a>
     </div></body></html>';
     exit;
