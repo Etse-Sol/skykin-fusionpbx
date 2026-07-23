@@ -108,11 +108,29 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
         $stats = [];
         foreach($s2->fetchAll(PDO::FETCH_ASSOC) as $r) $stats[$r['ext']] = $r;
 
-        // Call center agent status
-        $s3 = $db->prepare("SELECT agent_name, agent_status, last_bridge_start, last_bridge_end FROM v_call_center_agents WHERE domain_name=:d");
-        $s3->execute([':d'=>$domain]);
+        // Call center agent status — fallback to SIP registrations if CC agents table is empty
         $ccStatus = [];
-        foreach($s3->fetchAll(PDO::FETCH_ASSOC) as $r) $ccStatus[$r['agent_name']] = $r;
+        try {
+            $s3 = $db->prepare("SELECT agent_name, agent_status FROM v_call_center_agents ca
+                JOIN v_domains d ON d.domain_uuid=ca.domain_uuid WHERE d.domain_name=:d");
+            $s3->execute([':d'=>$domain]);
+            foreach($s3->fetchAll(PDO::FETCH_ASSOC) as $r) $ccStatus[$r['agent_name']] = $r;
+        } catch(Exception $ignored){}
+
+        // SIP registrations — shows who is currently registered/online
+        $registered = [];
+        try {
+            $s5 = $db->prepare("SELECT reg_user FROM v_registrations WHERE realm=:d");
+            $s5->execute([':d'=>$domain]);
+            foreach($s5->fetchAll(PDO::FETCH_ASSOC) as $r) $registered[$r['reg_user']] = true;
+        } catch(Exception $ignored){
+            // Try alternate column names
+            try {
+                $s5b = $db->prepare("SELECT \"user\" as reg_user FROM v_registrations WHERE realm=:d");
+                $s5b->execute([':d'=>$domain]);
+                foreach($s5b->fetchAll(PDO::FETCH_ASSOC) as $r) $registered[$r['reg_user']] = true;
+            } catch(Exception $ignored2){}
+        }
 
         // Latest active call per extension from CDR (approximate)
         $s4 = $db->prepare("SELECT DISTINCT ON (caller_id_number) caller_id_number as ext,
@@ -132,12 +150,15 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             $cc   = $ccStatus[$ext] ?? null;
             $ac   = $activeCalls[$ext] ?? null;
 
-            // Determine status
+            // Determine status — use SIP registration as primary source
             $status = 'offline';
             if ($cc) {
                 $s_map = ['Available'=>'ready','On Break'=>'break','Logged Out'=>'offline',
                           'In Queue Call'=>'incall','On Call'=>'incall'];
                 $status = $s_map[$cc['agent_status']] ?? strtolower(str_replace(' ','_',$cc['agent_status']));
+            } elseif (isset($registered[$ext])) {
+                // Registered via SIP = ready (no CC entry)
+                $status = 'ready';
             }
             if ($ac) $status = 'incall';
 
@@ -198,9 +219,14 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $answered = (int)($totals['answered']??0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
-        // Agents online
-        $s3 = $db->prepare("SELECT COUNT(*) as cnt FROM v_call_center_agents WHERE domain_name=:d AND agent_status='Available'");
-        $s3->execute([':d'=>$domain]);
+        // Agents online — count SIP registrations for this domain
+        $s3 = $db->prepare("SELECT COUNT(DISTINCT reg_user) as cnt FROM v_registrations WHERE realm=:d");
+        try {
+            $s3->execute([':d'=>$domain]);
+        } catch(Exception $e) {
+            $s3 = $db->prepare("SELECT COUNT(*) as cnt FROM v_registrations WHERE realm=:d");
+            $s3->execute([':d'=>$domain]);
+        }
         $online = $s3->fetch(PDO::FETCH_ASSOC);
 
         echo json_encode([
@@ -361,6 +387,52 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 'status'=>$b>0?'Answered':'Missed','cause'=>$r['hangup_cause']??''];
         }
         echo json_encode(['rows'=>$rows]);
+    } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── API: recordings_all ──────────────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
+    error_reporting(0); header('Content-Type: application/json');
+    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    $from    = $_GET['from']   ?? date('Y-m-d');
+    $to      = $_GET['to']     ?? date('Y-m-d');
+    $search  = $_GET['search'] ?? '';
+    $ts = strtotime($from.' 00:00:00');
+    $te = strtotime($to.' 23:59:59');
+    try {
+        $db = getDB();
+        $where  = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND (record_path IS NOT NULL OR record_name IS NOT NULL)";
+        $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
+        if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
+        $s = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+            caller_id_number, destination_number, direction, billsec,
+            record_path, record_name, hangup_cause
+            FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 300");
+        $s->execute($params);
+        $rows = [];
+        foreach($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $b = (int)$r['billsec'];
+            $file = trim($r['record_name'] ?? '');
+            $path = trim($r['record_path'] ?? '');
+            // Build playback URL using FusionPBX recordings path
+            $play_url = '';
+            if ($file) {
+                $play_url = '/app/recordings/index.php?filename='.urlencode($file).'&path='.urlencode($path);
+            }
+            $rows[] = [
+                'time'        => $r['call_time'],
+                'caller'      => $r['caller_id_number'],
+                'destination' => $r['destination_number'],
+                'direction'   => $r['direction'],
+                'duration'    => floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
+                'file'        => $file,
+                'path'        => $path,
+                'play_url'    => $play_url,
+                'cause'       => $r['hangup_cause'] ?? '',
+            ];
+        }
+        echo json_encode(['rows'=>$rows,'total'=>count($rows)]);
     } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
     exit;
 }
@@ -542,6 +614,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <button class="tab-btn active" onclick="showTab('leaderboard')">Leaderboard</button>
             <button class="tab-btn" onclick="showTab('callhistory')">All Call History</button>
             <button class="tab-btn" onclick="showTab('acwall')">ACW Review</button>
+            <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
         </div>
 
         <!-- Leaderboard -->
