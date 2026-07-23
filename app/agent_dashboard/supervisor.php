@@ -647,6 +647,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <button class="tab-btn" onclick="showTab('callhistory')">All Call History</button>
             <button class="tab-btn" onclick="showTab('acwall')">ACW Review</button>
             <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
+            <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
         </div>
 
         <!-- Leaderboard -->
@@ -706,6 +707,26 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                 </tr></thead>
                 <tbody id="acwAllBody"><tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
             </table>
+        </div>
+
+        <!-- Call Recordings -->
+        <div class="tab-content" id="tab-recordings">
+            <div class="date-filter">
+                <label>From:</label><input type="date" id="recFrom" value="<?php echo $today;?>">
+                <label>To:</label><input type="date" id="recTo" value="<?php echo $today;?>">
+                <input type="text" class="search-input" id="recSearch" placeholder="Search number...">
+                <button class="btn-filter" onclick="fetchRecordings()">Search</button>
+                <button class="btn-filter-clear" onclick="setToday('recFrom','recTo');document.getElementById('recSearch').value='';fetchRecordings()">Today</button>
+                <span id="recCount" style="font-size:12px;color:#aaa"></span>
+            </div>
+            <table class="data-table">
+                <thead><tr>
+                    <th>Time</th><th>Caller</th><th>Destination</th>
+                    <th>Direction</th><th>Duration</th><th>Length</th><th>Play</th>
+                </tr></thead>
+                <tbody id="recBody"><tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
+            </table>
+            <audio id="recPlayer" controls style="width:100%;margin-top:12px;display:none"></audio>
         </div>
     </div>
 </div>
@@ -912,12 +933,55 @@ function showTab(name){
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
+    if(name==='recordings')  fetchRecordings();
 }
 
 // ── Init & auto-refresh ────────────────────────────────────────────────────
 fetchQueue();
 fetchAgents();
 fetchLeaderboard();
+
+// ── Recordings ─────────────────────────────────────────────────────────────
+function fetchRecordings(){
+    const from=document.getElementById('recFrom').value;
+    const to=document.getElementById('recTo').value;
+    const q=document.getElementById('recSearch').value;
+    document.getElementById('recBody').innerHTML='<tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr>';
+    fetch('supervisor.php?action=recordings_all&domain='+encodeURIComponent(domain)+'&from='+from+'&to='+to+'&search='+encodeURIComponent(q))
+        .then(r=>r.json()).then(d=>{
+            const rows=d.rows||[];
+            document.getElementById('recCount').textContent=rows.length+' recordings';
+            if(!rows.length){
+                document.getElementById('recBody').innerHTML='<tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">No recordings found for this period.</td></tr>';
+                return;
+            }
+            document.getElementById('recBody').innerHTML=rows.map(r=>{
+                const playBtn = r.file
+                    ? `<button onclick="playRec('${encodeURIComponent(r.path)}','${encodeURIComponent(r.file)}')"
+                        style="background:#e3f2fd;color:#1565c0;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700">
+                        &#9654; Play</button>`
+                    : '<span style="color:#ccc;font-size:11px">No file</span>';
+                return `<tr>
+                    <td>${r.time}</td>
+                    <td>${r.caller}</td>
+                    <td>${r.destination}</td>
+                    <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction}</span></td>
+                    <td>${r.duration}</td>
+                    <td>${r.length||'–'}s</td>
+                    <td>${playBtn}</td>
+                </tr>`;
+            }).join('');
+        }).catch(()=>{
+            document.getElementById('recBody').innerHTML='<tr><td colspan="7" style="text-align:center;color:#f44336;padding:20px">Error loading recordings.</td></tr>';
+        });
+}
+
+function playRec(path, file){
+    const player=document.getElementById('recPlayer');
+    const url='/app/recordings/index.php?filename='+file+'&path='+path;
+    player.src=url; player.style.display='block';
+    player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });
+}
 
 setInterval(()=>{ fetchQueue(); fetchAgents(); }, 10000);
 </script>
