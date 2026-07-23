@@ -102,7 +102,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 JOIN v_user_groups ug ON ug.user_uuid = u.user_uuid
                 JOIN v_groups g ON g.group_uuid = ug.group_uuid
                 JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                WHERE d.domain_name=:d AND g.group_name IN ('superadmin','admin','supervisor')");
+                WHERE d.domain_name=:d AND LOWER(g.group_name) IN ('superadmin','admin','supervisor')");
             $sx->execute([':d'=>$domain]);
             foreach($sx->fetchAll(PDO::FETCH_ASSOC) as $r) $supervisorExts[$r['extension']] = true;
         } catch(Exception $ignored){}
