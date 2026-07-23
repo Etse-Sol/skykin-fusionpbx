@@ -441,16 +441,19 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             </button>
             <div class="status-drop-menu" id="statusDropMenu">
                 <div class="s-opt" onclick="setAgentStatus('ready')">
-                    <span class="opt-dot" style="background:#28a745"></span> Ready
+                    <span class="opt-dot" style="background:#10b981"></span> Available
                 </div>
-                <div class="s-opt" onclick="setAgentStatus('notready')">
-                    <span class="opt-dot" style="background:#dc3545"></span> Not Ready
+                <div class="s-opt" onclick="setAgentStatus('idle')">
+                    <span class="opt-dot" style="background:#64748b"></span> Idle
                 </div>
                 <div class="s-opt" onclick="setAgentStatus('break')">
-                    <span class="opt-dot" style="background:#ffc107"></span> On Break
+                    <span class="opt-dot" style="background:#0ea5e9"></span> On Break
                 </div>
-                <div class="s-opt logout" onclick="window.location='/logout.php'">
-                    <span class="opt-dot" style="background:#dc3545"></span> Logout
+                <div class="s-opt" onclick="setAgentStatus('acw')">
+                    <span class="opt-dot" style="background:#6366f1"></span> Wrap-up (ACW)
+                </div>
+                <div class="s-opt logout" onclick="setAgentStatus('logout')">
+                    <span class="opt-dot" style="background:#ef4444"></span> Logout
                 </div>
             </div>
         </div>
@@ -798,14 +801,21 @@ function toggleStatusMenu() {
 }
 function setAgentStatus(status) {
     currentAgentStatus = status;
-    const labels = { ready:'Ready', notready:'Not Ready', brk:'On Break', incall:'On Call' };
-    const colors  = { ready:'#28a745', notready:'#dc3545', brk:'#ffc107', incall:'#17a2b8' };
-    const key = status === 'break' ? 'brk' : status;
+    const labels = { ready:'Available', idle:'Idle', break:'On Break', acw:'Wrap-up (ACW)', logout:'Logged Out', incall:'On Call' };
+    const colors  = { ready:'#10b981', idle:'#64748b', break:'#0ea5e9', acw:'#6366f1', logout:'#ef4444', incall:'#f59e0b' };
+    const key = status;
     document.getElementById('statusLabel').textContent = labels[key] || status;
     const dot = document.getElementById('statusDot');
     dot.className = 'sdot ' + key;
     dot.style.background = colors[key] || '#888';
     document.getElementById('statusDropMenu').classList.remove('open');
+    if (status === 'logout') { window.location = '/logout.php'; return; }
+    const agentId = (document.getElementById('agentId') || {}).value || '101';
+    fetch('http://192.168.243.129:8001/api/agent/status', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({agent_id: agentId, status: labels[key] || status})
+    }).catch(() => {});
 }
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.status-drop-wrap')) {
