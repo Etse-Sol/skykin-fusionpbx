@@ -647,7 +647,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <button class="tab-btn" onclick="showTab('callhistory')">All Call History</button>
             <button class="tab-btn" onclick="showTab('acwall')">ACW Review</button>
             <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
-            <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
         </div>
 
         <!-- Leaderboard -->
