@@ -1090,7 +1090,12 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
-    <!-- Inline Dial Pad (opens right here inside the popup) -->
+    <!-- Phone Settings above dial pad -->
+    <div class="pp-footer" style="border-top:none; border-bottom:1px solid #f0f0f0; padding: 8px 16px;">
+        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
+    </div>
+
+    <!-- Inline Dial Pad -->
     <div class="dp-panel" id="dpPanel">
         <div class="dp-display empty" id="dpDisplay">Enter number...</div>
         <div class="dp-grid">
@@ -1113,8 +1118,6 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
-    <div class="pp-footer">
-        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
     </div>
 </div>
 
