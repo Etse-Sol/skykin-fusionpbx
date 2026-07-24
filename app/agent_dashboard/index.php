@@ -490,16 +490,22 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .fab-badge.unreg { background: #888; }
 .fab-badge.calling { background: #ffc107; animation: pulse 0.5s infinite; }
 
-/* Floating phone popup */
+/* Static phone side panel */
 .phone-popup {
-    position: fixed; bottom: 100px; right: 28px; z-index: 499;
-    width: 300px; background: white; border-radius: 16px;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
-    display: none; flex-direction: column; overflow: hidden;
-    animation: popUp 0.2s ease;
+    position: fixed; top: 60px; right: -320px; z-index: 499;
+    width: 300px; max-height: calc(100vh - 60px);
+    background: white; border-left: 1px solid #e0e0e0;
+    box-shadow: -4px 0 20px rgba(0,0,0,0.12);
+    display: flex; flex-direction: column;
+    overflow-y: auto; overflow-x: hidden;
+    transition: right 0.3s ease;
 }
-.phone-popup.open { display: flex; }
-@keyframes popUp { from { opacity:0; transform: scale(0.9) translateY(10px); } to { opacity:1; transform: scale(1) translateY(0); } }
+.phone-popup.open { right: 0; }
+.pp-body { flex-shrink: 0; }
+.dp-panel { flex-shrink: 0; }
+.pp-footer { flex-shrink: 0; border-top: 1px solid #f0f0f0; padding: 10px 16px; }
+/* Shift main content when panel is open */
+body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
 .pp-header {
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     color: white; padding: 14px 16px;
@@ -615,8 +621,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* ?? Dial Pad (inline inside popup) ?? */
 .dp-panel {
-    display: none; padding: 0 16px 16px;
-    animation: fadeIn 0.15s ease;
+    display: block; padding: 0 16px 16px;
 }
 .dp-panel.open { display: block; }
 @keyframes fadeIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
@@ -1069,16 +1074,14 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             <div class="sip-dot" id="sipDot"></div>
             <span id="sipStatusText">Not Connected</span>
         </div>
-        <button class="pp-close" onclick="togglePhonePopup()">&#x2715;</button>
+        <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
     </div>
     <div class="pp-body">
         <div class="call-timer" id="callTimer">00:00</div>
-        <div class="dial-input-wrap">
-            <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
-            <button class="btn-dialpad" id="btnDialpadToggle" title="Dial Pad" onclick="togglePad()">&#8999;</button>
-        </div>
+        <!-- Hidden input syncs with dial pad display -->
+        <input type="tel" class="dial-input" id="dialInput" placeholder="" maxlength="20" style="display:none">
         <div class="call-controls">
-            <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>&#128222; Call</button>
+            <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled style="display:none">&#128222; Call</button>
             <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">&#128222; Hang Up</button>
             <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
             <button class="btn-mute"   id="btnMute"   onclick="toggleMute()">Mute</button>
@@ -1088,7 +1091,12 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
         </div>
     </div>
 
-    <!-- Inline Dial Pad (opens right here inside the popup) -->
+    <!-- Phone Settings above dial pad -->
+    <div class="pp-footer" style="border-top:none; border-bottom:1px solid #f0f0f0; padding: 8px 16px;">
+        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
+    </div>
+
+    <!-- Inline Dial Pad -->
     <div class="dp-panel" id="dpPanel">
         <div class="dp-display empty" id="dpDisplay">Enter number...</div>
         <div class="dp-grid">
@@ -1111,8 +1119,6 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
         </div>
     </div>
 
-    <div class="pp-footer">
-        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
     </div>
 </div>
 
@@ -1244,15 +1250,9 @@ function fetchAcwHistory() {
         });
 }
 
-// ?? Dial Pad (inline inside popup) ????????????????
+// Dial pad always open ? no toggle needed
 let dpNumber = '';
-let padOpen  = false;
-function togglePad() {
-    padOpen = !padOpen;
-    document.getElementById('dpPanel').classList.toggle('open', padOpen);
-    document.getElementById('btnDialpadToggle').style.background = padOpen ? '#0047AB' : '';
-    document.getElementById('btnDialpadToggle').style.color      = padOpen ? 'white'   : '';
-}
+let padOpen  = true;
 function dpKey(k) {
     dpNumber += k;
     updateDpDisplay();
@@ -1277,15 +1277,7 @@ function dpCall() {
     if (!dpNumber) return;
     makeCall(dpNumber);
 }
-// Close dialpad on outside click
-document.addEventListener('click', function(e) {
-    if (padOpen && !e.target.closest('#dpPanel') && !e.target.closest('#btnDialpadToggle')) {
-        padOpen = false;
-        document.getElementById('dpPanel').classList.remove('open');
-        document.getElementById('btnDialpadToggle').style.background = '';
-        document.getElementById('btnDialpadToggle').style.color = '';
-    }
-});
+// No outside-click close for dial pad (always visible)
 
 // ?? Fetch dashboard data ???????????????????????????
 function fetchData() {
@@ -1607,15 +1599,21 @@ function initSIP(ext, pass, server, port, dom) {
     }
 }
 
-// ?? Floating Phone Widget ??????????????????????????
+// Floating Phone Widget
 let phoneOpen = false;
 function togglePhonePopup() {
     phoneOpen = !phoneOpen;
     document.getElementById('phonePopup').classList.toggle('open', phoneOpen);
+    document.body.classList.toggle('phone-open', phoneOpen);
+    // Change FAB icon to X when open
+    document.getElementById('phoneFab').innerHTML = phoneOpen
+        ? '&#x2715;<span class="fab-badge unreg" id="fabBadge"></span>'
+        : '&#128222;<span class="fab-badge unreg" id="fabBadge"></span>';
 }
 function openPhonePopup() {
     phoneOpen = true;
     document.getElementById('phonePopup').classList.add('open');
+    document.body.classList.add('phone-open');
 }
 
 function setSipStatus(state, text) {
