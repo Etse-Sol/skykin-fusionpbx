@@ -1139,10 +1139,8 @@ const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side fr
 const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
 const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 
-// Auto-configure SIP fully from server ? extension + password + WSS, no Phone Settings needed
-if (serverExt)  localStorage.setItem('sip_ext',    serverExt);
-if (serverPass) localStorage.setItem('sip_pass',   serverPass);  // key matches loadSipSettings
-if (serverWss)  localStorage.setItem('sip_server', serverWss);
+// Only set extension from server ? agent keeps their manually saved password
+if (serverExt) localStorage.setItem('sip_ext', serverExt);
 localStorage.setItem('sip_port', '7443');  // force WSS port for HTTPS
 let loginTime   = new Date();
 let refreshInterval = 10;
