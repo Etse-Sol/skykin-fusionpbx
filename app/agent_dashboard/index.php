@@ -490,16 +490,18 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .fab-badge.unreg { background: #888; }
 .fab-badge.calling { background: #ffc107; animation: pulse 0.5s infinite; }
 
-/* Floating phone popup */
+/* Static phone side panel */
 .phone-popup {
-    position: fixed; bottom: 100px; right: 28px; z-index: 499;
-    width: 300px; background: white; border-radius: 16px;
-    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
-    display: none; flex-direction: column; overflow: hidden;
-    animation: popUp 0.2s ease;
+    position: fixed; top: 60px; right: -320px; z-index: 499;
+    width: 300px; height: calc(100vh - 60px);
+    background: white; border-left: 1px solid #e0e0e0;
+    box-shadow: -4px 0 20px rgba(0,0,0,0.12);
+    display: flex; flex-direction: column; overflow: hidden;
+    transition: right 0.3s ease;
 }
-.phone-popup.open { display: flex; }
-@keyframes popUp { from { opacity:0; transform: scale(0.9) translateY(10px); } to { opacity:1; transform: scale(1) translateY(0); } }
+.phone-popup.open { right: 0; }
+/* Shift main content when panel is open */
+body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
 .pp-header {
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     color: white; padding: 14px 16px;
@@ -1069,7 +1071,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
             <div class="sip-dot" id="sipDot"></div>
             <span id="sipStatusText">Not Connected</span>
         </div>
-        <button class="pp-close" onclick="togglePhonePopup()">&#x2715;</button>
+        <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
     </div>
     <div class="pp-body">
         <div class="call-timer" id="callTimer">00:00</div>
@@ -1607,15 +1609,21 @@ function initSIP(ext, pass, server, port, dom) {
     }
 }
 
-// ?? Floating Phone Widget ??????????????????????????
+// Floating Phone Widget
 let phoneOpen = false;
 function togglePhonePopup() {
     phoneOpen = !phoneOpen;
     document.getElementById('phonePopup').classList.toggle('open', phoneOpen);
+    document.body.classList.toggle('phone-open', phoneOpen);
+    // Change FAB icon to X when open
+    document.getElementById('phoneFab').innerHTML = phoneOpen
+        ? '&#x2715;<span class="fab-badge unreg" id="fabBadge"></span>'
+        : '&#128222;<span class="fab-badge unreg" id="fabBadge"></span>';
 }
 function openPhonePopup() {
     phoneOpen = true;
     document.getElementById('phonePopup').classList.add('open');
+    document.body.classList.add('phone-open');
 }
 
 function setSipStatus(state, text) {
