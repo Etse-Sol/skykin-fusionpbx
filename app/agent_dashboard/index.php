@@ -617,8 +617,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 /* ?? Dial Pad (inline inside popup) ?? */
 .dp-panel {
-    display: none; padding: 0 16px 16px;
-    animation: fadeIn 0.15s ease;
+    display: block; padding: 0 16px 16px;
 }
 .dp-panel.open { display: block; }
 @keyframes fadeIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
@@ -1077,7 +1076,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <div class="call-timer" id="callTimer">00:00</div>
         <div class="dial-input-wrap">
             <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
-            <button class="btn-dialpad" id="btnDialpadToggle" title="Dial Pad" onclick="togglePad()">&#8999;</button>
+            <button class="btn-dialpad" id="btnDialpadToggle" title="Dial Pad" onclick="togglePad()" style="display:none">&#8999;</button>
         </div>
         <div class="call-controls">
             <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>&#128222; Call</button>
@@ -1246,15 +1245,9 @@ function fetchAcwHistory() {
         });
 }
 
-// ?? Dial Pad (inline inside popup) ????????????????
+// Dial pad always open ? no toggle needed
 let dpNumber = '';
-let padOpen  = false;
-function togglePad() {
-    padOpen = !padOpen;
-    document.getElementById('dpPanel').classList.toggle('open', padOpen);
-    document.getElementById('btnDialpadToggle').style.background = padOpen ? '#0047AB' : '';
-    document.getElementById('btnDialpadToggle').style.color      = padOpen ? 'white'   : '';
-}
+let padOpen  = true;
 function dpKey(k) {
     dpNumber += k;
     updateDpDisplay();
@@ -1279,15 +1272,7 @@ function dpCall() {
     if (!dpNumber) return;
     makeCall(dpNumber);
 }
-// Close dialpad on outside click
-document.addEventListener('click', function(e) {
-    if (padOpen && !e.target.closest('#dpPanel') && !e.target.closest('#btnDialpadToggle')) {
-        padOpen = false;
-        document.getElementById('dpPanel').classList.remove('open');
-        document.getElementById('btnDialpadToggle').style.background = '';
-        document.getElementById('btnDialpadToggle').style.color = '';
-    }
-});
+// No outside-click close for dial pad (always visible)
 
 // ?? Fetch dashboard data ???????????????????????????
 function fetchData() {
