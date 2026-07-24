@@ -1140,8 +1140,14 @@ const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
 const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 
 // Auto-configure SIP from server ? no manual Phone Settings needed
-if (serverExt)  localStorage.setItem('sip_ext',      serverExt);
-if (serverPass) localStorage.setItem('sip_password',  serverPass);
+// Set correct extension from server ? never override manually saved password
+if (serverExt) localStorage.setItem('sip_ext', serverExt);
+// If no password saved yet, auto-open Phone Settings so agent enters it once
+if (serverExt && !localStorage.getItem('sip_password')) {
+    window.addEventListener('load', function() {
+        setTimeout(function() { document.getElementById('settingsModal').classList.add('show'); }, 1500);
+    });
+}
 if (serverWss && !localStorage.getItem('sip_server')) localStorage.setItem('sip_server', serverWss);
 let loginTime   = new Date();
 let refreshInterval = 10;
