@@ -47,13 +47,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     }
 
     try {
-        // Resolve extension via v_extension_users join (v_extensions has no user_uuid or domain_name column)
+        // Resolve extension if not passed
         if (!$extension) {
-            $s = $db->prepare("SELECT e.extension FROM v_extensions e
-                JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                JOIN v_users u ON u.user_uuid = eu.user_uuid
-                JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                WHERE LOWER(u.username)=LOWER(:a) AND d.domain_name=:d LIMIT 1");
+            $s = $db->prepare("SELECT e.extension FROM v_extensions e JOIN v_users u ON u.user_uuid=e.user_uuid WHERE LOWER(u.username)=LOWER(:a) AND e.domain_name=:d LIMIT 1");
             $s->execute([':a'=>$agent_name,':d'=>$domain]);
             $r = $s->fetch(PDO::FETCH_ASSOC);
             if ($r) $extension = $r['extension'];
@@ -232,9 +228,7 @@ if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 $today = date('Y-m-d');
 
 // ?? Resolve the agent's extension from FusionPBX DB ??????????????????????????
-$agent_ext      = '';
-$agent_password = '';
-$agent_wss      = 'wss://' . $_SERVER['HTTP_HOST'] . ':7443';
+$agent_ext = '';
 try {
     $conf = '/etc/fusionpbx/config.conf';
     $db_host = '127.0.0.1'; $db_port = '5432';
@@ -252,26 +246,23 @@ try {
     $pdb = new PDO("pgsql:host={$db_host};port={$db_port};dbname={$db_name}", $db_user, $db_pass,
                    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 
-    // 1) Try: username match via v_extension_users (v_extensions has no user_uuid or domain_name column)
-    $s = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
-                         JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                         JOIN v_users u ON u.user_uuid = eu.user_uuid
-                         JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                         WHERE LOWER(u.username) = LOWER(:a) AND d.domain_name = :d LIMIT 1");
+    // 1) Try: username match (case-insensitive)
+    $s = $pdb->prepare("SELECT e.extension FROM v_extensions e
+                         JOIN v_users u ON u.user_uuid = e.user_uuid
+                         WHERE LOWER(u.username) = LOWER(:a) AND e.domain_name = :d LIMIT 1");
     $s->execute([':a' => $agent_name, ':d' => $domain]);
     $row = $s->fetch(PDO::FETCH_ASSOC);
-    if ($row) { $agent_ext = $row['extension']; $agent_password = $row['password']; }
+    if ($row) $agent_ext = $row['extension'];
 
-    // 2) Try: caller-ID name contains agent name (join v_domains for domain filter)
+    // 2) Try: description or caller-ID name contains agent name
     if (!$agent_ext) {
-        $s2 = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
-                              JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                              WHERE d.domain_name = :d
-                              AND (LOWER(e.description) LIKE :p OR LOWER(e.effective_caller_id_name) LIKE :p)
+        $s2 = $pdb->prepare("SELECT extension FROM v_extensions
+                              WHERE domain_name = :d
+                              AND (LOWER(description) LIKE :p OR LOWER(effective_caller_id_name) LIKE :p)
                               LIMIT 1");
         $s2->execute([':d' => $domain, ':p' => '%' . strtolower($agent_name) . '%']);
         $row2 = $s2->fetch(PDO::FETCH_ASSOC);
-        if ($row2) { $agent_ext = $row2['extension']; $agent_password = $row2['password']; }
+        if ($row2) $agent_ext = $row2['extension'];
     }
 
     // 3) If agent_name is purely numeric treat it as an extension
@@ -499,22 +490,16 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .fab-badge.unreg { background: #888; }
 .fab-badge.calling { background: #ffc107; animation: pulse 0.5s infinite; }
 
-/* Static phone side panel */
+/* Floating phone popup */
 .phone-popup {
-    position: fixed; top: 60px; right: -320px; z-index: 499;
-    width: 300px; max-height: calc(100vh - 60px);
-    background: white; border-left: 1px solid #e0e0e0;
-    box-shadow: -4px 0 20px rgba(0,0,0,0.12);
-    display: flex; flex-direction: column;
-    overflow-y: auto; overflow-x: hidden;
-    transition: right 0.3s ease;
+    position: fixed; bottom: 100px; right: 28px; z-index: 499;
+    width: 300px; background: white; border-radius: 16px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.18);
+    display: none; flex-direction: column; overflow: hidden;
+    animation: popUp 0.2s ease;
 }
-.phone-popup.open { right: 0; }
-.pp-body { flex-shrink: 0; }
-.dp-panel { flex-shrink: 0; }
-.pp-footer { flex-shrink: 0; border-top: 1px solid #f0f0f0; padding: 10px 16px; }
-/* Shift main content when panel is open */
-body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
+.phone-popup.open { display: flex; }
+@keyframes popUp { from { opacity:0; transform: scale(0.9) translateY(10px); } to { opacity:1; transform: scale(1) translateY(0); } }
 .pp-header {
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     color: white; padding: 14px 16px;
@@ -630,7 +615,8 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 /* ?? Dial Pad (inline inside popup) ?? */
 .dp-panel {
-    display: block; padding: 0 16px 16px;
+    display: none; padding: 0 16px 16px;
+    animation: fadeIn 0.15s ease;
 }
 .dp-panel.open { display: block; }
 @keyframes fadeIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
@@ -1083,14 +1069,16 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="sip-dot" id="sipDot"></div>
             <span id="sipStatusText">Not Connected</span>
         </div>
-        <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
+        <button class="pp-close" onclick="togglePhonePopup()">&#x2715;</button>
     </div>
     <div class="pp-body">
         <div class="call-timer" id="callTimer">00:00</div>
-        <!-- Hidden input syncs with dial pad display -->
-        <input type="tel" class="dial-input" id="dialInput" placeholder="" maxlength="20" style="display:none">
+        <div class="dial-input-wrap">
+            <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20">
+            <button class="btn-dialpad" id="btnDialpadToggle" title="Dial Pad" onclick="togglePad()">&#8999;</button>
+        </div>
         <div class="call-controls">
-            <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled style="display:none">&#128222; Call</button>
+            <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled>&#128222; Call</button>
             <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">&#128222; Hang Up</button>
             <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
             <button class="btn-mute"   id="btnMute"   onclick="toggleMute()">Mute</button>
@@ -1100,12 +1088,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
-    <!-- Phone Settings above dial pad -->
-    <div class="pp-footer" style="border-top:none; border-bottom:1px solid #f0f0f0; padding: 8px 16px;">
-        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
-    </div>
-
-    <!-- Inline Dial Pad -->
+    <!-- Inline Dial Pad (opens right here inside the popup) -->
     <div class="dp-panel" id="dpPanel">
         <div class="dp-display empty" id="dpDisplay">Enter number...</div>
         <div class="dp-grid">
@@ -1128,20 +1111,21 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
+    <div class="pp-footer">
+        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
     </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
-const agentName  = '<?php echo $agent_name; ?>';
-const domain     = '<?php echo $domain; ?>';
-const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB
-const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
-const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
+const agentName = '<?php echo $agent_name; ?>';
+const domain    = '<?php echo $domain; ?>';
+const serverExt = '<?php echo $agent_ext; ?>';   // resolved server-side from DB
 
-// Only set extension from server ? agent keeps their manually saved password
-if (serverExt) localStorage.setItem('sip_ext', serverExt);
-localStorage.setItem('sip_port', '7443');  // force WSS port for HTTPS
+// Pre-seed localStorage from server if not yet saved
+if (serverExt && !localStorage.getItem('sip_ext')) {
+    localStorage.setItem('sip_ext', serverExt);
+}
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
@@ -1260,9 +1244,15 @@ function fetchAcwHistory() {
         });
 }
 
-// Dial pad always open ? no toggle needed
+// ?? Dial Pad (inline inside popup) ????????????????
 let dpNumber = '';
-let padOpen  = true;
+let padOpen  = false;
+function togglePad() {
+    padOpen = !padOpen;
+    document.getElementById('dpPanel').classList.toggle('open', padOpen);
+    document.getElementById('btnDialpadToggle').style.background = padOpen ? '#0047AB' : '';
+    document.getElementById('btnDialpadToggle').style.color      = padOpen ? 'white'   : '';
+}
 function dpKey(k) {
     dpNumber += k;
     updateDpDisplay();
@@ -1287,7 +1277,15 @@ function dpCall() {
     if (!dpNumber) return;
     makeCall(dpNumber);
 }
-// No outside-click close for dial pad (always visible)
+// Close dialpad on outside click
+document.addEventListener('click', function(e) {
+    if (padOpen && !e.target.closest('#dpPanel') && !e.target.closest('#btnDialpadToggle')) {
+        padOpen = false;
+        document.getElementById('dpPanel').classList.remove('open');
+        document.getElementById('btnDialpadToggle').style.background = '';
+        document.getElementById('btnDialpadToggle').style.color = '';
+    }
+});
 
 // ?? Fetch dashboard data ???????????????????????????
 function fetchData() {
@@ -1566,18 +1564,15 @@ window.sipBridge = {}; var sipBridge = window.sipBridge;
 function loadSipSettings() {
     const ext    = localStorage.getItem('sip_ext')    || '';
     const pass   = localStorage.getItem('sip_pass')   || '';
-    let   server = localStorage.getItem('sip_server') || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
-    const port   = localStorage.getItem('sip_port')   || '7443';
+    const server = localStorage.getItem('sip_server') || '192.168.243.129';
+    const port   = localStorage.getItem('sip_port')   || '5066';
     const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-    // Always use WSS on HTTPS pages ? strip any existing protocol and re-add wss://
-    server = server.replace(/^wss?:\/\//i, '');
-    const wsUrl = 'wss://' + server;
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = server;
     document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
 }
 
 function waitForSipBridge(cb, tries) {
@@ -1588,23 +1583,19 @@ function waitForSipBridge(cb, tries) {
 }
 
 function saveSipSettings() {
-    const ext  = document.getElementById('sipExt').value.trim();
-    const pass = document.getElementById('sipPass').value.trim();
-    const dom  = document.getElementById('sipDomain').value.trim();
+    const ext    = document.getElementById('sipExt').value.trim();
+    const pass   = document.getElementById('sipPass').value.trim();
+    const server = document.getElementById('sipServer').value.trim();
+    const port   = document.getElementById('sipPort').value.trim() || '5066';
+    const dom    = document.getElementById('sipDomain').value.trim();
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
-    // Build WSS URL ? always use wss:// on HTTPS
-    const rawServer = document.getElementById('sipServer').value.trim() || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
-    const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/:\d+$/,'');
-    const isHttps   = location.protocol === 'https:';
-    const wsUrl     = (isHttps ? 'wss://' : 'ws://') + cleanHost;
-    const port      = isHttps ? '7443' : (document.getElementById('sipPort').value.trim() || '5066');
     localStorage.setItem('sip_ext',    ext);
     localStorage.setItem('sip_pass',   pass);
-    localStorage.setItem('sip_server', cleanHost);
+    localStorage.setItem('sip_server', server);
     localStorage.setItem('sip_port',   port);
     localStorage.setItem('sip_domain', dom);
     document.getElementById('settingsModal').classList.remove('show');
-    waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
+    waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
 }
 
 function initSIP(ext, pass, server, port, dom) {
@@ -1616,21 +1607,15 @@ function initSIP(ext, pass, server, port, dom) {
     }
 }
 
-// Floating Phone Widget
+// ?? Floating Phone Widget ??????????????????????????
 let phoneOpen = false;
 function togglePhonePopup() {
     phoneOpen = !phoneOpen;
     document.getElementById('phonePopup').classList.toggle('open', phoneOpen);
-    document.body.classList.toggle('phone-open', phoneOpen);
-    // Change FAB icon to X when open
-    document.getElementById('phoneFab').innerHTML = phoneOpen
-        ? '&#x2715;<span class="fab-badge unreg" id="fabBadge"></span>'
-        : '&#128222;<span class="fab-badge unreg" id="fabBadge"></span>';
 }
 function openPhonePopup() {
     phoneOpen = true;
     document.getElementById('phonePopup').classList.add('open');
-    document.body.classList.add('phone-open');
 }
 
 function setSipStatus(state, text) {
