@@ -47,9 +47,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     }
 
     try {
-        // Resolve extension if not passed
+        // Resolve extension via v_extension_users join (v_extensions has no user_uuid or domain_name column)
         if (!$extension) {
-            $s = $db->prepare("SELECT e.extension FROM v_extensions e JOIN v_users u ON u.user_uuid=e.user_uuid WHERE LOWER(u.username)=LOWER(:a) AND e.domain_name=:d LIMIT 1");
+            $s = $db->prepare("SELECT e.extension FROM v_extensions e
+                JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+                JOIN v_users u ON u.user_uuid = eu.user_uuid
+                JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+                WHERE LOWER(u.username)=LOWER(:a) AND d.domain_name=:d LIMIT 1");
             $s->execute([':a'=>$agent_name,':d'=>$domain]);
             $r = $s->fetch(PDO::FETCH_ASSOC);
             if ($r) $extension = $r['extension'];
@@ -228,7 +232,9 @@ if (!empty($m[2])) $initials = strtoupper($m[1][0]) . $m[2];
 $today = date('Y-m-d');
 
 // ?? Resolve the agent's extension from FusionPBX DB ??????????????????????????
-$agent_ext = '';
+$agent_ext      = '';
+$agent_password = '';
+$agent_wss      = 'wss://' . $_SERVER['HTTP_HOST'] . ':7443';
 try {
     $conf = '/etc/fusionpbx/config.conf';
     $db_host = '127.0.0.1'; $db_port = '5432';
@@ -246,23 +252,26 @@ try {
     $pdb = new PDO("pgsql:host={$db_host};port={$db_port};dbname={$db_name}", $db_user, $db_pass,
                    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 
-    // 1) Try: username match (case-insensitive)
-    $s = $pdb->prepare("SELECT e.extension FROM v_extensions e
-                         JOIN v_users u ON u.user_uuid = e.user_uuid
-                         WHERE LOWER(u.username) = LOWER(:a) AND e.domain_name = :d LIMIT 1");
+    // 1) Try: username match via v_extension_users (v_extensions has no user_uuid or domain_name column)
+    $s = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
+                         JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+                         JOIN v_users u ON u.user_uuid = eu.user_uuid
+                         JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+                         WHERE LOWER(u.username) = LOWER(:a) AND d.domain_name = :d LIMIT 1");
     $s->execute([':a' => $agent_name, ':d' => $domain]);
     $row = $s->fetch(PDO::FETCH_ASSOC);
-    if ($row) $agent_ext = $row['extension'];
+    if ($row) { $agent_ext = $row['extension']; $agent_password = $row['password']; }
 
-    // 2) Try: description or caller-ID name contains agent name
+    // 2) Try: caller-ID name contains agent name (join v_domains for domain filter)
     if (!$agent_ext) {
-        $s2 = $pdb->prepare("SELECT extension FROM v_extensions
-                              WHERE domain_name = :d
-                              AND (LOWER(description) LIKE :p OR LOWER(effective_caller_id_name) LIKE :p)
+        $s2 = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
+                              JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+                              WHERE d.domain_name = :d
+                              AND (LOWER(e.description) LIKE :p OR LOWER(e.effective_caller_id_name) LIKE :p)
                               LIMIT 1");
         $s2->execute([':d' => $domain, ':p' => '%' . strtolower($agent_name) . '%']);
         $row2 = $s2->fetch(PDO::FETCH_ASSOC);
-        if ($row2) $agent_ext = $row2['extension'];
+        if ($row2) { $agent_ext = $row2['extension']; $agent_password = $row2['password']; }
     }
 
     // 3) If agent_name is purely numeric treat it as an extension
@@ -1124,14 +1133,17 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
-const agentName = '<?php echo $agent_name; ?>';
-const domain    = '<?php echo $domain; ?>';
-const serverExt = '<?php echo $agent_ext; ?>';   // resolved server-side from DB
+const agentName  = '<?php echo $agent_name; ?>';
+const domain     = '<?php echo $domain; ?>';
+const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB
+const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
+const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 
-// Pre-seed localStorage from server if not yet saved
-if (serverExt && !localStorage.getItem('sip_ext')) {
-    localStorage.setItem('sip_ext', serverExt);
-}
+// Auto-configure SIP fully from server ? extension + password + WSS, no Phone Settings needed
+if (serverExt)  localStorage.setItem('sip_ext',    serverExt);
+if (serverPass) localStorage.setItem('sip_pass',   serverPass);  // key matches loadSipSettings
+if (serverWss)  localStorage.setItem('sip_server', serverWss);
+localStorage.setItem('sip_port', '7443');  // force WSS port for HTTPS
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
@@ -1556,15 +1568,18 @@ window.sipBridge = {}; var sipBridge = window.sipBridge;
 function loadSipSettings() {
     const ext    = localStorage.getItem('sip_ext')    || '';
     const pass   = localStorage.getItem('sip_pass')   || '';
-    const server = localStorage.getItem('sip_server') || '192.168.243.129';
-    const port   = localStorage.getItem('sip_port')   || '5066';
+    let   server = localStorage.getItem('sip_server') || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
+    const port   = localStorage.getItem('sip_port')   || '7443';
     const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    // Always use WSS on HTTPS pages ? strip any existing protocol and re-add wss://
+    server = server.replace(/^wss?:\/\//i, '');
+    const wsUrl = 'wss://' + server;
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = server;
     document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
 }
 
 function waitForSipBridge(cb, tries) {
@@ -1575,19 +1590,23 @@ function waitForSipBridge(cb, tries) {
 }
 
 function saveSipSettings() {
-    const ext    = document.getElementById('sipExt').value.trim();
-    const pass   = document.getElementById('sipPass').value.trim();
-    const server = document.getElementById('sipServer').value.trim();
-    const port   = document.getElementById('sipPort').value.trim() || '5066';
-    const dom    = document.getElementById('sipDomain').value.trim();
+    const ext  = document.getElementById('sipExt').value.trim();
+    const pass = document.getElementById('sipPass').value.trim();
+    const dom  = document.getElementById('sipDomain').value.trim();
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
+    // Build WSS URL ? always use wss:// on HTTPS
+    const rawServer = document.getElementById('sipServer').value.trim() || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
+    const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/:\d+$/,'');
+    const isHttps   = location.protocol === 'https:';
+    const wsUrl     = (isHttps ? 'wss://' : 'ws://') + cleanHost;
+    const port      = isHttps ? '7443' : (document.getElementById('sipPort').value.trim() || '5066');
     localStorage.setItem('sip_ext',    ext);
     localStorage.setItem('sip_pass',   pass);
-    localStorage.setItem('sip_server', server);
+    localStorage.setItem('sip_server', cleanHost);
     localStorage.setItem('sip_port',   port);
     localStorage.setItem('sip_domain', dom);
     document.getElementById('settingsModal').classList.remove('show');
-    waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
+    waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
 }
 
 function initSIP(ext, pass, server, port, dom) {
