@@ -1128,8 +1128,8 @@ const agentName = '<?php echo $agent_name; ?>';
 const domain    = '<?php echo $domain; ?>';
 const serverExt = '<?php echo $agent_ext; ?>';   // resolved server-side from DB
 
-// Pre-seed localStorage from server if not yet saved
-if (serverExt && !localStorage.getItem('sip_ext')) {
+// Always use server-resolved extension ? overwrite localStorage so switching users works correctly
+if (serverExt) {
     localStorage.setItem('sip_ext', serverExt);
 }
 let loginTime   = new Date();
