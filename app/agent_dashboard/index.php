@@ -493,15 +493,16 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 /* Static phone side panel */
 .phone-popup {
     position: fixed; top: 60px; right: -320px; z-index: 499;
-    width: 300px; height: calc(100vh - 60px);
+    width: 300px; max-height: calc(100vh - 60px);
     background: white; border-left: 1px solid #e0e0e0;
     box-shadow: -4px 0 20px rgba(0,0,0,0.12);
-    display: flex; flex-direction: column; overflow: hidden;
+    display: flex; flex-direction: column;
+    overflow-y: auto; overflow-x: hidden;
     transition: right 0.3s ease;
 }
 .phone-popup.open { right: 0; }
 .pp-body { flex-shrink: 0; }
-.dp-panel { flex: 1; overflow-y: auto; }
+.dp-panel { flex-shrink: 0; }
 .pp-footer { flex-shrink: 0; border-top: 1px solid #f0f0f0; padding: 10px 16px; }
 /* Shift main content when panel is open */
 body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
