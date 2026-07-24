@@ -47,9 +47,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     }
 
     try {
-        // Resolve extension if not passed
+        // Resolve extension via v_extension_users join (v_extensions has no user_uuid or domain_name column)
         if (!$extension) {
-            $s = $db->prepare("SELECT e.extension FROM v_extensions e JOIN v_users u ON u.user_uuid=e.user_uuid WHERE LOWER(u.username)=LOWER(:a) AND e.domain_name=:d LIMIT 1");
+            $s = $db->prepare("SELECT e.extension FROM v_extensions e
+                JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+                JOIN v_users u ON u.user_uuid = eu.user_uuid
+                JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+                WHERE LOWER(u.username)=LOWER(:a) AND d.domain_name=:d LIMIT 1");
             $s->execute([':a'=>$agent_name,':d'=>$domain]);
             $r = $s->fetch(PDO::FETCH_ASSOC);
             if ($r) $extension = $r['extension'];
@@ -246,19 +250,22 @@ try {
     $pdb = new PDO("pgsql:host={$db_host};port={$db_port};dbname={$db_name}", $db_user, $db_pass,
                    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 
-    // 1) Try: username match (case-insensitive)
+    // 1) Try: username match via v_extension_users (v_extensions has no user_uuid or domain_name column)
     $s = $pdb->prepare("SELECT e.extension FROM v_extensions e
-                         JOIN v_users u ON u.user_uuid = e.user_uuid
-                         WHERE LOWER(u.username) = LOWER(:a) AND e.domain_name = :d LIMIT 1");
+                         JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+                         JOIN v_users u ON u.user_uuid = eu.user_uuid
+                         JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+                         WHERE LOWER(u.username) = LOWER(:a) AND d.domain_name = :d LIMIT 1");
     $s->execute([':a' => $agent_name, ':d' => $domain]);
     $row = $s->fetch(PDO::FETCH_ASSOC);
     if ($row) $agent_ext = $row['extension'];
 
-    // 2) Try: description or caller-ID name contains agent name
+    // 2) Try: caller-ID name contains agent name (join v_domains for domain filter)
     if (!$agent_ext) {
-        $s2 = $pdb->prepare("SELECT extension FROM v_extensions
-                              WHERE domain_name = :d
-                              AND (LOWER(description) LIKE :p OR LOWER(effective_caller_id_name) LIKE :p)
+        $s2 = $pdb->prepare("SELECT e.extension FROM v_extensions e
+                              JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+                              WHERE d.domain_name = :d
+                              AND (LOWER(e.description) LIKE :p OR LOWER(e.effective_caller_id_name) LIKE :p)
                               LIMIT 1");
         $s2->execute([':d' => $domain, ':p' => '%' . strtolower($agent_name) . '%']);
         $row2 = $s2->fetch(PDO::FETCH_ASSOC);
