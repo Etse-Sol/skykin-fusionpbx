@@ -1139,10 +1139,11 @@ const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side fr
 const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
 const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 
-// Auto-configure SIP fully from server ? extension + password + WSS, no manual input needed
-if (serverExt)  localStorage.setItem('sip_ext',     serverExt);
-if (serverPass) localStorage.setItem('sip_password', serverPass);
-if (serverWss)  localStorage.setItem('sip_server',   serverWss);
+// Auto-configure SIP fully from server ? extension + password + WSS, no Phone Settings needed
+if (serverExt)  localStorage.setItem('sip_ext',    serverExt);
+if (serverPass) localStorage.setItem('sip_pass',   serverPass);  // key matches loadSipSettings
+if (serverWss)  localStorage.setItem('sip_server', serverWss);
+localStorage.setItem('sip_port', '7443');  // force WSS port for HTTPS
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
@@ -1567,15 +1568,18 @@ window.sipBridge = {}; var sipBridge = window.sipBridge;
 function loadSipSettings() {
     const ext    = localStorage.getItem('sip_ext')    || '';
     const pass   = localStorage.getItem('sip_pass')   || '';
-    const server = localStorage.getItem('sip_server') || '192.168.243.129';
-    const port   = localStorage.getItem('sip_port')   || '5066';
+    let   server = localStorage.getItem('sip_server') || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
+    const port   = localStorage.getItem('sip_port')   || '7443';
     const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    // Always use WSS on HTTPS pages ? strip any existing protocol and re-add wss://
+    server = server.replace(/^wss?:\/\//i, '');
+    const wsUrl = 'wss://' + server;
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = server;
     document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
 }
 
 function waitForSipBridge(cb, tries) {
