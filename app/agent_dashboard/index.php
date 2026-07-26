@@ -99,16 +99,25 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                 direction,caller_id_number,destination_number,billsec,hangup_cause
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND (caller_id_number=:e OR destination_number=:e)
+                AND caller_id_number ~ '^[0-9+][0-9\-\(\) ]*$'
+                AND destination_number ~ '^[0-9+][0-9\-\(\) ]*$'
                 AND start_epoch>=:ts AND start_epoch<=:te
                 ORDER BY start_epoch DESC LIMIT 500");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
             foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $in   = ($r['destination_number']==$extension);
                 $bill = (int)$r['billsec'];
+                // Clean up SIP addresses ? strip @domain suffix
+                $raw_num = $in ? $r['caller_id_number'] : $r['destination_number'];
+                $clean_num = preg_replace('/@.*$/', '', $raw_num);   // strip @host
+                // If it still looks like garbage (non-dialable), mark as Unknown
+                if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean_num)) {
+                    $clean_num = 'Unknown';
+                }
                 $data['recent_calls'][] = [
                     'time'       => $r['call_time'],
                     'type'       => $in ? 'Inbound' : 'Outbound',
-                    'number'     => $in ? $r['caller_id_number'] : $r['destination_number'],
+                    'number'     => $clean_num,
                     'duration'   => floor($bill/60).':'.str_pad($bill%60,2,'0',STR_PAD_LEFT),
                     'status'     => $bill>0 ? 'Answered' : 'Missed',
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')

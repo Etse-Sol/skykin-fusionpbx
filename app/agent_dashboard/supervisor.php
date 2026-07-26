@@ -112,7 +112,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             return !isset($supervisorExts[$e['extension']]);
         });
 
-        // Today's CDR stats per extension
+        // Today's CDR stats per extension — filter out non-numeric SIP usernames
         $s2 = $db->prepare("SELECT
             CASE WHEN direction='outbound' OR direction='local' THEN caller_id_number ELSE destination_number END as ext,
             COUNT(*) as total,
@@ -122,6 +122,8 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur
             FROM v_xml_cdr WHERE domain_name=:d
             AND start_epoch>=:ts AND start_epoch<=:te
+            AND caller_id_number ~ '^[0-9+][0-9\-\(\) ]*$'
+            AND destination_number ~ '^[0-9+][0-9\-\(\) ]*$'
             GROUP BY 1");
         $s2->execute([':d'=>$domain,':ts'=>$today_start,':te'=>$today_end]);
         $stats = [];
@@ -403,7 +405,9 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
     $te = strtotime($to.' 23:59:59');
     try {
         $db = getDB();
-        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
+        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
+            AND caller_id_number ~ '^[0-9+][0-9\\-\\(\\) ]*$'
+            AND destination_number ~ '^[0-9+][0-9\\-\\(\\) ]*$'";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
         $s = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
@@ -413,8 +417,13 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
         $rows = [];
         foreach($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $b=(int)$r['billsec'];
-            $rows[] = ['time'=>$r['call_time'],'caller'=>$r['caller_id_number'],
-                'destination'=>$r['destination_number'],'direction'=>$r['direction'],
+            // Clean SIP addresses — strip @domain suffix, mark unrecognised as Unknown
+            $caller = preg_replace('/@.*$/', '', $r['caller_id_number']);
+            $dest   = preg_replace('/@.*$/', '', $r['destination_number']);
+            if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $caller)) $caller = 'Unknown';
+            if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $dest))   $dest   = 'Unknown';
+            $rows[] = ['time'=>$r['call_time'],'caller'=>$caller,
+                'destination'=>$dest,'direction'=>$r['direction'],
                 'duration'=>floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
                 'status'=>$b>0?'Answered':'Missed','cause'=>$r['hangup_cause']??''];
         }
