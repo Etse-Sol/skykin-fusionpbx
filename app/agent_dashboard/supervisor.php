@@ -468,6 +468,62 @@ if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
     } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
     exit;
 }
+
+// ── API: voice_quality ────────────────────────────────────────────────────────
+// Estimates MOS score from CDR: WebRTC calls short = poor, longer = better
+// Formula: MOS = 4.5 - (missed_calls_weight + duration_factor)
+// For real MOS you would need rtcp data; this gives a practical quality indication.
+if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
+    error_reporting(0); header('Content-Type: application/json');
+    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    $from    = $_GET['from']   ?? date('Y-m-d');
+    $to      = $_GET['to']     ?? date('Y-m-d');
+    $ts = strtotime($from.' 00:00:00');
+    $te = strtotime($to.' 23:59:59');
+    try {
+        $db = getDB();
+        $s = $db->prepare("SELECT
+            to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+            caller_id_number, destination_number, direction, billsec, duration,
+            hangup_cause, codec
+            FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
+            AND billsec > 0
+            ORDER BY start_epoch DESC LIMIT 500");
+        $s->execute([':d'=>$domain_,':ts'=>$ts,':te'=>$te]);
+        $rows = [];
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $billsec = (int)$r['billsec'];
+            $duration = (int)$r['duration'];
+            $codec = strtolower($r['codec'] ?? 'opus');
+            // MOS estimation heuristic:
+            // Base score by codec quality
+            $base = str_contains($codec,'opus')||str_contains($codec,'g722') ? 4.3
+                  : (str_contains($codec,'pcm')||str_contains($codec,'g711')||str_contains($codec,'ulaw')||str_contains($codec,'alaw') ? 4.1 : 3.8);
+            // Very short calls (< 10s) suggest audio issue
+            if ($billsec < 10) $base -= 0.6;
+            elseif ($billsec < 30) $base -= 0.2;
+            // Post-call delay (ring time) penalty
+            $ring_time = max(0, $duration - $billsec);
+            if ($ring_time > 30) $base -= 0.1;
+            // Clamp to 1–5
+            $mos = max(1.0, min(5.0, $base));
+            $b = $billsec;
+            $rows[] = [
+                'call_time'         => $r['call_time'],
+                'caller_id_number'  => $r['caller_id_number'],
+                'destination_number'=> $r['destination_number'],
+                'direction'         => $r['direction'],
+                'duration'          => floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
+                'mos'               => round($mos, 2),
+                'codec'             => $r['codec'] ?? 'unknown',
+                'hangup_cause'      => $r['hangup_cause'] ?? '',
+            ];
+        }
+        echo json_encode(['rows'=>$rows,'total'=>count($rows)]);
+    } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
+    exit;
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -613,6 +669,14 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <span style="opacity:.8;font-size:12px"><?php echo htmlspecialchars($logged_in_user); ?></span>
         <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
         <a href="/login/index.php?logout=1" style="color:rgba(255,255,255,.7);font-size:11px;text-decoration:none">Sign out</a>
+        &nbsp;|&nbsp;
+        <a href="/app/agent_dashboard/reports.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Reports</a>
+        &nbsp;|&nbsp;
+        <a href="/app/agent_dashboard/evaluation.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Evaluation</a>
+        &nbsp;|&nbsp;
+        <a href="/app/agent_dashboard/crm.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">CRM</a>
+        &nbsp;|&nbsp;
+        <a href="/app/agent_dashboard/index.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Agent View</a>
     </div>
 </div>
 
@@ -647,6 +711,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <button class="tab-btn" onclick="showTab('callhistory')">All Call History</button>
             <button class="tab-btn" onclick="showTab('acwall')">ACW Review</button>
             <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
+            <button class="tab-btn" onclick="showTab('voicequality')">Voice Quality</button>
+            <button class="tab-btn" onclick="showTab('skills')">Agent Skills</button>
         </div>
 
         <!-- Leaderboard -->
@@ -726,6 +792,76 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                 <tbody id="recBody"><tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
             </table>
             <audio id="recPlayer" controls style="width:100%;margin-top:12px;display:none"></audio>
+        </div>
+
+        <!-- Voice Quality Tab -->
+        <div class="tab-content" id="tab-voicequality">
+            <div class="date-filter">
+                <label>From:</label><input type="date" id="vqFrom" value="<?php echo $today;?>">
+                <label>To:</label><input type="date" id="vqTo" value="<?php echo $today;?>">
+                <button class="btn-filter" onclick="fetchVoiceQuality()">Search</button>
+                <button class="btn-filter-clear" onclick="setToday('vqFrom','vqTo');fetchVoiceQuality()">Today</button>
+                <span id="vqSummary" style="font-size:12px;color:#aaa;margin-left:8px"></span>
+            </div>
+            <!-- MOS Legend -->
+            <div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap;font-size:12px">
+                <span style="color:#27ae60">&#9632; Excellent (MOS &ge; 4.0)</span>
+                <span style="color:#f39c12">&#9632; Good (3.5&ndash;3.9)</span>
+                <span style="color:#e67e22">&#9632; Fair (3.0&ndash;3.4)</span>
+                <span style="color:#e74c3c">&#9632; Poor (&lt;3.0)</span>
+                <span style="color:#aaa;margin-left:8px"><em>MOS = Mean Opinion Score (1&ndash;5). WebRTC quality estimated from call duration.</em></span>
+            </div>
+            <table class="data-table">
+                <thead><tr>
+                    <th>Time</th><th>Caller</th><th>Destination</th>
+                    <th>Direction</th><th>Duration</th>
+                    <th>MOS Score</th><th>Quality</th><th>Hangup Cause</th>
+                </tr></thead>
+                <tbody id="vqBody"><tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
+            </table>
+        </div>
+
+        <!-- Agent Skills Tab -->
+        <div class="tab-content" id="tab-skills">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+                <!-- Left: Agent → Queue assignments -->
+                <div>
+                    <h4 style="margin-bottom:12px;color:#333;font-size:14px">Agent Language Skills & Queue Assignment</h4>
+                    <p style="font-size:12px;color:#666;margin-bottom:14px">
+                        Use the script below to assign agents to language queues. Run it once on the FusionPBX server.
+                        After running, each agent will be available in their assigned language queue.
+                    </p>
+                    <div id="skillsAgentList" style="background:#f8f9fa;border-radius:8px;padding:14px">
+                        Loading agents...
+                    </div>
+                </div>
+                <!-- Right: Queue → Language mapping info -->
+                <div>
+                    <h4 style="margin-bottom:12px;color:#333;font-size:14px">Language Queue Map</h4>
+                    <table class="data-table">
+                        <thead><tr><th>Extension</th><th>Queue Name</th><th>Language</th><th>Status</th></tr></thead>
+                        <tbody>
+                            <tr><td><strong>9000</strong></td><td>Language IVR Menu</td><td>—</td><td><span style="color:#27ae60">Entry Point</span></td></tr>
+                            <tr><td><strong>8000</strong></td><td>General Queue</td><td>All Languages</td><td><span style="color:#27ae60">Active</span></td></tr>
+                            <tr><td><strong>8001</strong></td><td>Amharic Queue</td><td>Amharic</td><td><span style="color:#f39c12">Run setup script</span></td></tr>
+                            <tr><td><strong>8002</strong></td><td>English Queue</td><td>English</td><td><span style="color:#f39c12">Run setup script</span></td></tr>
+                            <tr><td><strong>8003</strong></td><td>Oromo Queue</td><td>Oromo</td><td><span style="color:#f39c12">Run setup script</span></td></tr>
+                        </tbody>
+                    </table>
+                    <div style="margin-top:16px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;font-size:12px">
+                        <strong>Setup Instructions:</strong><br>
+                        1. SSH to your FusionPBX VM<br>
+                        2. Run: <code>bash /tmp/ivr_language_setup.sh</code><br>
+                        3. Callers will hear: <em>"Press 1 for Amharic, 2 for English, 3 for Oromo"</em><br>
+                        4. Each press routes to the correct language queue<br>
+                        5. Upload IVR greeting in FusionPBX &rarr; IVR &rarr; SkyKin Language IVR
+                    </div>
+                    <div style="margin-top:12px;background:#f8f9fa;border-radius:6px;padding:10px;font-size:11px;color:#666">
+                        <strong>IVR Call Flow:</strong><br>
+                        Incoming Call &rarr; 9000 (IVR) &rarr; Press 1/2/3 &rarr; Language Queue &rarr; Agent with that language skill
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -933,6 +1069,8 @@ function showTab(name){
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
     if(name==='recordings')  fetchRecordings();
+    if(name==='voicequality') fetchVoiceQuality();
+    if(name==='skills') fetchSkillsAgents();
 }
 
 // ── Init & auto-refresh ────────────────────────────────────────────────────
@@ -983,6 +1121,81 @@ function playRec(path, file){
 }
 
 setInterval(()=>{ fetchQueue(); fetchAgents(); }, 10000);
+
+// ── Voice Quality ──────────────────────────────────────────────────────────
+function fetchVoiceQuality() {
+    const from = document.getElementById('vqFrom').value;
+    const to   = document.getElementById('vqTo').value;
+    fetch(`supervisor.php?action=voice_quality&domain=${domain}&from=${from}&to=${to}`)
+        .then(r=>r.json()).then(data=>{
+            const tbody = document.getElementById('vqBody');
+            const rows  = data.rows || [];
+            document.getElementById('vqSummary').textContent = rows.length + ' calls';
+            if (!rows.length) {
+                tbody.innerHTML='<tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">No calls found</td></tr>';
+                return;
+            }
+            // MOS color
+            function mosColor(mos) {
+                if (mos >= 4.0) return '#27ae60';
+                if (mos >= 3.5) return '#f39c12';
+                if (mos >= 3.0) return '#e67e22';
+                return '#e74c3c';
+            }
+            function mosLabel(mos) {
+                if (mos >= 4.0) return 'Excellent';
+                if (mos >= 3.5) return 'Good';
+                if (mos >= 3.0) return 'Fair';
+                return 'Poor';
+            }
+            tbody.innerHTML = rows.map(r => {
+                const mos   = parseFloat(r.mos || 0);
+                const color = mosColor(mos);
+                return `<tr>
+                  <td>${r.call_time}</td>
+                  <td>${r.caller_id_number}</td>
+                  <td>${r.destination_number}</td>
+                  <td><span style="font-size:11px;padding:2px 8px;border-radius:10px;background:${r.direction==='inbound'?'rgba(56,139,253,.15)':'rgba(240,136,62,.15)'};color:${r.direction==='inbound'?'#58a6ff':'#f0883e'}">${r.direction}</span></td>
+                  <td>${r.duration}</td>
+                  <td><strong style="color:${color};font-size:15px">${mos.toFixed(2)}</strong></td>
+                  <td><span style="color:${color};font-size:12px;font-weight:600">${mosLabel(mos)}</span></td>
+                  <td style="font-size:11px;color:#aaa">${r.hangup_cause||''}</td>
+                </tr>`;
+            }).join('');
+        }).catch(e=>{ document.getElementById('vqBody').innerHTML='<tr><td colspan="8" style="text-align:center;color:#e74c3c;padding:20px">Error: '+e.message+'</td></tr>'; });
+}
+
+function fetchSkillsAgents() {
+    // Fetch agent list from supervisor API and display with skill tags
+    fetch(`supervisor.php?action=agents&domain=${domain}`)
+        .then(r=>r.json()).then(data=>{
+            const agents = data.agents || data;
+            const div = document.getElementById('skillsAgentList');
+            const langColors = {Amharic:'#e74c3c',English:'#27ae60',Oromo:'#3498db',Other:'#f39c12'};
+            const queueMap = {Amharic:'8001',English:'8002',Oromo:'8003'};
+            if (!agents||!agents.length) { div.innerHTML='<p style="color:#666">No agents found</p>'; return; }
+            div.innerHTML = agents.map(a => {
+                const lang = a.language || 'English';
+                const color = langColors[lang] || '#aaa';
+                const queueExt = queueMap[lang] || '8000';
+                return `<div style="display:flex;align-items:center;justify-content:space-between;
+                    padding:8px 12px;background:#fff;border-radius:6px;margin-bottom:8px;
+                    border:1px solid #e0e0e0">
+                    <div>
+                        <strong>${a.name||a.extension}</strong>
+                        <span style="color:#666;font-size:12px;margin-left:8px">Ext ${a.extension}</span>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <span style="background:${color}22;color:${color};padding:2px 10px;
+                            border-radius:10px;font-size:11px;font-weight:600">${lang}</span>
+                        <span style="background:#f0f0f0;color:#666;padding:2px 8px;
+                            border-radius:10px;font-size:11px">Queue ${queueExt}</span>
+                    </div>
+                </div>`;
+            }).join('');
+        }).catch(()=>{ document.getElementById('skillsAgentList').innerHTML='<p style="color:#999">Could not load agents</p>'; });
+}
+
 </script>
 </body>
 </html>
