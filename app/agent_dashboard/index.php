@@ -136,6 +136,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
                 ];
             }
+        }
     } catch (Exception $e) { $data['db_error']=$e->getMessage(); }
 
     echo json_encode($data);
