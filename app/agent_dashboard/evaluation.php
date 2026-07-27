@@ -522,6 +522,18 @@ async function saveEval() {
     if (!selectedCall) return;
     const btn = document.getElementById('btnSave');
     btn.disabled = true; btn.textContent = 'Saving...';
+
+    // For manual evaluations, read agent/caller from input fields
+    if (document.getElementById('evalForm').dataset.manual === '1') {
+        const agentVal  = document.getElementById('emAgent').value.trim();
+        const callerVal = document.getElementById('emCaller').value.trim();
+        if (!agentVal) { alert('Please enter the agent extension'); btn.disabled=false; btn.textContent='Save Evaluation'; return; }
+        selectedCall.destination_number = agentVal;
+        selectedCall.caller_id_number   = callerVal;
+        selectedCall.call_time          = new Date().toLocaleString();
+        selectedCall.cdr_uuid           = '';
+    }
+
     const body = {
         cdr_uuid:       selectedCall.cdr_uuid || '',
         agent_ext:      selectedCall.destination_number,
@@ -540,9 +552,15 @@ async function saveEval() {
     const r = await resp.json();
     if (r.ok) {
         btn.textContent = `Saved! Grade: ${r.grade} (${r.pct}%)`;
-        btn.style.background = '#388bfd';
-        event.currentTarget?.classList.add('evaluated');
-        loadCalls(); // refresh
+        btn.style.background = '#2ea043';
+        btn.style.color = '#fff';
+        // Show toast
+        const toast = document.createElement('div');
+        toast.textContent = `Evaluation saved — Grade ${r.grade} (${r.pct}%)`;
+        toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#2ea043;color:#fff;padding:12px 20px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.3)';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+        loadCalls(); // refresh left list with grade badge
     } else {
         btn.disabled = false; btn.textContent = 'Save Evaluation';
         alert('Error: ' + (r.error||'Unknown'));
@@ -615,20 +633,6 @@ function openManualEval() {
     document.getElementById('evalForm').dataset.manual = '1';
     document.getElementById('audioWrap') && (document.getElementById('audioWrap').style.display = 'none');
 }
-
-// Patch submitEval to support manual mode
-const _origSubmit = window.submitEval;
-window.submitEval = function() {
-    if (document.getElementById('evalForm').dataset.manual === '1') {
-        const agentVal  = document.getElementById('emAgent').value.trim();
-        const callerVal = document.getElementById('emCaller').value.trim();
-        if (!agentVal) { alert('Please enter the agent extension'); return; }
-        selectedCall.destination_number = agentVal;
-        selectedCall.caller_id_number   = callerVal;
-        document.getElementById('evalForm').dataset.manual = '0';
-    }
-    if (_origSubmit) _origSubmit(); else submitEvalCore();
-};
 
 loadCalls();
 </script>
