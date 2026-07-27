@@ -208,6 +208,46 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_recording') {
     echo json_encode(['ok'=>true,'file'=>$fname]); exit;
 }
 
+// ?? Link recording to CDR after FastAPI upload ???????????????????????????????
+if (isset($_GET['action']) && $_GET['action'] === 'link_recording') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $fname = preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $_GET['filename'] ?? '');
+    $ext   = preg_replace('/[^0-9]/', '', $_GET['ext'] ?? '');
+    $dom   = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_GET['domain'] ?? 'client1.skykin.local');
+    $recDir = '/var/lib/freeswitch/recordings/';
+    if ($fname) {
+        try {
+            $conf = '/etc/fusionpbx/config.conf';
+            $h='127.0.0.1';$p='5432';$n='fusionpbx';$u='fusionpbx';$pw='';
+            if (file_exists($conf)) foreach(file($conf) as $ln) {
+                $ln=trim($ln);
+                if(strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
+                if(strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
+                if(strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
+                if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
+                if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
+            }
+            $db3 = new PDO("pgsql:host=$h;port=$p;dbname=$n", $u, $pw,
+                           [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+            $where = $ext ? "AND (caller_id_number=:e OR destination_number=:e)" : "";
+            $params = [':fn'=>$fname, ':rp'=>$recDir, ':d'=>$dom];
+            if ($ext) $params[':e'] = $ext;
+            $upd = $db3->prepare("UPDATE v_xml_cdr SET record_name=:fn, record_path=:rp
+                WHERE xml_cdr_uuid=(
+                    SELECT xml_cdr_uuid FROM v_xml_cdr
+                    WHERE domain_name=:d AND billsec>0
+                    AND (record_name IS NULL OR record_name='')
+                    $where
+                    ORDER BY start_epoch DESC LIMIT 1
+                )");
+            $upd->execute($params);
+            echo json_encode(['ok'=>true]);
+        } catch(Exception $ex) { echo json_encode(['ok'=>false,'error'=>$ex->getMessage()]); }
+    } else { echo json_encode(['ok'=>false,'error'=>'no filename']); }
+    exit;
+}
+
 if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
 
@@ -1979,7 +2019,16 @@ function stopRec() {
         const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
         const fd = new FormData();
         fd.append('file', blob, id + '.webm');
-        fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd }).catch(()=>{});
+        const ext = localStorage.getItem('sip_ext') || '';
+        const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+        // Upload to FastAPI then link to FusionPBX CDR for Evaluation badge
+        try {
+            const resp = await fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
+            if (resp.ok) {
+                // Link recording filename to CDR so ?? badge shows in Evaluation
+                fetch('index.php?action=link_recording&filename=' + encodeURIComponent(id+'.webm') + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom));
+            }
+        } catch(e) {}
     };
     mr.stop(); window.mediaRecorderRef = null;
 }
