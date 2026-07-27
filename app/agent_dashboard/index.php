@@ -1116,14 +1116,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     <a href="/app/agent_dashboard/crm.php"        style="color:#888;text-decoration:none">CRM</a>
 </div>
 
-<!-- ?? INCOMING CALL OVERLAY ?? (hidden, shown inside phone panel) -->
-<div class="incoming-overlay" id="incomingOverlay" style="display:none">
-    <div class="incoming-title">&#128222; Incoming Call</div>
-    <div class="incoming-number" id="incomingNumber">Unknown</div>
-    <div class="incoming-actions">
-        <button class="btn-answer" id="btnAnswer">Answer</button>
-        <button class="btn-decline" id="btnDecline">Decline</button>
-    </div>
+<!-- legacy hidden overlay (kept for compatibility, not shown) -->
+<div id="incomingOverlay" style="display:none">
+    <div></div>
 </div>
 
 <!-- ?? SIP SETTINGS MODAL ?? -->
