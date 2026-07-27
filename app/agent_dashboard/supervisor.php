@@ -362,38 +362,30 @@ if (isset($_GET['action']) && $_GET['action']==='acw_all') {
     exit;
 }
 
-// ── API: monitor (eavesdrop via FreeSWITCH HTTP API) ─────────────────────────
+// ── API: monitor (eavesdrop via fs_cli) ──────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='monitor') {
     error_reporting(0); header('Content-Type: application/json');
-    $mode      = $_GET['mode']      ?? 'listen';  // listen | whisper | barge
-    $agent_ext = $_GET['agent_ext'] ?? '';
-    $sup_ext_  = $_GET['sup_ext']   ?? '';
-    $domain_   = $_GET['domain']    ?? 'client1.skykin.local';
+    $mode      = $_GET['mode']      ?? 'listen';
+    $agent_ext = preg_replace('/[^0-9]/','',$_GET['agent_ext'] ?? '');
+    $sup_ext_  = preg_replace('/[^0-9]/','',$_GET['sup_ext']   ?? '');
+    $domain_   = preg_replace('/[^a-zA-Z0-9.\-]/','',$_GET['domain'] ?? 'client1.skykin.local');
 
-    // Map mode to eavesdrop flag: m=mute both, w=whisper to agent, t=three-way
+    if (!$agent_ext || !$sup_ext_) { echo json_encode(['ok'=>false,'error'=>'Missing extension']); exit; }
+
+    // Map mode to eavesdrop flag: m=mute(listen), w=whisper to agent, t=three-way(barge)
     $flag_map = ['listen'=>'m','whisper'=>'w','barge'=>'t'];
     $flag = $flag_map[$mode] ?? 'm';
 
-    // FreeSWITCH HTTP API (mod_xml_rpc) – default port 8080
-    $fs_url  = 'http://127.0.0.1:8080/api/';
-    $fs_user = 'freeswitch';
-    $fs_pass = 'works';
+    // Use fs_cli to originate eavesdrop — supervisor's phone will ring
+    $originate = "{eavesdrop_enable_dtmf=true,eavesdrop_audio={$flag}}sofia/internal/{$sup_ext_}@{$domain_}";
+    $cmd = "fs_cli -x " . escapeshellarg("originate {$originate} &eavesdrop({$agent_ext}@{$domain_})") . " 2>&1";
+    $res = shell_exec($cmd);
 
-    // First get the agent's active call UUID
-    $cmd = urlencode("show channels like ".$agent_ext." as json");
-    $ch = curl_init($fs_url.'show+channels+like+'.$agent_ext.'+as+json');
-    curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_USERPWD=>"$fs_user:$fs_pass",CURLOPT_TIMEOUT=>3]);
-    $result = curl_exec($ch); curl_close($ch);
-
-    // Originate eavesdrop call to supervisor
-    $originate_cmd = "{eavesdrop_enable_dtmf=true,eavesdrop_audio=$flag}sofia/internal/{$sup_ext_}@{$domain_}";
-    $api_url = $fs_url.'originate/'.urlencode($originate_cmd).'/eavesdrop:'.urlencode($agent_ext.'@'.$domain_);
-
-    $ch2 = curl_init($api_url);
-    curl_setopt_array($ch2,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_USERPWD=>"$fs_user:$fs_pass",CURLOPT_TIMEOUT=>5]);
-    $res = curl_exec($ch2); $err = curl_error($ch2); curl_close($ch2);
-
-    echo json_encode(['ok'=>!$err,'result'=>$res,'error'=>$err,'mode'=>$mode]);
+    if (strpos($res, '+OK') !== false || strpos($res, 'uuid') !== false) {
+        echo json_encode(['ok'=>true,'result'=>trim($res)]);
+    } else {
+        echo json_encode(['ok'=>false,'error'=>trim($res) ?: 'Agent may not be on a call']);
+    }
     exit;
 }
 
