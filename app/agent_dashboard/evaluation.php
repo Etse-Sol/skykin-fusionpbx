@@ -504,7 +504,11 @@ function selectCall(r) {
     // Recording
     const aw = document.getElementById('audioWrap');
     if (r.record_name) {
-        const url = '/app/recordings/index.php?filename='+encodeURIComponent(r.record_name)+'&path='+encodeURIComponent(r.record_path||'');
+        // Serve .webm via FastAPI, .wav via FusionPBX recordings
+        const fname = r.record_name;
+        const url = fname.endsWith('.webm')
+            ? 'http://192.168.243.129:8001/api/recordings/' + encodeURIComponent(fname)
+            : '/app/recordings/index.php?filename='+encodeURIComponent(fname)+'&path='+encodeURIComponent(r.record_path||'');
         document.getElementById('evalAudio').src = url;
         aw.style.display = 'block';
     } else { aw.style.display = 'none'; }
