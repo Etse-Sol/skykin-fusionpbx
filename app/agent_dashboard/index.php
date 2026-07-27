@@ -1116,8 +1116,8 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     <a href="/app/agent_dashboard/crm.php"        style="color:#888;text-decoration:none">CRM</a>
 </div>
 
-<!-- ?? INCOMING CALL OVERLAY ?? -->
-<div class="incoming-overlay" id="incomingOverlay">
+<!-- ?? INCOMING CALL OVERLAY ?? (hidden, shown inside phone panel) -->
+<div class="incoming-overlay" id="incomingOverlay" style="display:none">
     <div class="incoming-title">&#128222; Incoming Call</div>
     <div class="incoming-number" id="incomingNumber">Unknown</div>
     <div class="incoming-actions">
@@ -1170,7 +1170,17 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
     </div>
     <div class="pp-body">
-        <div class="call-timer" id="callTimer">00:00</div>
+        <!-- Incoming call screen (shown instead of dialpad when call arrives) -->
+        <div id="incomingScreen" style="display:none; text-align:center; padding:24px 16px;">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">&#128222; Incoming Call</div>
+            <div id="incomingNumber" style="font-size:28px;font-weight:bold;color:#0047AB;margin-bottom:8px">Unknown</div>
+            <div style="font-size:12px;color:#666;margin-bottom:24px" id="incomingCidName"></div>
+            <div style="display:flex;gap:12px;justify-content:center;">
+                <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">&#128222; Answer</button>
+                <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">&#128548; Decline</button>
+            </div>
+        </div>
+        <div id="callTimer" class="call-timer">00:00</div>
         <!-- Hidden input syncs with dial pad display -->
         <input type="tel" class="dial-input" id="dialInput" placeholder="" maxlength="20" style="display:none">
         <div class="call-controls">
@@ -1751,20 +1761,26 @@ function setSipStatus(state, text) {
 function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
     document.getElementById('incomingNumber').textContent = callerNumber;
-    document.getElementById('incomingOverlay').style.display = 'block';
-    // Do NOT open phone panel ? overlay is fixed position, shows on its own
+    // Show incoming screen inside the phone panel, hide dial pad
+    document.getElementById('incomingScreen').style.display = 'block';
+    document.getElementById('dpPanel').style.display        = 'none';
+    openPhonePopup();
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
     startRingtone();
 }
 
 function answerCall() {
-    document.getElementById('incomingOverlay').style.display = 'none';
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display        = '';
     stopRingtone();
     if (sipBridge.answer) sipBridge.answer();
+    // Open CRM on answer ? triggered by user click so popup allowed
+    try { window.open('https://ahununu.com/', '_blank', 'noopener'); } catch(e) {}
 }
 
 function declineCall() {
-    document.getElementById('incomingOverlay').style.display = 'none';
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display        = '';
     stopRingtone();
     if (sipBridge.hangup) sipBridge.hangup();
     currentSession = null;
@@ -1817,10 +1833,15 @@ function startCallUI(number) {
     document.getElementById('btnRecord').classList.add('visible');
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number;
+    // Hide incoming screen if still showing (edge case)
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display = '';
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
-    // Auto-open CRM/customer page when call is answered
-    try { window.open('https://ahununu.com/', '_blank', 'noopener'); } catch(e) {}
+    // For outbound calls, open CRM automatically
+    if (lastCallType === 'Outbound') {
+        try { window.open('https://ahununu.com/', '_blank', 'noopener'); } catch(e) {}
+    }
 }
 
 function updateCallTimer() {
