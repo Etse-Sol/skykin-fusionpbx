@@ -246,9 +246,18 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 $call_duration = time() - (int)$ac['start_epoch'];
             }
 
+            // Load language skill from JSON file
+            $skillFile = __DIR__ . '/agent_skills.json';
+            static $skillData = null;
+            if ($skillData === null) {
+                $skillData = file_exists($skillFile) ? (json_decode(file_get_contents($skillFile), true) ?? []) : [];
+            }
+            $lang = $skillData[$domain][$ext] ?? 'English';
+
             $agents[] = [
                 'ext'          => $ext,
                 'name'         => $name,
+                'language'     => $lang,
                 'status'       => $status,
                 'cc_status'    => $cc['agent_status'] ?? 'Unknown',
                 'total_calls'  => (int)($st['total'] ?? 0),
@@ -424,6 +433,22 @@ if (isset($_GET['action']) && $_GET['action']==='monitor') {
 }
 
 // ── API: force_status ────────────────────────────────────────────────────────
+// ── API: set_skill (stores in JSON file, no DB schema change needed) ─────────
+if (isset($_GET['action']) && $_GET['action']==='set_skill') {
+    error_reporting(0); header('Content-Type: application/json');
+    $ext     = preg_replace('/[^0-9]/', '', $_GET['ext'] ?? '');
+    $lang    = preg_replace('/[^a-zA-Z]/', '', $_GET['lang'] ?? 'English');
+    $domain_ = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_GET['domain'] ?? 'client1.skykin.local');
+    $allowed = ['Amharic','English','Oromo','Other'];
+    if (!$ext || !in_array($lang, $allowed)) { echo json_encode(['ok'=>false,'error'=>'Invalid input']); exit; }
+    $skillFile = __DIR__ . '/agent_skills.json';
+    $skills = file_exists($skillFile) ? json_decode(file_get_contents($skillFile), true) : [];
+    $skills[$domain_][$ext] = $lang;
+    file_put_contents($skillFile, json_encode($skills, JSON_PRETTY_PRINT));
+    echo json_encode(['ok'=>true,'ext'=>$ext,'lang'=>$lang]);
+    exit;
+}
+
 if (isset($_GET['action']) && $_GET['action']==='force_status') {
     error_reporting(0); header('Content-Type: application/json');
     $agent_ext = $_GET['agent_ext'] ?? '';
@@ -1260,27 +1285,46 @@ function fetchSkillsAgents() {
             const queueMap = {Amharic:'8001',English:'8002',Oromo:'8003'};
             if (!agents||!agents.length) { div.innerHTML='<p style="color:#666">No agents found</p>'; return; }
             div.innerHTML = agents.map(a => {
-                const lang = a.language || 'English';
-                const color = langColors[lang] || '#aaa';
-                const queueExt = queueMap[lang] || '8000';
-                const ext = a.ext || a.extension || '?';
+                const ext  = a.ext || a.extension || '?';
+                // Load skill from localStorage (set by supervisor, persists in browser)
+                const savedLang = localStorage.getItem('skill_'+ext) || 'English';
+                const langColors = {Amharic:'#e74c3c',English:'#27ae60',Oromo:'#3498db',Other:'#f39c12'};
+                const queueMap   = {Amharic:'8001',English:'8002',Oromo:'8003',Other:'8000'};
+                const queueExt   = queueMap[savedLang] || '8000';
                 return `<div style="display:flex;align-items:center;justify-content:space-between;
-                    padding:8px 12px;background:#fff;border-radius:6px;margin-bottom:8px;
+                    padding:10px 14px;background:#fff;border-radius:8px;margin-bottom:8px;
                     border:1px solid #e0e0e0">
                     <div>
                         <strong>${a.name||ext}</strong>
                         <span style="color:#666;font-size:12px;margin-left:8px">Ext ${ext}</span>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
-                        <span style="background:${color}22;color:${color};padding:2px 10px;
-                            border-radius:10px;font-size:11px;font-weight:600">${lang}</span>
-                        <span style="background:#f0f0f0;color:#666;padding:2px 8px;
+                        <select onchange="saveSkill('${ext}',this.value,this)"
+                            style="border:1px solid #ddd;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;background:#fff">
+                            <option value="Amharic" ${savedLang==='Amharic'?'selected':''}>&#127466;&#127481; Amharic &rarr; Queue 8001</option>
+                            <option value="English" ${savedLang==='English'?'selected':''}>&#127758; English &rarr; Queue 8002</option>
+                            <option value="Oromo"   ${savedLang==='Oromo'  ?'selected':''}>&#9899; Oromo &rarr; Queue 8003</option>
+                            <option value="Other"   ${savedLang==='Other'  ?'selected':''}>&#9898; Other &rarr; Queue 8000</option>
+                        </select>
+                        <span id="qbadge_${ext}" style="background:#f0f0f0;color:#666;padding:3px 10px;
                             border-radius:10px;font-size:11px">Queue ${queueExt}</span>
                     </div>
                 </div>`;
             }).join('');
         }).catch(()=>{ document.getElementById('skillsAgentList').innerHTML='<p style="color:#999">Could not load agents</p>'; });
 }
+
+function saveSkill(ext, lang, selectEl) {
+    const queueMap = {Amharic:'8001',English:'8002',Oromo:'8003',Other:'8000'};
+    localStorage.setItem('skill_' + ext, lang);
+    const badge = document.getElementById('qbadge_' + ext);
+    if (badge) badge.textContent = 'Queue ' + (queueMap[lang] || '8000');
+    toast('&#10003; Ext ' + ext + ' skill set to ' + lang, '#2e7d32');
+}
+}
+
+}
+
 
 // Close Agent View dropdown when clicking outside
 document.addEventListener('click', function(e) {
