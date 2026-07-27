@@ -299,6 +299,12 @@ audio{width:100%;height:32px;border-radius:6px}
       <div style="font-size:32px;margin-bottom:12px">&#128203;</div>
       <div style="font-weight:600;color:#e6edf3;margin-bottom:6px">Select a call to evaluate</div>
       <div>Click any call from the list to score it</div>
+      <div style="margin-top:20px">
+        <button onclick="openManualEval()" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:10px 20px;font-size:13px;cursor:pointer;margin-top:8px">
+          + Manual Evaluation
+        </button>
+        <div style="font-size:11px;color:#666;margin-top:8px">Score an agent without a CDR record</div>
+      </div>
     </div>
     <div id="evalForm" style="display:none">
       <div class="tabs">
@@ -566,6 +572,60 @@ async function loadHistory() {
         </div>`;
     }).join('');
 }
+
+function openManualEval() {
+    // Clear any selected call
+    document.querySelectorAll('.call-item').forEach(el => el.classList.remove('selected'));
+    selectedCall = {
+        cdr_uuid: null, call_uuid: null,
+        call_time: new Date().toLocaleString(),
+        destination_number: '', caller_id_number: '', caller_id_name: '',
+        billsec: 0, record_name: null
+    };
+
+    document.getElementById('evalEmpty').style.display = 'none';
+    document.getElementById('evalForm').style.display  = 'block';
+    document.getElementById('emCallTime').textContent  = 'Manual Evaluation — ' + new Date().toLocaleDateString();
+    document.getElementById('emAgent').textContent     = '';
+    document.getElementById('emCaller').textContent    = '';
+    document.getElementById('emDuration').textContent  = '—';
+
+    // Make agent/caller fields editable for manual entry
+    const agentEl  = document.getElementById('emAgent');
+    const callerEl = document.getElementById('emCaller');
+    agentEl.contentEditable  = 'true';
+    callerEl.contentEditable = 'true';
+    agentEl.style.border     = '1px dashed #444';
+    agentEl.style.padding    = '2px 6px';
+    agentEl.style.borderRadius = '4px';
+    agentEl.style.minWidth   = '60px';
+    agentEl.style.display    = 'inline-block';
+    callerEl.style.border    = '1px dashed #444';
+    callerEl.style.padding   = '2px 6px';
+    callerEl.style.borderRadius = '4px';
+    callerEl.style.display   = 'inline-block';
+    agentEl.setAttribute('placeholder', 'e.g. 101');
+    callerEl.setAttribute('placeholder', 'e.g. +251911...');
+
+    // Override submit to pick up manual values
+    document.getElementById('evalForm').dataset.manual = '1';
+    document.getElementById('audioWrap') && (document.getElementById('audioWrap').style.display = 'none');
+}
+
+// Patch submitEval to support manual mode
+const _origSubmit = window.submitEval;
+window.submitEval = function() {
+    if (document.getElementById('evalForm').dataset.manual === '1') {
+        const agentVal  = document.getElementById('emAgent').textContent.trim();
+        const callerVal = document.getElementById('emCaller').textContent.trim();
+        if (!agentVal) { alert('Please enter the agent extension'); return; }
+        selectedCall.destination_number = agentVal;
+        selectedCall.caller_id_number   = callerVal;
+        selectedCall.call_time          = new Date().toLocaleString();
+        document.getElementById('evalForm').dataset.manual = '0';
+    }
+    if (_origSubmit) _origSubmit(); else submitEvalCore();
+};
 
 loadCalls();
 </script>
