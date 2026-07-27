@@ -122,7 +122,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
     try {
         $db = getDB();
         // All extensions in domain — join v_domains since v_extensions uses domain_uuid
-        $s = $db->prepare("SELECT e.extension, e.effective_caller_id_name
+        $s = $db->prepare("SELECT e.extension, e.effective_caller_id_name, e.description
             FROM v_extensions e
             JOIN v_domains d ON d.domain_uuid = e.domain_uuid
             WHERE d.domain_name=:d ORDER BY e.extension");
@@ -246,13 +246,10 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 $call_duration = time() - (int)$ac['start_epoch'];
             }
 
-            // Load language skill from JSON file
-            $skillFile = __DIR__ . '/agent_skills.json';
-            static $skillData = null;
-            if ($skillData === null) {
-                $skillData = file_exists($skillFile) ? (json_decode(file_get_contents($skillFile), true) ?? []) : [];
-            }
-            $lang = $skillData[$domain][$ext] ?? 'English';
+            // Extract language skill from description field (format: "skill:English")
+            $desc = $e['description'] ?? '';
+            $lang = 'English';
+            if (preg_match('/skill:(\w+)/i', $desc, $lm)) $lang = $lm[1];
 
             $agents[] = [
                 'ext'          => $ext,
@@ -433,7 +430,7 @@ if (isset($_GET['action']) && $_GET['action']==='monitor') {
 }
 
 // ── API: force_status ────────────────────────────────────────────────────────
-// ── API: set_skill (stores in JSON file, no DB schema change needed) ─────────
+// ── API: set_skill ───────────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='set_skill') {
     error_reporting(0); header('Content-Type: application/json');
     $ext     = preg_replace('/[^0-9]/', '', $_GET['ext'] ?? '');
@@ -441,11 +438,14 @@ if (isset($_GET['action']) && $_GET['action']==='set_skill') {
     $domain_ = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_GET['domain'] ?? 'client1.skykin.local');
     $allowed = ['Amharic','English','Oromo','Other'];
     if (!$ext || !in_array($lang, $allowed)) { echo json_encode(['ok'=>false,'error'=>'Invalid input']); exit; }
-    $skillFile = __DIR__ . '/agent_skills.json';
-    $skills = file_exists($skillFile) ? json_decode(file_get_contents($skillFile), true) : [];
-    $skills[$domain_][$ext] = $lang;
-    file_put_contents($skillFile, json_encode($skills, JSON_PRETTY_PRINT));
-    echo json_encode(['ok'=>true,'ext'=>$ext,'lang'=>$lang]);
+    try {
+        $db = getDB();
+        $s = $db->prepare("UPDATE v_extensions SET description=:desc
+            FROM v_domains WHERE v_extensions.domain_uuid=v_domains.domain_uuid
+            AND v_domains.domain_name=:d AND v_extensions.extension=:e");
+        $s->execute([':desc'=>'skill:'.$lang, ':d'=>$domain_, ':e'=>$ext]);
+        echo json_encode(['ok'=>true,'ext'=>$ext,'lang'=>$lang,'updated'=>$s->rowCount()]);
+    } catch(Exception $e) { echo json_encode(['ok'=>false,'error'=>$e->getMessage()]); }
     exit;
 }
 
