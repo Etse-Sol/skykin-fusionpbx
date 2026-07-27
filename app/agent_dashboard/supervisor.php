@@ -1267,12 +1267,13 @@ function fetchSkillsAgents() {
                 const lang = a.language || 'English';
                 const color = langColors[lang] || '#aaa';
                 const queueExt = queueMap[lang] || '8000';
+                const ext = a.ext || a.extension || '?';
                 return `<div style="display:flex;align-items:center;justify-content:space-between;
                     padding:8px 12px;background:#fff;border-radius:6px;margin-bottom:8px;
                     border:1px solid #e0e0e0">
                     <div>
-                        <strong>${a.name||a.extension}</strong>
-                        <span style="color:#666;font-size:12px;margin-left:8px">Ext ${a.extension}</span>
+                        <strong>${a.name||ext}</strong>
+                        <span style="color:#666;font-size:12px;margin-left:8px">Ext ${ext}</span>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
                         <span style="background:${color}22;color:${color};padding:2px 10px;
