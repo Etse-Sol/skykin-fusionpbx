@@ -92,7 +92,7 @@ if (isset($_GET['api'])) {
             if ($ext)    { $where.=" AND (caller_id_number=:e OR destination_number=:e)"; $params[':e']=$ext; }
             if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
             $s = $db->prepare("SELECT
-                uuid as cdr_uuid,
+                xml_cdr_uuid as cdr_uuid,
                 to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
                 caller_id_number, caller_id_name, destination_number,
                 direction, billsec, hangup_cause, record_name, record_path
