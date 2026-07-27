@@ -1979,9 +1979,7 @@ function stopRec() {
         const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
         const fd = new FormData();
         fd.append('file', blob, id + '.webm');
-        const ext = localStorage.getItem('sip_ext') || '';
-        const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-        fetch('index.php?action=save_recording&call_id=' + encodeURIComponent(id) + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom), { method:'POST', body:fd }).catch(()=>{});
+        fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd }).catch(()=>{});
     };
     mr.stop(); window.mediaRecorderRef = null;
 }
