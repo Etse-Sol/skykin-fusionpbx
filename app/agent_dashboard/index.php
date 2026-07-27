@@ -1152,9 +1152,11 @@ const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side fr
 const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
 const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 
-// Only set extension from server ? agent keeps their manually saved password
-if (serverExt) localStorage.setItem('sip_ext', serverExt);
-localStorage.setItem('sip_port', '7443');  // force WSS port for HTTPS
+// Auto-configure SIP from server on every page load ? no manual setup needed
+if (serverExt)  localStorage.setItem('sip_ext',  serverExt);
+if (serverPass) localStorage.setItem('sip_pass', serverPass);
+localStorage.setItem('sip_server', location.hostname);
+localStorage.setItem('sip_port',   '7443');
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
@@ -1577,8 +1579,8 @@ let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFil
 window.sipBridge = {}; var sipBridge = window.sipBridge;
 
 function loadSipSettings() {
-    const ext  = localStorage.getItem('sip_ext')    || '';
-    const pass = localStorage.getItem('sip_pass')   || '';
+    const ext  = localStorage.getItem('sip_ext')  || serverExt  || '';
+    const pass = localStorage.getItem('sip_pass') || serverPass || '';
     const dom  = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
     // Always route through NGINX proxy (/wss/) which uses trusted cert
     // Strip any stored protocol/port/path and rebuild cleanly
