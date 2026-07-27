@@ -1579,18 +1579,17 @@ window.sipBridge = {}; var sipBridge = window.sipBridge;
 function loadSipSettings() {
     const ext    = localStorage.getItem('sip_ext')    || '';
     const pass   = localStorage.getItem('sip_pass')   || '';
-    let   server = localStorage.getItem('sip_server') || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
-    const port   = localStorage.getItem('sip_port')   || '7443';
+    const server = localStorage.getItem('sip_server') || ('wss://' + location.host + '/wss/');
+    const port   = localStorage.getItem('sip_port')   || '443';
     const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-    // Always use WSS on HTTPS pages ? strip any existing protocol and re-add wss://
-    server = server.replace(/^wss?:\/\//i, '');
-    const wsUrl = 'wss://' + server;
+    // Display the clean hostname in settings panel (strip protocol+path for readability)
+    const displayHost = server.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'');
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
-    document.getElementById('sipServer').value = server;
+    document.getElementById('sipServer').value = displayHost;
     document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
 }
 
 function waitForSipBridge(cb, tries) {
@@ -1982,7 +1981,13 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
     ua = new UserAgent({
         uri: UserAgent.makeURI('sip:' + ext + '@' + dom),
-        transportOptions: { server: (server.startsWith('wss://') || server.startsWith('ws://') ? server : 'wss://' + server) + ':' + (port || '7443') },
+        transportOptions: {
+            // server may be a full wss:// URL (e.g. wss://host/wss/) or just a hostname
+            // If it already looks like a complete URI, use it as-is; otherwise build from parts
+            server: (server.startsWith('wss://') || server.startsWith('ws://'))
+                ? server
+                : 'wss://' + server + ':' + (port || '7443')
+        },
         authorizationUsername: ext,
         authorizationPassword: pass
     });
