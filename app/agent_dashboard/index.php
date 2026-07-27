@@ -1732,6 +1732,9 @@ function setSipStatus(state, text) {
     } else if (state === 'calling') {
         dot.classList.add('calling'); badge.classList.add('show','calling');
         fab.classList.add('ringing'); openPhonePopup();
+        // Show hang-up button so caller can cancel before answer
+        document.getElementById('btnCall').style.display   = 'none';
+        document.getElementById('btnHangup').style.display = 'block';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
@@ -1749,17 +1752,20 @@ function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
     document.getElementById('incomingNumber').textContent = callerNumber;
     document.getElementById('incomingOverlay').style.display = 'block';
-    openPhonePopup();
+    // Do NOT open phone panel ? overlay is fixed position, shows on its own
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
+    startRingtone();
 }
 
 function answerCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
+    stopRingtone();
     if (sipBridge.answer) sipBridge.answer();
 }
 
 function declineCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
+    stopRingtone();
     if (sipBridge.hangup) sipBridge.hangup();
     currentSession = null;
 }
@@ -1773,7 +1779,36 @@ function makeCall(number) {
     else showToast('SIP not ready. Open Phone Settings to connect.');
 }
 
+// ?? Ringtone (Web Audio API ? no file needed) ??????????????????????????????
+let _ringCtx = null, _ringNode = null, _ringInterval = null;
+function startRingtone() {
+    stopRingtone();
+    function _ring() {
+        try {
+            _ringCtx = new (window.AudioContext || window.webkitAudioContext)();
+            // Two short beeps: ring pattern
+            [0, 0.15].forEach(offset => {
+                const o = _ringCtx.createOscillator();
+                const g = _ringCtx.createGain();
+                o.connect(g); g.connect(_ringCtx.destination);
+                o.type = 'sine'; o.frequency.value = 440;
+                g.gain.setValueAtTime(0.4, _ringCtx.currentTime + offset);
+                g.gain.exponentialRampToValueAtTime(0.001, _ringCtx.currentTime + offset + 0.12);
+                o.start(_ringCtx.currentTime + offset);
+                o.stop(_ringCtx.currentTime + offset + 0.13);
+            });
+        } catch(e) {}
+    }
+    _ring();
+    _ringInterval = setInterval(_ring, 2500);
+}
+function stopRingtone() {
+    if (_ringInterval) { clearInterval(_ringInterval); _ringInterval = null; }
+    if (_ringCtx) { try { _ringCtx.close(); } catch(e) {} _ringCtx = null; }
+}
+
 function startCallUI(number) {
+    stopRingtone();
     setSipStatus('incall', 'In Call: ' + number);
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
@@ -1784,6 +1819,8 @@ function startCallUI(number) {
     document.getElementById('dialInput').value = number;
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    // Auto-open CRM/customer page when call is answered
+    try { window.open('https://ahununu.com/', '_blank', 'noopener'); } catch(e) {}
 }
 
 function updateCallTimer() {
@@ -1838,6 +1875,7 @@ function toggleRecord() {
 }
 
 function endCall() {
+    stopRingtone();
     const callDur = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
     const callerNum = lastDialedNumber || document.getElementById('dialInput').value || '';
     const recFile = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
