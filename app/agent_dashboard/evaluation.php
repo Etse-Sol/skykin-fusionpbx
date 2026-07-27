@@ -464,10 +464,10 @@ async function loadCalls() {
     const rows = await resp.json();
     document.getElementById('callCount').textContent = rows.length + ' calls';
     if (!rows.length) { list.innerHTML='<div class="empty-state">No answered calls found</div>'; return; }
-    list.innerHTML = rows.map(r => {
+    list.innerHTML = rows.map((r, i) => {
         const ev = r.eval;
         const evBadge = ev ? `<span class="grade-badge grade-${ev.grade.replace('+','\\+')}">${ev.grade}</span>` : '';
-        return `<div class="call-item${ev?' evaluated':''}" onclick="selectCall(${JSON.stringify(JSON.stringify(r)).slice(1,-1)})">
+        return `<div class="call-item${ev?' evaluated':''}" data-idx="${i}">
           <div class="ci-top">
             <span class="ci-nums">${r.caller_id_number} &rarr; ${r.destination_number}</span>
             <span class="ci-time">${r.call_time}</span>
@@ -480,10 +480,14 @@ async function loadCalls() {
           </div>
         </div>`;
     }).join('');
+    // attach click handlers via event delegation
+    window._evalRows = rows;
+    list.querySelectorAll('.call-item').forEach(el => {
+        el.addEventListener('click', function() { selectCall(window._evalRows[+this.dataset.idx]); });
+    });
 }
 
-function selectCall(jsonStr) {
-    const r = JSON.parse(jsonStr);
+function selectCall(r) {
     selectedCall = r;
     // Highlight
     document.querySelectorAll('.call-item').forEach(el => el.classList.remove('selected'));
