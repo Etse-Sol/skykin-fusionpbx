@@ -2149,7 +2149,14 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
     ua.delegate = {
         onInvite(inv) {
             session = inv;
-            const num = inv.remoteIdentity?.uri?.user || 'Unknown';
+            // Try multiple places in SIP.js to get the caller number
+            const num = inv.remoteIdentity?.uri?.user
+                || inv.remoteIdentity?.displayName
+                || inv.request?.from?.uri?.user
+                || inv.request?.getHeader?.('P-Asserted-Identity')?.match(/sip:(\+?[\d]+)@/)?.[1]
+                || inv.request?.getHeader?.('From')?.match(/sip:(\+?[\d]+)@/)?.[1]
+                || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
+                || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
