@@ -316,8 +316,8 @@ audio{width:100%;height:32px;border-radius:6px}
         <div class="eval-title">Call Evaluation</div>
         <div class="eval-meta">
           <div>Call Time: <span id="emCallTime">—</span></div>
-          <div>Agent: <span id="emAgent">—</span></div>
-          <div>Caller: <span id="emCaller">—</span></div>
+          <div>Agent Extension: <input id="emAgent" type="text" placeholder="e.g. 101" style="background:#1c2128;border:1px solid #30363d;color:#e6edf3;border-radius:4px;padding:3px 8px;font-size:13px;width:100px;margin-left:4px"></div>
+          <div>Caller Number: <input id="emCaller" type="text" placeholder="e.g. 102 or +251..." style="background:#1c2128;border:1px solid #30363d;color:#e6edf3;border-radius:4px;padding:3px 8px;font-size:13px;width:150px;margin-left:4px"></div>
           <div>Duration: <span id="emDuration">—</span></div>
         </div>
 
@@ -493,8 +493,8 @@ function selectCall(jsonStr) {
     document.getElementById('evalForm').style.display  = 'block';
 
     document.getElementById('emCallTime').textContent = r.call_time;
-    document.getElementById('emAgent').textContent    = r.destination_number;
-    document.getElementById('emCaller').textContent   = r.caller_id_number + (r.caller_id_name?' ('+r.caller_id_name+')':'');
+    document.getElementById('emAgent').value    = r.destination_number;
+    document.getElementById('emCaller').value   = r.caller_id_number + (r.caller_id_name?' ('+r.caller_id_name+')':'');
     document.getElementById('emDuration').textContent = fmtSecs(r.billsec);
 
     // Recording
@@ -586,8 +586,8 @@ function openManualEval() {
     document.getElementById('evalEmpty').style.display = 'none';
     document.getElementById('evalForm').style.display  = 'block';
     document.getElementById('emCallTime').textContent  = 'Manual Evaluation — ' + new Date().toLocaleDateString();
-    document.getElementById('emAgent').textContent     = '';
-    document.getElementById('emCaller').textContent    = '';
+    document.getElementById('emAgent').value     = '';
+    document.getElementById('emCaller').value    = '';
     document.getElementById('emDuration').textContent  = '—';
 
     // Make agent/caller fields editable for manual entry
@@ -616,12 +616,11 @@ function openManualEval() {
 const _origSubmit = window.submitEval;
 window.submitEval = function() {
     if (document.getElementById('evalForm').dataset.manual === '1') {
-        const agentVal  = document.getElementById('emAgent').textContent.trim();
-        const callerVal = document.getElementById('emCaller').textContent.trim();
+        const agentVal  = document.getElementById('emAgent').value.trim();
+        const callerVal = document.getElementById('emCaller').value.trim();
         if (!agentVal) { alert('Please enter the agent extension'); return; }
         selectedCall.destination_number = agentVal;
         selectedCall.caller_id_number   = callerVal;
-        selectedCall.call_time          = new Date().toLocaleString();
         document.getElementById('evalForm').dataset.manual = '0';
     }
     if (_origSubmit) _origSubmit(); else submitEvalCore();
