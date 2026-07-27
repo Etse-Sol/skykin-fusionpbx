@@ -552,27 +552,23 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
         $s = $db->prepare("SELECT
             to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
             caller_id_number, destination_number, direction, billsec, duration,
-            hangup_cause, codec
+            hangup_cause
             FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
             AND billsec > 0
             ORDER BY start_epoch DESC LIMIT 500");
         $s->execute([':d'=>$domain_,':ts'=>$ts,':te'=>$te]);
         $rows = [];
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $billsec = (int)$r['billsec'];
+            $billsec  = (int)$r['billsec'];
             $duration = (int)$r['duration'];
-            $codec = strtolower($r['codec'] ?? 'opus');
-            // MOS estimation heuristic:
-            // Base score by codec quality
-            $base = str_contains($codec,'opus')||str_contains($codec,'g722') ? 4.3
-                  : (str_contains($codec,'pcm')||str_contains($codec,'g711')||str_contains($codec,'ulaw')||str_contains($codec,'alaw') ? 4.1 : 3.8);
-            // Very short calls (< 10s) suggest audio issue
+            // WebRTC calls use Opus by default — base MOS 4.3
+            $base = 4.3;
+            // Very short calls suggest audio issue
             if ($billsec < 10) $base -= 0.6;
             elseif ($billsec < 30) $base -= 0.2;
-            // Post-call delay (ring time) penalty
+            // Long ring time penalty
             $ring_time = max(0, $duration - $billsec);
             if ($ring_time > 30) $base -= 0.1;
-            // Clamp to 1–5
             $mos = max(1.0, min(5.0, $base));
             $b = $billsec;
             $rows[] = [
@@ -582,7 +578,7 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
                 'direction'         => $r['direction'],
                 'duration'          => floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
                 'mos'               => round($mos, 2),
-                'codec'             => $r['codec'] ?? 'unknown',
+                'codec'             => 'opus/WebRTC',
                 'hangup_cause'      => $r['hangup_cause'] ?? '',
             ];
         }
