@@ -1577,16 +1577,18 @@ let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFil
 window.sipBridge = {}; var sipBridge = window.sipBridge;
 
 function loadSipSettings() {
-    const ext    = localStorage.getItem('sip_ext')    || '';
-    const pass   = localStorage.getItem('sip_pass')   || '';
-    const server = localStorage.getItem('sip_server') || ('wss://' + location.host + '/wss/');
-    const port   = localStorage.getItem('sip_port')   || '443';
-    const dom    = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-    // Display the clean hostname in settings panel (strip protocol+path for readability)
-    const displayHost = server.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'');
+    const ext  = localStorage.getItem('sip_ext')    || '';
+    const pass = localStorage.getItem('sip_pass')   || '';
+    const dom  = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    // Always route through NGINX proxy (/wss/) which uses trusted cert
+    // Strip any stored protocol/port/path and rebuild cleanly
+    const rawServer = localStorage.getItem('sip_server') || location.hostname;
+    const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
+    const server    = 'wss://' + cleanHost + '/wss/';
+    const port      = '443';
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
-    document.getElementById('sipServer').value = displayHost;
+    document.getElementById('sipServer').value = cleanHost;
     document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
     if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
