@@ -58,6 +58,26 @@ $domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain'])  : $logged
 $sup_ext = isset($_GET['ext'])    ? htmlspecialchars($_GET['ext'])     : '';
 $today   = date('Y-m-d');
 
+// Fetch agent list for Agent View dropdown
+$nav_agents = [];
+try {
+    $db_nav = getDB();
+    $sn = $db_nav->prepare("
+        SELECT e.extension, COALESCE(NULLIF(e.effective_caller_id_name,''), 'Extension '||e.extension) as name,
+               u.username
+        FROM v_extensions e
+        JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+        LEFT JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+        LEFT JOIN v_users u ON u.user_uuid = eu.user_uuid
+        LEFT JOIN v_user_groups ug ON ug.user_uuid = u.user_uuid
+        LEFT JOIN v_groups g ON g.group_uuid = ug.group_uuid
+        WHERE d.domain_name = :d
+        AND (g.group_name IS NULL OR LOWER(g.group_name) NOT IN ('superadmin','admin','supervisor'))
+        ORDER BY e.extension");
+    $sn->execute([':d' => $domain]);
+    $nav_agents = $sn->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { /* silent */ }
+
 // ── DB helper ────────────────────────────────────────────────────────────────
 function getDB() {
     static $db = null;
@@ -697,7 +717,24 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         &nbsp;|&nbsp;
         <a href="/app/agent_dashboard/crm.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">CRM</a>
         &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/index.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Agent View</a>
+        <span style="position:relative;display:inline-block">
+            <span id="agentViewBtn" onclick="document.getElementById('agentViewDrop').style.display=document.getElementById('agentViewDrop').style.display==='block'?'none':'block'"
+                  style="color:rgba(255,255,255,.8);font-size:11px;cursor:pointer">
+                Agent View &#9660;
+            </span>
+            <div id="agentViewDrop" style="display:none;position:absolute;right:0;top:20px;background:#fff;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.2);min-width:160px;z-index:999;overflow:hidden">
+                <?php foreach($nav_agents as $na): ?>
+                <a href="/app/agent_dashboard/index.php?agent=<?php echo urlencode($na['username'] ?: $na['extension']); ?>&domain=<?php echo urlencode($domain); ?>"
+                   style="display:block;padding:8px 14px;font-size:12px;color:#333;text-decoration:none;border-bottom:1px solid #f0f0f0"
+                   onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background=''">
+                    <?php echo htmlspecialchars($na['extension'].' — '.$na['name']); ?>
+                </a>
+                <?php endforeach; ?>
+                <?php if(empty($nav_agents)): ?>
+                <span style="display:block;padding:8px 14px;font-size:12px;color:#999">No agents found</span>
+                <?php endif; ?>
+            </div>
+        </span>
     </div>
 </div>
 
@@ -1217,6 +1254,14 @@ function fetchSkillsAgents() {
         }).catch(()=>{ document.getElementById('skillsAgentList').innerHTML='<p style="color:#999">Could not load agents</p>'; });
 }
 
+// Close Agent View dropdown when clicking outside
+document.addEventListener('click', function(e) {
+    const drop = document.getElementById('agentViewDrop');
+    const btn  = document.getElementById('agentViewBtn');
+    if (drop && btn && !btn.contains(e.target) && !drop.contains(e.target)) {
+        drop.style.display = 'none';
+    }
+});
 </script>
 </body>
 </html>
