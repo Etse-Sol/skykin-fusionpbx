@@ -94,48 +94,43 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                 $data['sla_rate']          = min(100, round(($data['answered_calls']/$data['total_calls'])*95));
             }
 
-            // Build SIP-username -> extension map so CDR stored by username resolves correctly
-            $uname_ext = [];
-            try {
-                $su = $db->prepare("SELECT e.extension, u.username
-                    FROM v_extensions e
-                    JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                    JOIN v_users u ON u.user_uuid = eu.user_uuid
-                    JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                    WHERE d.domain_name = :d");
-                $su->execute([':d' => $domain]);
-                foreach ($su->fetchAll(PDO::FETCH_ASSOC) as $um) {
-                    $uname_ext[strtolower($um['username'])] = $um['extension'];
-                }
-            } catch (Exception $e2) { /* silent */ }
-
-            // Recent calls - no numeric filter so username-destination calls are not dropped
+            // Recent calls
             $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
                 direction,caller_id_number,destination_number,billsec,hangup_cause
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND (caller_id_number=:e OR destination_number=:e)
+                AND caller_id_number ~ '^[0-9+][0-9\-\(\) ]*$'
+                AND destination_number ~ '^[0-9+][0-9\-\(\) ]*$'
                 AND start_epoch>=:ts AND start_epoch<=:te
                 ORDER BY start_epoch DESC LIMIT 500");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
             foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $in      = ($r['destination_number']==$extension);
-                $bill    = (int)$r['billsec'];
+                $in   = ($r['destination_number']==$extension);
+                $bill = (int)$r['billsec'];
+                // Clean up SIP addresses ? strip @domain suffix
                 $raw_num = $in ? $r['caller_id_number'] : $r['destination_number'];
-                // Strip SIP @domain suffix
-                $clean   = preg_replace('/@.*$/', '', $raw_num);
-                // If not a dialable number, try resolving as a SIP username -> extension
-                if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean)) {
-                    $clean = $uname_ext[strtolower($clean)] ?? 'Unknown';
+                $clean_num = preg_replace('/@.*$/', '', $raw_num);   // strip @host
+                // If it still looks like garbage (non-dialable), mark as Unknown
+                if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean_num)) {
+                    $clean_num = 'Unknown';
                 }
                 $data['recent_calls'][] = [
                     'time'       => $r['call_time'],
                     'type'       => $in ? 'Inbound' : 'Outbound',
-                    'number'     => $clean,
+                    'number'     => $clean_num,
                     'duration'   => floor($bill/60).':'.str_pad($bill%60,2,'0',STR_PAD_LEFT),
                     'status'     => $bill>0 ? 'Answered' : 'Missed',
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
                 ];
             }
+
+            // Agents online
+            try {
+                $sa = $db->prepare("SELECT COUNT(*) as cnt FROM v_call_center_agents WHERE domain_name=:d AND agent_status='Available'");
+                $sa->execute([':d'=>$domain]);
+                $ra = $sa->fetch(PDO::FETCH_ASSOC);
+                $data['agents_online'] = $ra ? (int)$ra['cnt'] : 1;
+            } catch(Exception $ignored){}
         }
     } catch (Exception $e) { $data['db_error']=$e->getMessage(); }
 
@@ -1987,7 +1982,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
     ua = new UserAgent({
         uri: UserAgent.makeURI('sip:' + ext + '@' + dom),
-        transportOptions: { server: 'ws://' + server + ':' + (port || '5066') },
+        transportOptions: { server: (server.startsWith('wss://') || server.startsWith('ws://') ? server : 'wss://' + server) + ':' + (port || '7443') },
         authorizationUsername: ext,
         authorizationPassword: pass
     });
@@ -1996,10 +1991,6 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
     reg.stateChange.addListener(state => {
         if (state === 'Registered') {
             window.setSipStatus('registered', 'Registered (' + ext + ')');
-            fetch('http://192.168.243.129:8001/api/agent/login', {
-                method:'POST', headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({ agent_id: ext })
-            }).catch(()=>{});
         } else if (state === 'Unregistered') {
             window.setSipStatus('unregistered', 'Not Registered');
         } else if (state === 'Terminated') {
