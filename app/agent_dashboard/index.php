@@ -174,10 +174,41 @@ if (isset($_GET['action']) && $_GET['action'] === 'acw_history') {
 }
 
 // ?? Save ACW (After-Call Work) to DB ????????????????????????????????????????
-if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
+// ?? Save recording (browser WebRTC recording ? server file + CDR link) ??????
+if (isset($_GET['action']) && $_GET['action'] === 'save_recording') {
     error_reporting(0);
     header('Content-Type: application/json');
-    header('Access-Control-Allow-Origin: *');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST' || empty($_FILES['file'])) {
+        echo json_encode(['ok'=>false,'error'=>'No file']); exit;
+    }
+    $call_id = preg_replace('/[^a-zA-Z0-9_\-]/', '', $_GET['call_id'] ?? 'rec_'.time());
+    $ext     = preg_replace('/[^0-9]/', '', $_GET['ext'] ?? '');
+    $dom     = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_GET['domain'] ?? 'client1.skykin.local');
+    $recDir  = '/var/lib/freeswitch/recordings/';
+    $fname   = $call_id . '.webm';
+    $fpath   = $recDir . $fname;
+    if (!move_uploaded_file($_FILES['file']['tmp_name'], $fpath)) {
+        echo json_encode(['ok'=>false,'error'=>'Save failed']); exit;
+    }
+    chmod($fpath, 0644);
+    // Link to CDR ? update most recent answered call for this extension
+    try {
+        $db2 = new PDO("pgsql:host=127.0.0.1;port=5432;dbname=fusionpbx",
+            'fusionpbx', '', [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        $upd = $db2->prepare("UPDATE v_xml_cdr SET record_name=:fn, record_path=:rp
+            WHERE xml_cdr_uuid = (
+                SELECT xml_cdr_uuid FROM v_xml_cdr
+                WHERE domain_name=:d AND billsec>0
+                AND (caller_id_number=:e OR destination_number=:e)
+                AND (record_name IS NULL OR record_name='')
+                ORDER BY start_epoch DESC LIMIT 1
+            )");
+        $upd->execute([':fn'=>$fname,':rp'=>$recDir,':d'=>$dom,':e'=>$ext]);
+    } catch (Exception $ex) { /* silent */ }
+    echo json_encode(['ok'=>true,'file'=>$fname]); exit;
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
 
     $db = null;
@@ -1948,7 +1979,9 @@ function stopRec() {
         const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
         const fd = new FormData();
         fd.append('file', blob, id + '.webm');
-        fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd }).catch(()=>{});
+        const ext = localStorage.getItem('sip_ext') || '';
+        const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+        fetch('index.php?action=save_recording&call_id=' + encodeURIComponent(id) + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom), { method:'POST', body:fd }).catch(()=>{});
     };
     mr.stop(); window.mediaRecorderRef = null;
 }
