@@ -56,6 +56,22 @@ $logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
 
 $domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain'])  : $logged_in_domain;
 $sup_ext = isset($_GET['ext'])    ? htmlspecialchars($_GET['ext'])     : '';
+
+// Auto-detect supervisor's own extension from their username
+if (!$sup_ext && $logged_in_user) {
+    try {
+        $db_se = getDB();
+        $se = $db_se->prepare("
+            SELECT e.extension FROM v_extensions e
+            JOIN v_extension_users eu ON eu.extension_uuid=e.extension_uuid
+            JOIN v_users u ON u.user_uuid=eu.user_uuid
+            JOIN v_domains d ON d.domain_uuid=e.domain_uuid
+            WHERE u.username=:u AND d.domain_name=:d LIMIT 1");
+        $se->execute([':u'=>$logged_in_user,':d'=>$domain]);
+        $row = $se->fetch(PDO::FETCH_ASSOC);
+        if ($row) $sup_ext = $row['extension'];
+    } catch(Exception $ignored){}
+}
 $today   = date('Y-m-d');
 
 // Fetch agent list for Agent View dropdown
@@ -177,15 +193,33 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             }
         } catch(Exception $ignored){}
 
-        // Latest active call per extension from CDR (approximate)
-        $s4 = $db->prepare("SELECT DISTINCT ON (caller_id_number) caller_id_number as ext,
-            destination_number, start_epoch, billsec
-            FROM v_xml_cdr WHERE domain_name=:d AND billsec=0
-            AND start_epoch >= (EXTRACT(EPOCH FROM NOW())-3600)::bigint
-            ORDER BY caller_id_number, start_epoch DESC");
-        $s4->execute([':d'=>$domain]);
+        // ── Active calls from FreeSWITCH live channels ───────────────────────
+        // CDR only written after call ends, so use fs_cli show channels instead
         $activeCalls = [];
-        foreach($s4->fetchAll(PDO::FETCH_ASSOC) as $r) $activeCalls[$r['ext']] = $r;
+        try {
+            $ch_out = shell_exec("fs_cli -x 'show channels as json' 2>/dev/null");
+            if ($ch_out) {
+                $ch_json = json_decode($ch_out, true);
+                $rows = $ch_json['rows'] ?? [];
+                foreach ($rows as $ch_row) {
+                    // Column order: uuid, direction, created, name, state, cid_name, cid_num, ip, dest, ...
+                    $ch_name  = $ch_row['name']        ?? '';  // e.g. sofia/internal/101@domain
+                    $ch_dest  = $ch_row['dest']        ?? '';
+                    $ch_cid   = $ch_row['cid_num']     ?? '';
+                    $ch_state = $ch_row['callstate']   ?? '';
+                    $ch_epoch = $ch_row['created_epoch'] ?? 0;
+                    // Extract extension from channel name
+                    if (preg_match('/sofia\/internal\/(\d+)@/i', $ch_name, $m)) {
+                        $ch_ext = $m[1];
+                        $activeCalls[$ch_ext] = [
+                            'ext'   => $ch_ext,
+                            'destination_number' => $ch_dest ?: $ch_cid,
+                            'start_epoch' => (int)$ch_epoch,
+                        ];
+                    }
+                }
+            }
+        } catch(Exception $ignored){}
 
         $agents = [];
         foreach($exts as $e) {
@@ -921,6 +955,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 <script>
 const domain   = '<?php echo $domain; ?>';
 const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') || '';
+// Pre-fill localStorage with server-detected extension so monitor() doesn't prompt
+if ('<?php echo $sup_ext; ?>' && !localStorage.getItem('sup_ext')) localStorage.setItem('sup_ext','<?php echo $sup_ext; ?>');
 const today    = '<?php echo $today; ?>';
 let agentTimers = {};
 
@@ -1013,14 +1049,17 @@ function renderAgents(agents){
 
 // ── Monitor / Barge ────────────────────────────────────────────────────────
 function monitor(agentExt, mode){
-    const myExt = supExt || prompt('Enter YOUR supervisor extension to receive the monitoring call:');
-    if(!myExt){toast('Enter your extension in the URL: ?ext=YOUR_EXT','#c62828');return;}
-    localStorage.setItem('sup_ext',myExt);
-    toast('Connecting '+mode+' on ext '+agentExt+'...');
+    let myExt = supExt || localStorage.getItem('sup_ext') || '';
+    if(!myExt){
+        myExt = prompt('Enter YOUR supervisor extension (the phone that will ring):');
+        if(!myExt){toast('Cancelled — no supervisor extension set','#c62828');return;}
+        localStorage.setItem('sup_ext', myExt);
+    }
+    toast('&#128266; Connecting '+mode+' — your phone (ext '+myExt+') will ring in 5-10 sec...');
     fetch('supervisor.php?action=monitor&mode='+mode+'&agent_ext='+encodeURIComponent(agentExt)+'&sup_ext='+encodeURIComponent(myExt)+'&domain='+encodeURIComponent(domain))
         .then(r=>r.json()).then(d=>{
-            if(d.ok) toast('&#128266; '+mode.charAt(0).toUpperCase()+mode.slice(1)+' started. Your phone should ring.','#2e7d32');
-            else toast('Monitor failed: '+(d.error||d.result||'Unknown error'),'#c62828');
+            if(d.ok) toast('&#128266; '+mode.charAt(0).toUpperCase()+mode.slice(1)+' started — pick up your phone (ext '+myExt+')','#2e7d32');
+            else toast('Monitor failed: '+(d.error||d.result||'Agent not on a call'),'#c62828');
         }).catch(e=>toast('Network error: '+e.message,'#c62828'));
 }
 
