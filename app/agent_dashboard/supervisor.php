@@ -122,7 +122,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
     try {
         $db = getDB();
         // All extensions in domain — join v_domains since v_extensions uses domain_uuid
-        $s = $db->prepare("SELECT e.extension, e.effective_caller_id_name
+        $s = $db->prepare("SELECT e.extension, e.effective_caller_id_name, e.description
             FROM v_extensions e
             JOIN v_domains d ON d.domain_uuid = e.domain_uuid
             WHERE d.domain_name=:d ORDER BY e.extension");
@@ -246,9 +246,15 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 $call_duration = time() - (int)$ac['start_epoch'];
             }
 
+            // Extract language skill from description field (format: "skill:English")
+            $desc = $e['description'] ?? '';
+            $lang = 'English';
+            if (preg_match('/skill:(\w+)/i', $desc, $lm)) $lang = $lm[1];
+
             $agents[] = [
                 'ext'          => $ext,
                 'name'         => $name,
+                'language'     => $lang,
                 'status'       => $status,
                 'cc_status'    => $cc['agent_status'] ?? 'Unknown',
                 'total_calls'  => (int)($st['total'] ?? 0),
@@ -424,6 +430,25 @@ if (isset($_GET['action']) && $_GET['action']==='monitor') {
 }
 
 // ── API: force_status ────────────────────────────────────────────────────────
+// ── API: set_skill ───────────────────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action']==='set_skill') {
+    error_reporting(0); header('Content-Type: application/json');
+    $ext     = preg_replace('/[^0-9]/', '', $_GET['ext'] ?? '');
+    $lang    = preg_replace('/[^a-zA-Z]/', '', $_GET['lang'] ?? 'English');
+    $domain_ = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_GET['domain'] ?? 'client1.skykin.local');
+    $allowed = ['Amharic','English','Oromo','Other'];
+    if (!$ext || !in_array($lang, $allowed)) { echo json_encode(['ok'=>false,'error'=>'Invalid input']); exit; }
+    try {
+        $db = getDB();
+        $s = $db->prepare("UPDATE v_extensions SET description=:desc
+            FROM v_domains WHERE v_extensions.domain_uuid=v_domains.domain_uuid
+            AND v_domains.domain_name=:d AND v_extensions.extension=:e");
+        $s->execute([':desc'=>'skill:'.$lang, ':d'=>$domain_, ':e'=>$ext]);
+        echo json_encode(['ok'=>true,'ext'=>$ext,'lang'=>$lang,'updated'=>$s->rowCount()]);
+    } catch(Exception $e) { echo json_encode(['ok'=>false,'error'=>$e->getMessage()]); }
+    exit;
+}
+
 if (isset($_GET['action']) && $_GET['action']==='force_status') {
     error_reporting(0); header('Content-Type: application/json');
     $agent_ext = $_GET['agent_ext'] ?? '';
@@ -1265,21 +1290,36 @@ function fetchSkillsAgents() {
                 const queueExt = queueMap[lang] || '8000';
                 const ext = a.ext || a.extension || '?';
                 return `<div style="display:flex;align-items:center;justify-content:space-between;
-                    padding:8px 12px;background:#fff;border-radius:6px;margin-bottom:8px;
+                    padding:10px 14px;background:#fff;border-radius:8px;margin-bottom:8px;
                     border:1px solid #e0e0e0">
                     <div>
                         <strong>${a.name||ext}</strong>
                         <span style="color:#666;font-size:12px;margin-left:8px">Ext ${ext}</span>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
-                        <span style="background:${color}22;color:${color};padding:2px 10px;
-                            border-radius:10px;font-size:11px;font-weight:600">${lang}</span>
-                        <span style="background:#f0f0f0;color:#666;padding:2px 8px;
+                        <select onchange="saveSkill('${ext}','${a.name||ext}',this.value)"
+                            style="border:1px solid #ddd;border-radius:6px;padding:4px 10px;font-size:12px;cursor:pointer;background:#fff">
+                            <option value="Amharic" ${lang==='Amharic'?'selected':''}>🇪🇹 Amharic → Queue 8001</option>
+                            <option value="English" ${lang==='English'?'selected':''}>🌐 English → Queue 8002</option>
+                            <option value="Oromo"   ${lang==='Oromo'?'selected':''}>🟠 Oromo → Queue 8003</option>
+                            <option value="Other"   ${lang==='Other'?'selected':''}>⚪ Other → Queue 8000</option>
+                        </select>
+                        <span style="background:#f0f0f0;color:#666;padding:3px 10px;
                             border-radius:10px;font-size:11px">Queue ${queueExt}</span>
                     </div>
                 </div>`;
             }).join('');
         }).catch(()=>{ document.getElementById('skillsAgentList').innerHTML='<p style="color:#999">Could not load agents</p>'; });
+}
+
+function saveSkill(ext, name, lang) {
+    fetch(`supervisor.php?action=set_skill&ext=${encodeURIComponent(ext)}&lang=${encodeURIComponent(lang)}&domain=${encodeURIComponent(domain)}`)
+        .then(r=>r.json()).then(d=>{
+            if (d.ok) toast(`✅ ${name} (${ext}) skill set to ${lang}`, '#2e7d32');
+            else toast('Failed: '+(d.error||'Unknown'), '#c62828');
+            fetchSkillsAgents(); // refresh to update queue badge
+        }).catch(e=>toast('Error: '+e.message,'#c62828'));
+}
 }
 
 // Close Agent View dropdown when clicking outside
