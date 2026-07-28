@@ -426,7 +426,28 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ?? Layout ?? */
-.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; }
+.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; transition: margin-right 0.3s ease; }
+
+/* CRM slide-in panel */
+.crm-panel {
+    position: fixed; top: 64px; right: -520px; width: 500px;
+    height: calc(100vh - 64px); background: #fff;
+    box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+    z-index: 300; transition: right 0.3s ease;
+    display: flex; flex-direction: column;
+    border-left: 3px solid #0047AB;
+}
+.crm-panel.open { right: 0; }
+.crm-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: #0047AB; color: #fff; flex-shrink: 0;
+}
+.crm-panel-header span { font-size: 13px; font-weight: 600; }
+.crm-panel-header button {
+    background: rgba(255,255,255,0.2); border: none; color: #fff;
+    border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px;
+}
+.crm-panel iframe { flex: 1; border: none; width: 100%; }
 
 /* ?? Summary Cards ?? */
 .summary-grid {
@@ -1769,8 +1790,7 @@ function answerCall() {
     document.getElementById('dpPanel').style.display        = '';
     stopRingtone();
     if (sipBridge.answer) sipBridge.answer();
-    // Open CRM on answer ? triggered by user click so popup allowed
-    try { window.open('https://ahununu.com/', '_blank', 'noopener'); } catch(e) {}
+    openCrmPanel(); // open ahununu.com inside dashboard
 }
 
 function declineCall() {
@@ -1833,10 +1853,20 @@ function startCallUI(number) {
     document.getElementById('dpPanel').style.display = '';
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
-    // For outbound calls, open CRM automatically
-    if (lastCallType === 'Outbound') {
-        try { window.open('https://ahununu.com/', '_blank', 'noopener'); } catch(e) {}
-    }
+    // For outbound calls open CRM panel
+    if (lastCallType === 'Outbound') openCrmPanel();
+}
+
+// ── CRM Panel helpers ──────────────────────────────────────────────────────
+function openCrmPanel() {
+    document.getElementById('crmFrame').src = 'https://ahununu.com/';
+    document.getElementById('crmPanel').classList.add('open');
+    document.querySelector('.main').style.marginRight = '510px';
+}
+function closeCrmPanel() {
+    document.getElementById('crmPanel').classList.remove('open');
+    document.querySelector('.main').style.marginRight = '';
+    setTimeout(()=>{ document.getElementById('crmFrame').src = 'about:blank'; }, 400);
 }
 
 function updateCallTimer() {
@@ -1892,6 +1922,7 @@ function toggleRecord() {
 
 function endCall() {
     stopRingtone();
+    closeCrmPanel();
     const callDur = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
     const callerNum = lastDialedNumber || document.getElementById('dialInput').value || '';
     const recFile = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
@@ -2034,6 +2065,15 @@ startCountdown();
 
 <!-- Remote audio for WebRTC calls -->
 <audio id="remoteAudio" autoplay style="display:none"></audio>
+
+<!-- CRM slide-in panel -->
+<div class="crm-panel" id="crmPanel">
+    <div class="crm-panel-header">
+        <span>&#128100; Customer Info — ahununu.com</span>
+        <button onclick="closeCrmPanel()">&#10005; Close</button>
+    </div>
+    <iframe id="crmFrame" src="about:blank" allow="camera;microphone"></iframe>
+</div>
 
 <!-- SIP.js 0.21 local bundle (built from /opt/call_center node_modules) -->
 <script src="/app/agent_dashboard/js/sipjs.bundle.js"></script>
