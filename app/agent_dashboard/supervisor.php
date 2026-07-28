@@ -1202,7 +1202,7 @@ function playRec(path, file){
     const player=document.getElementById('recPlayer');
     // .webm files served via FastAPI, .wav via FusionPBX built-in
     const url = file.endsWith('.webm')
-        ? '/recordings-api/'+encodeURIComponent(file)
+        ? 'http://192.168.243.129:8001/api/recordings/'+encodeURIComponent(file)
         : '/app/recordings/index.php?filename='+encodeURIComponent(file)+'&path='+encodeURIComponent(path);
     player.src=url; player.style.display='block';
     player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });

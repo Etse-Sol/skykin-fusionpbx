@@ -507,7 +507,7 @@ function selectCall(r) {
         // Serve .webm via FastAPI, .wav via FusionPBX recordings
         const fname = r.record_name;
         const url = fname.endsWith('.webm')
-            ? '/recordings-api/' + encodeURIComponent(fname)
+            ? 'http://192.168.243.129:8001/api/recordings/' + encodeURIComponent(fname)
             : '/app/recordings/index.php?filename='+encodeURIComponent(fname)+'&path='+encodeURIComponent(r.record_path||'');
         document.getElementById('evalAudio').src = url;
         aw.style.display = 'block';

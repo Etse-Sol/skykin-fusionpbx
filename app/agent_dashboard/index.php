@@ -253,7 +253,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
                 'duration'      => $dur_m,
                 'direction'     => $cdr_dir,
                 'filename'      => $fname,
-                'filepath'      => '/recordings-api/' . urlencode($fname),
+                'filepath'      => 'http://192.168.243.129:8001/api/recordings/' . urlencode($fname),
             ];
         }
     }
@@ -2173,7 +2173,7 @@ function stopRec() {
         const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
         // Upload to FastAPI then link to FusionPBX CDR for Evaluation badge
         try {
-            const resp = await fetch('/recordings-api/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
+            const resp = await fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
             if (resp.ok) {
                 // Link recording filename to CDR so ?? badge shows in Evaluation
                 fetch('index.php?action=link_recording&filename=' + encodeURIComponent(id+'.webm') + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom));
