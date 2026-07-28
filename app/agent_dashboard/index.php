@@ -208,7 +208,62 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_recording') {
     echo json_encode(['ok'=>true,'file'=>$fname]); exit;
 }
 
-// ?? Link recording to CDR after FastAPI upload ???????????????????????????????
+// ── API: recordings — list .webm files for this agent ─────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
+    error_reporting(0); header('Content-Type: application/json');
+    $ext     = preg_replace('/[^0-9]/', '', $_GET['ext'] ?? '');
+    $domain_ = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_GET['domain'] ?? 'client1.skykin.local');
+    $from    = $_GET['from'] ?? date('Y-m-d');
+    $to      = $_GET['to']   ?? date('Y-m-d');
+    $ts_from = strtotime($from . ' 00:00:00');
+    $ts_to   = strtotime($to   . ' 23:59:59');
+    $recDir  = '/var/lib/freeswitch/recordings/';
+    $recs    = [];
+
+    // Read all .webm files in recordings dir, filter by date
+    if (is_dir($recDir)) {
+        foreach (glob($recDir . 'call-*.webm') as $fpath) {
+            $fname   = basename($fpath);
+            $fmtime  = filemtime($fpath);
+            if ($fmtime < $ts_from || $fmtime > $ts_to) continue;
+
+            // Try to enrich from CDR
+            $cdr_caller = ''; $cdr_dest = ''; $cdr_dir = 'outbound'; $cdr_bill = 0;
+            try {
+                $db = getDB();
+                $cq = $db->prepare("SELECT caller_id_number, destination_number, direction, billsec
+                    FROM v_xml_cdr WHERE domain_name=:d AND record_name=:fn LIMIT 1");
+                $cq->execute([':d'=>$domain_, ':fn'=>$fname]);
+                $cr = $cq->fetch(PDO::FETCH_ASSOC);
+                if ($cr) {
+                    $cdr_caller = $cr['caller_id_number'];
+                    $cdr_dest   = $cr['destination_number'];
+                    $cdr_dir    = $cr['direction'] ?? 'outbound';
+                    $cdr_bill   = (int)$cr['billsec'];
+                }
+            } catch(Exception $ignored){}
+
+            // Determine remote number — pick the side that isn't the agent's ext
+            $remote = $cdr_caller === $ext ? $cdr_dest : ($cdr_dest === $ext ? $cdr_caller : ($cdr_caller ?: $cdr_dest ?: 'Unknown'));
+            $dur_m  = $cdr_bill ? floor($cdr_bill/60).':'.str_pad($cdr_bill%60,2,'0',STR_PAD_LEFT) : '?';
+
+            $recs[] = [
+                'datetime'      => date('Y-m-d H:i', $fmtime),
+                'remote_number' => $remote,
+                'duration'      => $dur_m,
+                'direction'     => $cdr_dir,
+                'filename'      => $fname,
+                'filepath'      => 'http://192.168.243.129:8001/api/recordings/' . urlencode($fname),
+            ];
+        }
+    }
+    // Sort newest first
+    usort($recs, fn($a,$b) => strcmp($b['datetime'], $a['datetime']));
+    echo json_encode(['recordings' => $recs]);
+    exit;
+}
+
+// ── Link recording to CDR after FastAPI upload ─────────────────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'link_recording') {
     error_reporting(0);
     header('Content-Type: application/json');
@@ -1439,7 +1494,7 @@ function fetchRecordings() {
         +'&to='+encodeURIComponent(to))
         .then(r => r.json())
         .then(data => updateRecordings(data.recordings || []))
-        .catch(() => updateRecordings(getDemoRecordings()));
+        .catch(() => updateRecordings([]));
 }
 
 function updateRecordings(recs) {
