@@ -430,23 +430,24 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* CRM slide-in panel */
 .crm-panel {
-    position: fixed; top: 64px; right: -520px; width: 500px;
+    position: fixed; top: 64px; right: -420px; width: 400px;
     height: calc(100vh - 64px); background: #fff;
-    box-shadow: -4px 0 20px rgba(0,0,0,0.15);
-    z-index: 300; transition: right 0.3s ease;
+    box-shadow: -4px 0 24px rgba(0,0,0,0.2);
+    z-index: 500; transition: right 0.3s ease;
     display: flex; flex-direction: column;
     border-left: 3px solid #0047AB;
 }
 .crm-panel.open { right: 0; }
 .crm-panel-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 14px; background: #0047AB; color: #fff; flex-shrink: 0;
+    padding: 8px 12px; background: #0047AB; color: #fff; flex-shrink: 0;
 }
-.crm-panel-header span { font-size: 13px; font-weight: 600; }
+.crm-panel-header span { font-size: 12px; font-weight: 600; }
 .crm-panel-header button {
     background: rgba(255,255,255,0.2); border: none; color: #fff;
-    border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px;
+    border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 11px;
 }
+.crm-panel-header button:hover { background: rgba(255,255,255,0.35); }
 .crm-panel iframe { flex: 1; border: none; width: 100%; }
 
 /* ?? Summary Cards ?? */
@@ -1861,11 +1862,9 @@ function startCallUI(number) {
 function openCrmPanel() {
     document.getElementById('crmFrame').src = 'https://ahununu.com/';
     document.getElementById('crmPanel').classList.add('open');
-    document.querySelector('.main').style.marginRight = '510px';
 }
 function closeCrmPanel() {
     document.getElementById('crmPanel').classList.remove('open');
-    document.querySelector('.main').style.marginRight = '';
     setTimeout(()=>{ document.getElementById('crmFrame').src = 'about:blank'; }, 400);
 }
 
