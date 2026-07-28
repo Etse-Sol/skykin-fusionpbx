@@ -577,13 +577,13 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* ?? Floating Phone Widget ?? */
 .phone-fab {
-    position: fixed; bottom: 28px; right: 28px; z-index: 500;
+    position: fixed; bottom: 28px; right: 28px; z-index: 600;
     width: 58px; height: 58px; border-radius: 50%;
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     border: none; cursor: pointer; color: white; font-size: 24px;
     box-shadow: 0 4px 20px rgba(0,71,171,0.45);
     display: flex; align-items: center; justify-content: center;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s, right 0.3s ease;
 }
 .phone-fab:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,71,171,0.55); }
 .phone-fab.incall { background: linear-gradient(135deg, #dc3545, #c82333); animation: fabPulse 1.5s infinite; }
@@ -603,7 +603,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* Static phone side panel */
 .phone-popup {
-    position: fixed; top: 60px; right: -320px; z-index: 499;
+    position: fixed; top: 60px; right: -320px; z-index: 601;
     width: 300px; max-height: calc(100vh - 60px);
     background: white; border-left: 1px solid #e0e0e0;
     box-shadow: -4px 0 20px rgba(0,0,0,0.12);
@@ -1862,9 +1862,11 @@ function startCallUI(number) {
 function openCrmPanel() {
     document.getElementById('crmFrame').src = 'https://ahununu.com/';
     document.getElementById('crmPanel').classList.add('open');
+    document.getElementById('phoneFab').style.right = '418px';
 }
 function closeCrmPanel() {
     document.getElementById('crmPanel').classList.remove('open');
+    document.getElementById('phoneFab').style.right = '';
     setTimeout(()=>{ document.getElementById('crmFrame').src = 'about:blank'; }, 400);
 }
 
