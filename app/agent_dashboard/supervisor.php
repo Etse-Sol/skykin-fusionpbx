@@ -1073,13 +1073,24 @@ function renderAgents(agents){
     const grid = document.getElementById('agentsGrid');
     if(!agents.length){grid.innerHTML='<div style="color:#aaa;padding:20px">No agents found in this domain.</div>';return;}
     grid.innerHTML = agents.map(a=>{
-        const col   = statusColor(a.status);
-        const lbl   = statusLabel(a.status);
-        const ini   = initials(a.name);
-        const inCall= a.status==='incall';
+        const col    = statusColor(a.status);
+        const lbl    = statusLabel(a.status);
+        const ini    = initials(a.name);
+        const inCall = a.status==='incall';
         const callInfo = inCall && a.on_call_with ? `On call with: <strong>${a.on_call_with}</strong>` : '';
-        const talkTime = inCall && a.total_talk ? 'Talk today: '+fmtSec(a.total_talk) : '';
-        const rate = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 100;
+
+        const rate      = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 100;
+        const rateColor = rate>=80?'#28a745':rate>=60?'#fd7e14':'#dc3545';
+
+        // Talk vs Idle — estimate idle from shift start (08:00)
+        const shiftSecs = Math.max(1, Math.floor((Date.now()/1000) - new Date().setHours(8,0,0,0)/1000));
+        const talkPct   = Math.min(100, Math.round((a.total_talk||0) / shiftSecs * 100));
+        const talkColor = talkPct>=60?'#28a745':talkPct>=30?'#fd7e14':'#17a2b8';
+
+        // ACW estimate (~15% of talk time)
+        const acwSecs = Math.round((a.total_talk||0) * 0.15);
+        const acwPct  = Math.min(100, Math.round(acwSecs / shiftSecs * 100));
+
         return `<div class="agent-card ${a.status}" id="card-${a.ext}">
             <div class="card-top">
                 <div class="agent-avatar avatar-${a.status}" style="background:${col}">${ini}</div>
@@ -1095,8 +1106,37 @@ function renderAgents(agents){
                 <div class="metric-mini"><div class="metric-mini-val" style="color:#f44336">${a.missed}</div><div class="metric-mini-lbl">Missed</div></div>
                 <div class="metric-mini"><div class="metric-mini-val">${fmtSec(a.total_talk)}</div><div class="metric-mini-lbl">Talk Time</div></div>
             </div>
-            <div style="font-size:10px;color:#aaa;margin:4px 0 8px">
-                Avg: ${fmtDur(a.avg_dur)} &nbsp;|&nbsp; Answer rate: ${rate}%
+
+            <!-- Performance bars -->
+            <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+                        <span>Answer Rate</span><span style="color:${rateColor};font-weight:600">${rate}%</span>
+                    </div>
+                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
+                        <div style="background:${rateColor};width:${rate}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    </div>
+                </div>
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+                        <span>Talk vs Idle</span><span style="color:${talkColor};font-weight:600">${talkPct}%</span>
+                    </div>
+                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
+                        <div style="background:${talkColor};width:${talkPct}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    </div>
+                </div>
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+                        <span>ACW Time</span><span style="color:#fd7e14;font-weight:600">${fmtSec(acwSecs)} (${acwPct}%)</span>
+                    </div>
+                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
+                        <div style="background:#fd7e14;width:${acwPct}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-size:10px;color:#aaa;margin:6px 0 8px">
+                Avg call: ${fmtDur(a.avg_dur)} &nbsp;|&nbsp; Total calls: ${a.total_calls||0}
             </div>
             <div class="card-actions">
                 <button class="btn-listen"  onclick="monitor('${a.ext}','listen')"  title="Listen silently">&#128266; Listen</button>
