@@ -731,7 +731,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <span class="clock" id="supClock">--:--:--</span>
         <span style="opacity:.8;font-size:12px"><?php echo htmlspecialchars($logged_in_user); ?></span>
         <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
-        <a href="/login/index.php?logout=1" style="color:rgba(255,255,255,.7);font-size:11px;text-decoration:none">Sign out</a>
         &nbsp;|&nbsp;
         <span style="position:relative;display:inline-block">
             <span id="agentViewBtn" onclick="document.getElementById('agentViewDrop').style.display=document.getElementById('agentViewDrop').style.display==='block'?'none':'block'"

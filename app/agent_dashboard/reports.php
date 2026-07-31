@@ -201,35 +201,35 @@ if (isset($_GET['api'])) {
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}
+body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
 
 /* ─── Top Nav ─────────────────────────────── */
-.topbar{background:#161b22;border-bottom:1px solid #30363d;padding:0 24px;height:56px;
+.topbar{background:linear-gradient(135deg,#0047AB,#00B4D8);border-bottom:1px solid #e0e0e0;padding:0 24px;height:56px;
   display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
 .topbar-left{display:flex;align-items:center;gap:20px}
 .brand{font-weight:700;font-size:17px;color:#58a6ff;letter-spacing:.5px}
-.brand span{color:#e6edf3;font-weight:400}
+.brand span{color:#333;font-weight:400}
 .nav-links{display:flex;gap:4px}
-.nav-links a{color:#8b949e;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
-.nav-links a:hover,.nav-links a.active{background:#21262d;color:#e6edf3}
-.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#8b949e}
-.user-pill{background:#21262d;padding:5px 12px;border-radius:20px;color:#e6edf3;font-size:12px}
+.nav-links a{color:#888;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
+.nav-links a:hover,.nav-links a.active{background:#f0f2f5;color:#333}
+.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#888}
+.user-pill{background:#f0f2f5;padding:5px 12px;border-radius:20px;color:#333;font-size:12px}
 
 /* ─── Filters ─────────────────────────────── */
-.filters{background:#161b22;border-bottom:1px solid #30363d;padding:12px 24px;
+.filters{background:#ffffff;border-bottom:1px solid #e0e0e0;padding:12px 24px;
   display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.filters label{font-size:12px;color:#8b949e}
-.filters input,.filters select{background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+.filters label{font-size:12px;color:#888}
+.filters input,.filters select{background:#f0f2f5;border:1px solid #e0e0e0;color:#333;
   padding:6px 10px;border-radius:6px;font-size:13px}
 .filters input:focus,.filters select:focus{outline:none;border-color:#58a6ff}
 .btn-filter{background:#238636;color:#fff;border:none;padding:7px 16px;border-radius:6px;
   cursor:pointer;font-size:13px;font-weight:500}
 .btn-filter:hover{background:#2ea043}
-.btn-export{background:#21262d;color:#58a6ff;border:1px solid #30363d;padding:7px 14px;
+.btn-export{background:#f0f2f5;color:#58a6ff;border:1px solid #e0e0e0;padding:7px 14px;
   border-radius:6px;cursor:pointer;font-size:13px}
-.btn-export:hover{background:#30363d}
+.btn-export:hover{background:#e0e0e0}
 .range-presets{display:flex;gap:6px}
-.preset-btn{background:#21262d;border:1px solid #30363d;color:#8b949e;padding:5px 10px;
+.preset-btn{background:#f0f2f5;border:1px solid #e0e0e0;color:#888;padding:5px 10px;
   border-radius:6px;cursor:pointer;font-size:12px}
 .preset-btn:hover,.preset-btn.active{background:#388bfd22;border-color:#58a6ff;color:#58a6ff}
 
@@ -238,10 +238,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
 
 /* ─── KPI cards ───────────────────────────── */
 .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:20px}
-.kpi-card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px}
-.kpi-label{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-.kpi-value{font-size:28px;font-weight:700;color:#e6edf3;line-height:1}
-.kpi-sub{font-size:11px;color:#8b949e;margin-top:4px}
+.kpi-card{background:#ffffff;border:1px solid #e0e0e0;border-radius:10px;padding:16px}
+.kpi-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.kpi-value{font-size:28px;font-weight:700;color:#333;line-height:1}
+.kpi-sub{font-size:11px;color:#888;margin-top:4px}
 .kpi-card.green .kpi-value{color:#3fb950}
 .kpi-card.red .kpi-value{color:#f85149}
 .kpi-card.blue .kpi-value{color:#58a6ff}
@@ -249,24 +249,24 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
 
 /* ─── Chart cards ─────────────────────────── */
 .chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
-.chart-card{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px}
+.chart-card{background:#ffffff;border:1px solid #e0e0e0;border-radius:10px;padding:20px}
 .chart-card.full{grid-column:1/-1}
-.chart-title{font-size:13px;font-weight:600;color:#e6edf3;margin-bottom:16px}
+.chart-title{font-size:13px;font-weight:600;color:#333;margin-bottom:16px}
 .chart-wrap{position:relative;height:240px}
 
 /* ─── Agent table ─────────────────────────── */
-.section-title{font-size:14px;font-weight:600;color:#e6edf3;margin-bottom:12px}
+.section-title{font-size:14px;font-weight:600;color:#333;margin-bottom:12px}
 .data-table{width:100%;border-collapse:collapse;font-size:13px}
-.data-table th{background:#21262d;color:#8b949e;padding:10px 12px;text-align:left;
+.data-table th{background:#f0f2f5;color:#888;padding:10px 12px;text-align:left;
   font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-.data-table td{padding:10px 12px;border-bottom:1px solid #21262d;color:#e6edf3;vertical-align:middle}
-.data-table tr:hover td{background:#21262d22}
+.data-table td{padding:10px 12px;border-bottom:1px solid #21262d;color:#333;vertical-align:middle}
+.data-table tr:hover td{background:#f0f2f522}
 .data-table tr:last-child td{border-bottom:none}
 .bar-cell{display:flex;align-items:center;gap:8px}
-.bar-bg{flex:1;background:#21262d;border-radius:4px;height:6px;min-width:60px}
+.bar-bg{flex:1;background:#f0f2f5;border-radius:4px;height:6px;min-width:60px}
 .bar-fill{height:6px;border-radius:4px;background:#58a6ff;transition:.5s}
 .bar-fill.green{background:#3fb950}
-.rank-badge{width:24px;height:24px;border-radius:50%;background:#21262d;color:#8b949e;
+.rank-badge{width:24px;height:24px;border-radius:50%;background:#f0f2f5;color:#888;
   font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
 .rank-badge.gold{background:#d29922;color:#0d1117}
 .rank-badge.silver{background:#8b949e;color:#0d1117}
@@ -277,10 +277,10 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
 .answer-rate.bad{color:#f85149}
 
 /* ─── Queue table ─────────────────────────── */
-.queue-table-wrap{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;margin-bottom:20px}
+.queue-table-wrap{background:#ffffff;border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-bottom:20px}
 
 /* ─── Loading ─────────────────────────────── */
-.loading-overlay{display:flex;align-items:center;justify-content:center;height:80px;color:#8b949e;font-size:13px}
+.loading-overlay{display:flex;align-items:center;justify-content:center;height:80px;color:#888;font-size:13px}
 </style>
 </head>
 <body>
@@ -314,7 +314,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
   </div>
   <button class="btn-filter" onclick="loadAll()">&#128200; Refresh</button>
   <button class="btn-export" onclick="exportCSV()">&#11015; Export CSV</button>
-  <span id="loadStatus" style="font-size:12px;color:#8b949e"></span>
+  <span id="loadStatus" style="font-size:12px;color:#888"></span>
 </div>
 
 <div class="page">
@@ -347,7 +347,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
   </div>
 
   <!-- Agent Performance -->
-  <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;margin-bottom:20px">
+  <div style="background:#ffffff;border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-bottom:20px">
     <div class="section-title">Agent Performance</div>
     <table class="data-table">
       <thead><tr>
@@ -467,7 +467,7 @@ async function loadAgents() {
     const rows = await api('agent_performance');
     const tbody = document.getElementById('agentBody');
     if (!Array.isArray(rows) || rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:30px;color:#8b949e">No call data found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:30px;color:#888">No call data found</td></tr>';
         return;
     }
     const maxTotal = rows[0].total || 1;
@@ -479,7 +479,7 @@ async function loadAgents() {
         return `<tr>
           <td><div class="rank-badge ${rc}">${i+1}</div></td>
           <td><strong>${r.name}</strong></td>
-          <td style="color:#8b949e">${r.ext}</td>
+          <td style="color:#888">${r.ext}</td>
           <td>
             <div class="bar-cell">
               <div class="bar-bg"><div class="bar-fill" style="width:${Math.round(r.total/maxTotal*100)}%"></div></div>
@@ -501,7 +501,7 @@ async function loadQueues() {
     const rows = await api('queue_sla');
     const tbody = document.getElementById('queueBody');
     if (!Array.isArray(rows) || rows.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#8b949e">No queue data found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#888">No queue data found</td></tr>';
         return;
     }
     tbody.innerHTML = rows.map(r => {

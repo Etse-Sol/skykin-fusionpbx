@@ -160,44 +160,44 @@ if (isset($_GET['api'])) {
 <title>SkyKin – CRM</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}
+body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
 
-.topbar{background:#161b22;border-bottom:1px solid #30363d;padding:0 24px;height:56px;
+.topbar{background:linear-gradient(135deg,#0047AB,#00B4D8);border-bottom:1px solid #e0e0e0;padding:0 24px;height:56px;
   display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
 .topbar-left{display:flex;align-items:center;gap:20px}
 .brand{font-weight:700;font-size:17px;color:#58a6ff;letter-spacing:.5px}
-.brand span{color:#e6edf3;font-weight:400}
+.brand span{color:#333;font-weight:400}
 .nav-links{display:flex;gap:4px}
-.nav-links a{color:#8b949e;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
-.nav-links a:hover,.nav-links a.active{background:#21262d;color:#e6edf3}
-.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#8b949e}
-.user-pill{background:#21262d;padding:5px 12px;border-radius:20px;color:#e6edf3;font-size:12px}
+.nav-links a{color:#888;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
+.nav-links a:hover,.nav-links a.active{background:#f0f2f5;color:#333}
+.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#888}
+.user-pill{background:#f0f2f5;padding:5px 12px;border-radius:20px;color:#333;font-size:12px}
 
-.toolbar{background:#161b22;border-bottom:1px solid #30363d;padding:12px 24px;
+.toolbar{background:#ffffff;border-bottom:1px solid #e0e0e0;padding:12px 24px;
   display:flex;align-items:center;gap:12px}
-.toolbar input{background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+.toolbar input{background:#f0f2f5;border:1px solid #e0e0e0;color:#333;
   padding:7px 12px;border-radius:6px;font-size:13px;width:280px}
 .toolbar input:focus{outline:none;border-color:#58a6ff}
 .btn-primary{background:#238636;color:#fff;border:none;padding:7px 16px;border-radius:6px;
   cursor:pointer;font-size:13px;font-weight:500}
 .btn-primary:hover{background:#2ea043}
-.btn-sec{background:#21262d;color:#e6edf3;border:1px solid #30363d;padding:7px 14px;
+.btn-sec{background:#f0f2f5;color:#333;border:1px solid #e0e0e0;padding:7px 14px;
   border-radius:6px;cursor:pointer;font-size:13px}
-.btn-sec:hover{background:#30363d}
+.btn-sec:hover{background:#e0e0e0}
 
 .layout{display:grid;grid-template-columns:1fr 400px;height:calc(100vh - 110px)}
-.contact-list{overflow-y:auto;border-right:1px solid #30363d}
-.contact-panel{overflow-y:auto;background:#161b22;padding:24px}
+.contact-list{overflow-y:auto;border-right:1px solid #e0e0e0}
+.contact-panel{overflow-y:auto;background:#ffffff;padding:24px}
 
 .contact-item{padding:14px 16px;border-bottom:1px solid #21262d;cursor:pointer;transition:.15s}
-.contact-item:hover{background:#21262d}
+.contact-item:hover{background:#f0f2f5}
 .contact-item.selected{background:#388bfd18;border-left:3px solid #58a6ff}
 .ct-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
 .ct-name{font-size:14px;font-weight:600}
 .ct-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
 .ct-badge.VIP{background:#d2992233;color:#d29922}
 .ct-badge.Customer{background:#388bfd22;color:#58a6ff}
-.ct-meta{font-size:11px;color:#8b949e;display:flex;gap:12px}
+.ct-meta{font-size:11px;color:#888;display:flex;gap:12px}
 .lang-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
 .lang-Amharic{background:#f85149}
 .lang-English{background:#3fb950}
@@ -207,9 +207,9 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
 /* Panel */
 .panel-title{font-size:15px;font-weight:600;margin-bottom:16px}
 .form-field{margin-bottom:14px}
-.form-field label{display:block;font-size:11px;color:#8b949e;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
+.form-field label{display:block;font-size:11px;color:#888;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
 .form-field input,.form-field select,.form-field textarea{
-  width:100%;background:#21262d;border:1px solid #30363d;color:#e6edf3;
+  width:100%;background:#f0f2f5;border:1px solid #e0e0e0;color:#333;
   padding:8px 10px;border-radius:6px;font-family:inherit;font-size:13px}
 .form-field input:focus,.form-field select:focus,.form-field textarea:focus{outline:none;border-color:#58a6ff}
 .form-field textarea{resize:vertical;min-height:70px}
@@ -222,14 +222,14 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
 .btn-delete:hover{background:#f8514922}
 
 .call-history{margin-top:20px}
-.call-history h4{font-size:12px;color:#8b949e;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}
+.call-history h4{font-size:12px;color:#888;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}
 .ch-row{display:flex;justify-content:space-between;align-items:center;
-  padding:8px 10px;background:#21262d;border-radius:6px;margin-bottom:6px;font-size:12px}
+  padding:8px 10px;background:#f0f2f5;border-radius:6px;margin-bottom:6px;font-size:12px}
 .ch-dir{padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600}
 .ch-dir.inbound{background:#388bfd22;color:#58a6ff}
 .ch-dir.outbound{background:#f0883e22;color:#f0883e}
-.empty-state{text-align:center;padding:40px;color:#8b949e;font-size:13px}
-.count-badge{background:#21262d;color:#8b949e;padding:3px 10px;border-radius:10px;font-size:12px;margin-left:8px}
+.empty-state{text-align:center;padding:40px;color:#888;font-size:13px}
+.count-badge{background:#f0f2f5;color:#888;padding:3px 10px;border-radius:10px;font-size:12px;margin-left:8px}
 </style>
 </head>
 <body>
@@ -265,7 +265,7 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
   <div class="contact-panel">
     <div id="panelEmpty" class="empty-state" style="margin-top:60px">
       <div style="font-size:32px;margin-bottom:12px">&#128100;</div>
-      <div style="font-weight:600;color:#e6edf3;margin-bottom:6px">Select a contact</div>
+      <div style="font-weight:600;color:#333;margin-bottom:6px">Select a contact</div>
       <div>Click a contact to view or edit</div>
     </div>
     <div id="panelForm" style="display:none">
@@ -373,7 +373,7 @@ function editContact(jsonStr) {
               <span>${h.call_time}</span>
               <span class="ch-dir ${h.direction}">${h.direction}</span>
               <span>${Math.floor(h.billsec/60)}m ${h.billsec%60}s</span>
-              <span style="color:#8b949e">${h.hangup_cause||''}</span>
+              <span style="color:#888">${h.hangup_cause||''}</span>
             </div>`).join('');
         document.getElementById('callHistorySection').style.display = 'block';
     } else {
