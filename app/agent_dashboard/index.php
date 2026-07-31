@@ -945,6 +945,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 <!-- ?? HEADER ?? -->
 <div class="header">
+    <button onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
     <div class="logo">SKY<span>KIN</span> Technologies</div>
     <div class="agent-info">
         <div class="agent-avatar"><?php echo $initials; ?></div>
@@ -985,6 +986,39 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 </div>
+
+<!-- ── Agent Side Menu ─────────────────────────────────────── -->
+<div id="agentSideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
+    <div style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
+        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
+        <div style="font-size:11px;opacity:.8;margin-top:3px">Agent Panel</div>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:8px 0">
+        <?php if ($is_supervisor): ?>
+        <a href="supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128202;</span> Supervisor View
+        </a>
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <?php endif; ?>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128222;</span> Call History
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127908;</span> Recordings
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128203;</span> ACW History
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('crm')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127760;</span> Customer Info
+        </a>
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128682;</span> Sign Out
+        </a>
+    </div>
+</div>
+<div id="agentSideMenuBackdrop" onclick="toggleAgentSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
 
 <!-- ?? MAIN ?? -->
 <div class="main">
@@ -1383,6 +1417,15 @@ function formatDurationHMS(seconds) {
 let currentAgentStatus = 'ready';
 function toggleStatusMenu() {
     document.getElementById('statusDropMenu').classList.toggle('open');
+}
+
+// ?? Agent Side Menu ???????????????????????????????????????????
+function toggleAgentSideMenu() {
+    const menu     = document.getElementById('agentSideMenu');
+    const backdrop = document.getElementById('agentSideMenuBackdrop');
+    const isOpen   = menu.style.left === '0px';
+    menu.style.left        = isOpen ? '-260px' : '0px';
+    backdrop.style.display = isOpen ? 'none'   : 'block';
 }
 function setAgentStatus(status) {
     currentAgentStatus = status;
