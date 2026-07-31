@@ -786,24 +786,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 <div class="main">
 
     <!-- Two-column top layout -->
-    <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;margin-bottom:16px;align-items:start">
+    <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;margin-bottom:16px;align-items:start">
 
-        <!-- LEFT: Live Agent Cards -->
-        <div style="background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden">
-            <div style="padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between">
-                <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
-                    <span class="live-dot"></span> Live Agent Status
-                </div>
-                <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
-            </div>
-            <div style="padding:14px">
-                <div class="agents-grid" id="agentsGrid">
-                    <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- RIGHT: KPI cards + Queue stats -->
+        <!-- LEFT: KPI cards + Queue stats -->
         <div style="display:flex;flex-direction:column;gap:12px">
             <!-- KPI cards grid -->
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -834,6 +819,21 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                     <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Talk Time</span><strong id="qs-avgtalk">–</strong></div>
                     <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Wait Time</span><strong id="qs-avgwait">–</strong></div>
                     <div style="display:flex;justify-content:space-between"><span style="color:#666">SLA %</span><strong style="color:#28a745" id="qs-sla">–</strong></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: Live Agent Cards -->
+        <div style="background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden">
+            <div style="padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
+                    <span class="live-dot"></span> Live Agent Status
+                </div>
+                <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
+            </div>
+            <div style="padding:14px">
+                <div class="agents-grid" id="agentsGrid">
+                    <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
                 </div>
             </div>
         </div>
