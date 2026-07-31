@@ -1079,8 +1079,9 @@ function renderAgents(agents){
         const inCall = a.status==='incall';
         const callInfo = inCall && a.on_call_with ? `On call with: <strong>${a.on_call_with}</strong>` : '';
 
-        const rate      = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 100;
-        const rateColor = rate>=80?'#28a745':rate>=60?'#fd7e14':'#dc3545';
+        const rate      = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 0;
+        const rateColor = a.total_calls===0?'#aaa':rate>=80?'#28a745':rate>=60?'#fd7e14':'#dc3545';
+        const rateLabel = a.total_calls===0?'—':rate+'%';
 
         // Talk vs Idle — estimate idle from shift start (08:00)
         const shiftSecs = Math.max(1, Math.floor((Date.now()/1000) - new Date().setHours(8,0,0,0)/1000));
@@ -1111,7 +1112,7 @@ function renderAgents(agents){
             <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
                 <div>
                     <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
-                        <span>Answer Rate</span><span style="color:${rateColor};font-weight:600">${rate}%</span>
+                        <span>Answer Rate</span><span style="color:${rateColor};font-weight:600">${rateLabel}</span>
                     </div>
                     <div style="background:#f0f0f0;border-radius:4px;height:5px">
                         <div style="background:${rateColor};width:${rate}%;height:100%;border-radius:4px;transition:width .4s"></div>
