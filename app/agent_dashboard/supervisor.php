@@ -771,8 +771,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128100;</span> CRM
         </a>
-        <a href="https://ahununu.com/" target="_blank" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#127760;</span> Ahununu.com <span style="font-size:10px;color:#aaa;margin-left:auto">&#8599;</span>
+        <a href="#" onclick="toggleSideMenu();showTabDirect('ahununu')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127760;</span> Ahununu.com
         </a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <a href="/login/index.php?logout=1" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
@@ -816,6 +816,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
             <button class="tab-btn" onclick="showTab('voicequality')">Voice Quality</button>
             <button class="tab-btn" onclick="showTab('skills')">Agent Skills</button>
+            <button class="tab-btn" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
         <!-- Leaderboard -->
@@ -967,6 +968,10 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             </div>
         </div>
     </div>
+        <div class="tab-content" id="tab-ahununu" style="padding:0;height:700px">
+            <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
+        </div>
+
 </div>
 
 <div id="supToast"></div>
@@ -1188,6 +1193,22 @@ function showTab(name){
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='ahununu') {
+        const f = document.getElementById('ahununuFrame');
+        if (f.src === 'about:blank') f.src = 'https://ahununu.com/';
+    }
+}
+
+function showTabDirect(name){
+    document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    const panel = document.getElementById('tab-'+name);
+    if (panel) panel.classList.add('active');
+    document.querySelectorAll('.tab-btn').forEach(b=>{ if(b.textContent.toLowerCase().includes(name)) b.classList.add('active'); });
+    if(name==='ahununu') {
+        const f = document.getElementById('ahununuFrame');
+        if (f && f.src === 'about:blank') f.src = 'https://ahununu.com/';
+    }
 }
 
 // ── Init & auto-refresh ────────────────────────────────────────────────────
