@@ -207,13 +207,13 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .topbar{background:linear-gradient(135deg,#0047AB,#00B4D8);border-bottom:1px solid #e0e0e0;padding:0 24px;height:56px;
   display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
 .topbar-left{display:flex;align-items:center;gap:20px}
-.brand{font-weight:700;font-size:17px;color:#58a6ff;letter-spacing:.5px}
-.brand span{color:#333;font-weight:400}
+.brand{font-weight:700;font-size:17px;color:#fff;letter-spacing:.5px}
+.brand span{color:rgba(255,255,255,.8);font-weight:400}
 .nav-links{display:flex;gap:4px}
-.nav-links a{color:#888;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
-.nav-links a:hover,.nav-links a.active{background:#f0f2f5;color:#333}
-.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#888}
-.user-pill{background:#f0f2f5;padding:5px 12px;border-radius:20px;color:#333;font-size:12px}
+.nav-links a{color:rgba(255,255,255,.75);text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
+.nav-links a:hover,.nav-links a.active{background:rgba(255,255,255,.2);color:#fff}
+.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:rgba(255,255,255,.8)}
+.user-pill{background:rgba(255,255,255,.15);padding:5px 12px;border-radius:20px;color:#fff;font-size:12px}
 
 /* ─── Filters ─────────────────────────────── */
 .filters{background:#ffffff;border-bottom:1px solid #e0e0e0;padding:12px 24px;
@@ -405,10 +405,10 @@ function mkChart(id, type, data, opts) {
     const ctx = document.getElementById(id);
     if (!ctx) return;
     charts[id] = new Chart(ctx, { type, data, options: { responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ labels:{ color:'#8b949e', font:{size:11} } } },
+        plugins:{ legend:{ labels:{ color:'#555', font:{size:11} } } },
         scales: type==='bar'||type==='line' ? {
-            x:{ ticks:{color:'#8b949e',font:{size:10}}, grid:{color:'#21262d'} },
-            y:{ ticks:{color:'#8b949e',font:{size:10}}, grid:{color:'#21262d'} }
+            x:{ ticks:{color:'#888',font:{size:10}}, grid:{display:false} },
+            y:{ ticks:{color:'#888',font:{size:10}}, grid:{display:false} }
         } : {}, ...opts } });
 }
 
