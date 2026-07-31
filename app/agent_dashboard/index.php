@@ -359,6 +359,35 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
 $agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
 $domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
 
+// Detect if logged-in user is supervisor/admin
+$is_supervisor = false;
+try {
+    $sess_user = $_SESSION['username'] ?? '';
+    if ($sess_user) {
+        $conf2 = '/etc/fusionpbx/config.conf';
+        $dh='127.0.0.1';$dp='5432';$dn='fusionpbx';$du='fusionpbx';$dw='';
+        if (file_exists($conf2)) foreach(file($conf2) as $ln2) {
+            $ln2=trim($ln2);
+            if(strpos($ln2,'database.0.host')!==false)     $dh=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.port')!==false)     $dp=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.name')!==false)     $dn=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.username')!==false) $du=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.password')!==false) $dw=trim(explode('=',$ln2,2)[1]);
+        }
+        $rdb = new PDO("pgsql:host={$dh};port={$dp};dbname={$dn}", $du, $dw, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        $rs = $rdb->prepare("SELECT g.group_name FROM v_users u
+            JOIN v_user_groups ug ON ug.user_uuid=u.user_uuid
+            JOIN v_groups g ON g.group_uuid=ug.group_uuid
+            WHERE LOWER(u.username)=LOWER(:u) LIMIT 5");
+        $rs->execute([':u'=>$sess_user]);
+        foreach($rs->fetchAll(PDO::FETCH_COLUMN) as $grp) {
+            if (in_array(strtolower($grp), ['superadmin','admin','supervisor'])) {
+                $is_supervisor = true; break;
+            }
+        }
+    }
+} catch(Exception $ignored){}
+
 // Generate initials from agent name
 preg_match('/([A-Za-z]+)(\d*)/', $agent_name, $m);
 $initials = strtoupper(substr($m[1] ?? $agent_name, 0, 2));
@@ -1049,6 +1078,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
     <!-- Advanced Metrics -->
     <div class="section-grid">
+        <?php if ($is_supervisor): ?>
         <div class="section-box">
             <div class="section-title"><span class="dot" style="background:#6f42c1"></span> Monitoring &amp; Supervision</div>
             <div class="metric-row"><span class="metric-name">Listening Count</span><span class="metric-val" id="listeningCount">0</span></div>
@@ -1059,6 +1089,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="metric-row"><span class="metric-name">Call Reason Count</span><span class="metric-val" id="callReasonCount">--</span></div>
             <div class="metric-row"><span class="metric-name">Forwarding Times</span><span class="metric-val" id="forwardingTimes">--</span></div>
         </div>
+        <?php endif; ?>
         <div class="section-box">
             <div class="section-title"><span class="dot" style="background:#fd7e14"></span> Queue Status</div>
             <div class="metric-row"><span class="metric-name">Queue Name</span><span class="metric-val" id="queueName">Support Queue</span></div>
@@ -1076,6 +1107,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
             <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
             <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
+            <button class="tab-btn" id="tabCrmBtn" onclick="switchTab('crm')">&#127760; Customer Info</button>
         </div>
 
         <!-- ?? Call History Tab ?? -->
@@ -1184,7 +1216,15 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
-<div class="footer">
+    <!-- CRM Tab Panel -->
+    <div class="tab-panel" id="tabCrm" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 8px">
+            <span style="font-size:12px;color:#888">Opens automatically when a call is answered</span>
+            <button onclick="document.getElementById('crmTabFrame').src='https://ahununu.com/'" style="background:#0047AB;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer">&#8635; Reload</button>
+        </div>
+        <iframe id="crmTabFrame" src="about:blank" style="width:100%;height:600px;border:1px solid #e0e0e0;border-radius:8px;" allow="camera;microphone"></iframe>
+    </div>
+</div>
     SkyKin Technologies &copy; <?php echo date('Y'); ?> | Agent Dashboard v2.0 |
     Auto-refresh: <span id="refreshCountdown">10</span>s &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/supervisor.php" style="color:#888;text-decoration:none">Supervisor</a> &nbsp;|&nbsp;
@@ -1370,7 +1410,7 @@ document.addEventListener('click', function(e) {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['callHistory','recordings','acw'].forEach(t => {
+    ['callHistory','recordings','acw','crm'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
@@ -1382,6 +1422,9 @@ function switchTab(tab) {
     if (activeBtn)   activeBtn.classList.add('active');
     if (tab === 'recordings') fetchRecordings();
     if (tab === 'acw')        fetchAcwHistory();
+    if (tab === 'crm' && document.getElementById('crmTabFrame').src === 'about:blank') {
+        document.getElementById('crmTabFrame').src = 'https://ahununu.com/';
+    }
 }
 
 // ?? Date filters ??????????????????????????????????
@@ -1918,6 +1961,13 @@ function openCrmPanel() {
     document.getElementById('crmFrame').src = 'https://ahununu.com/';
     document.getElementById('crmPanel').classList.add('open');
     document.getElementById('phoneFab').style.right = '418px';
+    // Also load the CRM tab and flash its button to alert the agent
+    document.getElementById('crmTabFrame').src = 'https://ahununu.com/';
+    const crmBtn = document.getElementById('tabCrmBtn');
+    if (crmBtn) {
+        crmBtn.style.background = '#28a745'; crmBtn.style.color = '#fff';
+        setTimeout(()=>{ crmBtn.style.background=''; crmBtn.style.color=''; }, 3000);
+    }
 }
 function closeCrmPanel() {
     document.getElementById('crmPanel').classList.remove('open');
@@ -1996,7 +2046,8 @@ function endCall() {
     document.getElementById('callTimer').style.display = 'none';
     document.getElementById('callTimer').textContent   = '00:00';
     setAgentStatus('acw');
-    openAcwModal(callerNum, callDur, lastCallType, recFile);
+    // Small delay so recording upload completes before ACW modal opens
+    setTimeout(() => openAcwModal(callerNum, callDur, lastCallType, recFile), 800);
     setTimeout(() => { fetchData(); startCountdown(); }, 4000);
     setTimeout(() => fetchData(), 8000);
 }

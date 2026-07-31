@@ -733,18 +733,16 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
         <a href="/login/index.php?logout=1" style="color:rgba(255,255,255,.7);font-size:11px;text-decoration:none">Sign out</a>
         &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/reports.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Reports</a>
-        &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/evaluation.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Evaluation</a>
-        &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/crm.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">CRM</a>
+        <a href="/app/agent_dashboard/reports.php"    style="color:rgba(255,255,255,.9);font-size:11px;text-decoration:none;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">&#128202; Reports</a>
+        <a href="/app/agent_dashboard/evaluation.php" style="color:rgba(255,255,255,.9);font-size:11px;text-decoration:none;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">&#9733; Evaluation</a>
+        <a href="/app/agent_dashboard/crm.php"        style="color:rgba(255,255,255,.9);font-size:11px;text-decoration:none;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">&#128100; CRM</a>
         &nbsp;|&nbsp;
         <span style="position:relative;display:inline-block">
             <span id="agentViewBtn" onclick="document.getElementById('agentViewDrop').style.display=document.getElementById('agentViewDrop').style.display==='block'?'none':'block'"
-                  style="color:rgba(255,255,255,.8);font-size:11px;cursor:pointer">
-                Agent View &#9660;
+                  style="color:rgba(255,255,255,.9);font-size:11px;cursor:pointer;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">
+                &#128100; Agent View &#9660;
             </span>
-            <div id="agentViewDrop" style="display:none;position:absolute;right:0;top:20px;background:#fff;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.2);min-width:160px;z-index:999;overflow:hidden">
+            <div id="agentViewDrop" style="display:none;position:absolute;right:0;top:28px;background:#fff;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.2);min-width:160px;z-index:999;overflow:hidden">
                 <?php foreach($nav_agents as $na): ?>
                 <a href="/app/agent_dashboard/index.php?agent=<?php echo urlencode($na['username'] ?: $na['extension']); ?>&domain=<?php echo urlencode($domain); ?>"
                    style="display:block;padding:8px 14px;font-size:12px;color:#333;text-decoration:none;border-bottom:1px solid #f0f0f0"
