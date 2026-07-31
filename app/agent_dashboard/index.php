@@ -1000,21 +1000,39 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <?php endif; ?>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128222;</span> Call History
+
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Dashboard</div>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionKpi')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128200;</span> My Stats (KPIs)
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#127908;</span> Recordings
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionMetrics')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#9201;</span> Call Time Metrics
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128203;</span> ACW History
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionPerformance')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127941;</span> Today's Performance
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('crm')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#127760;</span> Customer Info
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionQueue')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128101;</span> Queue Status
         </a>
+
         <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128682;</span> Sign Out
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">History</div>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128222;</span> Call History
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127908;</span> Recordings
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128203;</span> ACW History
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('crm')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127760;</span> Customer Info
+        </a>
+
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128682;</span> Sign Out
         </a>
     </div>
 </div>
@@ -1024,7 +1042,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <div class="main">
 
     <!-- Summary Cards -->
-    <div class="summary-grid">
+    <div class="summary-grid" id="sectionKpi">
         <div class="card green">
             <div class="card-label">Total Calls Today</div>
             <div class="card-value" id="totalCalls">0</div>
@@ -1068,7 +1086,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 
     <!-- Two Column Metrics -->
-    <div class="section-grid">
+    <div class="section-grid" id="sectionMetrics">
         <div class="section-box">
             <div class="section-title"><span class="dot"></span> Call Time Metrics</div>
             <div class="metric-row"><span class="metric-name">Listening Duration</span><span class="metric-val" id="listeningDuration">--</span></div>
@@ -1092,7 +1110,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 
     <!-- Performance Progress -->
-    <div class="full-section">
+    <div class="full-section" id="sectionPerformance">
         <div class="section-title"><span class="dot" style="background:#00B4D8"></span> Today's Performance</div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
             <div class="progress-wrap">
@@ -1124,7 +1142,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="metric-row"><span class="metric-name">Forwarding Times</span><span class="metric-val" id="forwardingTimes">--</span></div>
         </div>
         <?php endif; ?>
-        <div class="section-box">
+        <div class="section-box" id="sectionQueue">
             <div class="section-title"><span class="dot" style="background:#fd7e14"></span> Queue Status</div>
             <div class="metric-row"><span class="metric-name">Queue Name</span><span class="metric-val" id="queueName">Support Queue</span></div>
             <div class="metric-row"><span class="metric-name">Calls Waiting</span><span class="metric-val warn" id="callsWaiting">--</span></div>
@@ -1136,7 +1154,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 
     <!-- Call History + Recordings (tabbed) -->
-    <div class="full-section">
+    <div class="full-section" id="sectionHistory">
         <div class="tab-bar">
             <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
             <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
@@ -1428,6 +1446,10 @@ function toggleAgentSideMenu() {
     const isOpen   = menu.style.left === '0px';
     menu.style.left        = isOpen ? '-260px' : '0px';
     backdrop.style.display = isOpen ? 'none'   : 'block';
+}
+function scrollToSection(id) {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 function setAgentStatus(status) {
     currentAgentStatus = status;
