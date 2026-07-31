@@ -722,9 +722,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 <body>
 
 <div class="header">
-    <div class="logo">
-        <span>SKY</span>KIN Technologies
-        <span class="role-badge">SUPERVISOR</span>
+    <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1">&#9776;</button>
+        <div class="logo"><span>SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
     </div>
     <div class="header-right">
         <span><span class="live-dot"></span>Live</span>
@@ -732,10 +732,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <span style="opacity:.8;font-size:12px"><?php echo htmlspecialchars($logged_in_user); ?></span>
         <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
         <a href="/login/index.php?logout=1" style="color:rgba(255,255,255,.7);font-size:11px;text-decoration:none">Sign out</a>
-        &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/reports.php"    style="color:rgba(255,255,255,.9);font-size:11px;text-decoration:none;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">&#128202; Reports</a>
-        <a href="/app/agent_dashboard/evaluation.php" style="color:rgba(255,255,255,.9);font-size:11px;text-decoration:none;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">&#9733; Evaluation</a>
-        <a href="/app/agent_dashboard/crm.php"        style="color:rgba(255,255,255,.9);font-size:11px;text-decoration:none;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">&#128100; CRM</a>
         &nbsp;|&nbsp;
         <span style="position:relative;display:inline-block">
             <span id="agentViewBtn" onclick="document.getElementById('agentViewDrop').style.display=document.getElementById('agentViewDrop').style.display==='block'?'none':'block'"
@@ -757,6 +753,34 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         </span>
     </div>
 </div>
+
+<!-- Slide-out side menu -->
+<div id="sideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
+    <div style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
+        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
+        <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
+    </div>
+    <nav style="flex:1;padding:8px 0;overflow-y:auto">
+        <a href="/app/agent_dashboard/supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#0047AB;text-decoration:none;font-size:14px;font-weight:600;background:#f0f4ff;border-left:4px solid #0047AB">
+            <span style="font-size:18px">&#128187;</span> Dashboard
+        </a>
+        <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128202;</span> Reports
+        </a>
+        <a href="/app/agent_dashboard/evaluation.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#9733;</span> Evaluation
+        </a>
+        <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128100;</span> CRM
+        </a>
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <a href="/login/index.php?logout=1" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
+            <span style="font-size:18px">&#128682;</span> Sign Out
+        </a>
+    </nav>
+    <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">SkyKin &copy; <?php echo date('Y'); ?></div>
+</div>
+<div id="sideMenuBackdrop" onclick="toggleSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
 
 <div class="main">
 
@@ -953,6 +977,15 @@ const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') ||
 if ('<?php echo $sup_ext; ?>' && !localStorage.getItem('sup_ext')) localStorage.setItem('sup_ext','<?php echo $sup_ext; ?>');
 const today    = '<?php echo $today; ?>';
 let agentTimers = {};
+
+// ── Side menu toggle ───────────────────────────────────────────────────────
+function toggleSideMenu() {
+    const menu     = document.getElementById('sideMenu');
+    const backdrop = document.getElementById('sideMenuBackdrop');
+    const isOpen   = menu.style.left === '0px';
+    menu.style.left          = isOpen ? '-260px' : '0px';
+    backdrop.style.display   = isOpen ? 'none'   : 'block';
+}
 
 // ── Clock ──────────────────────────────────────────────────────────────────
 function updateClock(){
