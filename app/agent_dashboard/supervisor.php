@@ -729,7 +729,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
     <div class="header-right">
         <span><span class="live-dot"></span>Live</span>
         <span class="clock" id="supClock">--:--:--</span>
-        <span style="opacity:.8;font-size:12px"><?php echo htmlspecialchars($logged_in_user); ?></span>
         <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
         &nbsp;|&nbsp;
         <span style="position:relative;display:inline-block">
