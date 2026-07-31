@@ -785,29 +785,61 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 
 <div class="main">
 
-    <!-- Queue Stats Bar -->
-    <div class="queue-bar" id="queueBar">
-        <div class="qstat good"><div class="qstat-val" id="qs-online">–</div><div class="qstat-lbl">Agents Online</div></div>
-        <div class="qstat"><div class="qstat-val" id="qs-total">–</div><div class="qstat-lbl">Calls Today</div></div>
-        <div class="qstat good"><div class="qstat-val" id="qs-answered">–</div><div class="qstat-lbl">Answered</div></div>
-        <div class="qstat warn"><div class="qstat-val" id="qs-missed">–</div><div class="qstat-lbl">Missed</div></div>
-        <div class="qstat"><div class="qstat-val" id="qs-avgtalk">–</div><div class="qstat-lbl">Avg Talk</div></div>
-        <div class="qstat"><div class="qstat-val" id="qs-avgwait">–</div><div class="qstat-lbl">Avg Wait</div></div>
-        <div class="qstat good"><div class="qstat-val" id="qs-sla">–</div><div class="qstat-lbl">SLA %</div></div>
+    <!-- Two-column top layout -->
+    <div style="display:grid;grid-template-columns:1fr 340px;gap:16px;margin-bottom:16px;align-items:start">
+
+        <!-- LEFT: Live Agent Cards -->
+        <div style="background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden">
+            <div style="padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
+                    <span class="live-dot"></span> Live Agent Status
+                </div>
+                <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
+            </div>
+            <div style="padding:14px">
+                <div class="agents-grid" id="agentsGrid">
+                    <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: KPI cards + Queue stats -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+            <!-- KPI cards grid -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #0047AB">
+                    <div style="font-size:22px;font-weight:700;color:#0047AB" id="qs-total">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Calls Today</div>
+                </div>
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #28a745">
+                    <div style="font-size:22px;font-weight:700;color:#28a745" id="qs-answered">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Answered</div>
+                </div>
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #dc3545">
+                    <div style="font-size:22px;font-weight:700;color:#dc3545" id="qs-missed">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Missed</div>
+                </div>
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #17a2b8">
+                    <div style="font-size:22px;font-weight:700;color:#17a2b8" id="qs-online">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Agents Online</div>
+                </div>
+            </div>
+            <!-- Queue detail card -->
+            <div style="background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,.07)">
+                <div style="font-weight:600;font-size:13px;color:#333;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+                    <span style="width:8px;height:8px;border-radius:50%;background:#fd7e14;display:inline-block"></span>
+                    Queue Status
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+                    <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Talk Time</span><strong id="qs-avgtalk">–</strong></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Wait Time</span><strong id="qs-avgwait">–</strong></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:#666">SLA %</span><strong style="color:#28a745" id="qs-sla">–</strong></div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <!-- Agent Cards -->
-    <div class="agents-section">
-        <div class="section-title">
-            <span class="live-dot"></span> Live Agent Status
-            <span style="font-size:11px;color:#aaa;font-weight:400;margin-left:4px">Auto-refreshes every 10s</span>
-        </div>
-        <div class="agents-grid" id="agentsGrid">
-            <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
-        </div>
-    </div>
-
-    <!-- Bottom Tabs -->
+    <!-- Bottom Tabs (full width) -->
     <div class="bottom-section">
         <div class="tab-bar">
             <button class="tab-btn active" onclick="showTab('leaderboard')">Leaderboard</button>
