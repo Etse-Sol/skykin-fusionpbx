@@ -1260,11 +1260,13 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 </div>
     SkyKin Technologies &copy; <?php echo date('Y'); ?> | Agent Dashboard v2.0 |
-    Auto-refresh: <span id="refreshCountdown">10</span>s &nbsp;|&nbsp;
+    Auto-refresh: <span id="refreshCountdown">10</span>s
+    <?php if ($is_supervisor): ?>
+    &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/supervisor.php" style="color:#888;text-decoration:none">Supervisor</a> &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/reports.php"    style="color:#888;text-decoration:none">Reports</a> &nbsp;|&nbsp;
-    <a href="/app/agent_dashboard/evaluation.php" style="color:#888;text-decoration:none">Evaluation</a> &nbsp;|&nbsp;
-    <a href="/app/agent_dashboard/crm.php"        style="color:#888;text-decoration:none">CRM</a>
+    <a href="/app/agent_dashboard/evaluation.php" style="color:#888;text-decoration:none">Evaluation</a>
+    <?php endif; ?>
 </div>
 
 <!-- legacy hidden overlay (kept for compatibility, not shown) -->
