@@ -773,6 +773,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128100;</span> CRM
         </a>
+        <a href="https://ahununu.com/" target="_blank" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127760;</span> Ahununu.com <span style="font-size:10px;color:#aaa;margin-left:auto">&#8599;</span>
+        </a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <a href="/login/index.php?logout=1" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
             <span style="font-size:18px">&#128682;</span> Sign Out
