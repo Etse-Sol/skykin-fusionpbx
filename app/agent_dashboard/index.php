@@ -945,8 +945,10 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 <!-- ?? HEADER ?? -->
 <div class="header">
-    <button onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
-    <div class="logo">SKY<span>KIN</span> Technologies</div>
+    <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="toggleAgentSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
+        <div class="logo">SKY<span>KIN</span> Technologies</div>
+    </div>
     <div class="agent-info">
         <div class="agent-avatar"><?php echo $initials; ?></div>
         <div class="agent-text-info">
