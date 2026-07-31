@@ -829,7 +829,12 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                 <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
                     <span class="live-dot"></span> Live Agent Status
                 </div>
-                <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
+                    <span id="agentPageInfo" style="font-size:11px;color:#666"></span>
+                    <button onclick="agentPage(-1)" id="agentPrev" style="background:#f0f0f0;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">&#8249;</button>
+                    <button onclick="agentPage(+1)" id="agentNext" style="background:#f0f0f0;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">&#8250;</button>
+                </div>
             </div>
             <div style="padding:14px">
                 <div class="agents-grid" id="agentsGrid">
@@ -1065,8 +1070,32 @@ function fetchQueue(){
 function fetchAgents(){
     fetch('supervisor.php?action=agents&domain='+encodeURIComponent(domain))
         .then(r=>r.json()).then(d=>{
-            renderAgents(d.agents||[]);
+            _allAgents = d.agents||[];
+            // keep current page valid after refresh
+            const maxPage = Math.max(0, Math.ceil(_allAgents.length / _agentsPerPage) - 1);
+            if (_agentPage > maxPage) _agentPage = maxPage;
+            renderAgentPage();
         }).catch(()=>{});
+}
+
+let _allAgents = [], _agentPage = 0, _agentsPerPage = 6;
+
+function agentPage(dir) {
+    const maxPage = Math.ceil(_allAgents.length / _agentsPerPage) - 1;
+    _agentPage = Math.max(0, Math.min(maxPage, _agentPage + dir));
+    renderAgentPage();
+}
+
+function renderAgentPage() {
+    const start = _agentPage * _agentsPerPage;
+    const slice = _allAgents.slice(start, start + _agentsPerPage);
+    const total = _allAgents.length;
+    const maxPage = Math.ceil(total / _agentsPerPage);
+    document.getElementById('agentPageInfo').textContent =
+        total > _agentsPerPage ? `${start+1}–${Math.min(start+_agentsPerPage,total)} of ${total}` : `${total} agent${total!==1?'s':''}`;
+    document.getElementById('agentPrev').style.opacity = _agentPage===0?'0.3':'1';
+    document.getElementById('agentNext').style.opacity = _agentPage>=maxPage-1?'0.3':'1';
+    renderAgents(slice);
 }
 
 function renderAgents(agents){
