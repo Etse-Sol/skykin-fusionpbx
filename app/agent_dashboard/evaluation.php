@@ -92,7 +92,7 @@ if (isset($_GET['api'])) {
             if ($ext)    { $where.=" AND (caller_id_number=:e OR destination_number=:e)"; $params[':e']=$ext; }
             if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
             $s = $db->prepare("SELECT
-                uuid as cdr_uuid,
+                xml_cdr_uuid as cdr_uuid,
                 to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
                 caller_id_number, caller_id_name, destination_number,
                 direction, billsec, hangup_cause, record_name, record_path
@@ -170,39 +170,39 @@ if (isset($_GET['api'])) {
 <title>SkyKin – Call Evaluation</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-height:100vh}
+body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
 
-.topbar{background:#161b22;border-bottom:1px solid #30363d;padding:0 24px;height:56px;
+.topbar{background:linear-gradient(135deg,#0047AB,#00B4D8);border-bottom:1px solid #e0e0e0;padding:0 24px;height:56px;
   display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
 .topbar-left{display:flex;align-items:center;gap:20px}
 .brand{font-weight:700;font-size:17px;color:#58a6ff;letter-spacing:.5px}
-.brand span{color:#e6edf3;font-weight:400}
+.brand span{color:#333;font-weight:400}
 .nav-links{display:flex;gap:4px}
-.nav-links a{color:#8b949e;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
-.nav-links a:hover,.nav-links a.active{background:#21262d;color:#e6edf3}
-.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#8b949e}
-.user-pill{background:#21262d;padding:5px 12px;border-radius:20px;color:#e6edf3;font-size:12px}
+.nav-links a{color:#888;text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
+.nav-links a:hover,.nav-links a.active{background:#f0f2f5;color:#333}
+.topbar-right{display:flex;align-items:center;gap:12px;font-size:13px;color:#888}
+.user-pill{background:#f0f2f5;padding:5px 12px;border-radius:20px;color:#333;font-size:12px}
 
-.filters{background:#161b22;border-bottom:1px solid #30363d;padding:12px 24px;
+.filters{background:#ffffff;border-bottom:1px solid #e0e0e0;padding:12px 24px;
   display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.filters label{font-size:12px;color:#8b949e}
-.filters input,.filters select{background:#0d1117;border:1px solid #30363d;color:#e6edf3;
+.filters label{font-size:12px;color:#888}
+.filters input,.filters select{background:#f0f2f5;border:1px solid #e0e0e0;color:#333;
   padding:6px 10px;border-radius:6px;font-size:13px}
 .btn-filter{background:#238636;color:#fff;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px}
 
 .layout{display:grid;grid-template-columns:1fr 400px;gap:0;height:calc(100vh - 110px)}
-.call-list{overflow-y:auto;border-right:1px solid #30363d}
-.eval-panel{overflow-y:auto;background:#161b22;padding:20px}
+.call-list{overflow-y:auto;border-right:1px solid #e0e0e0}
+.eval-panel{overflow-y:auto;background:#ffffff;padding:20px}
 
 /* Call list */
 .call-item{padding:12px 16px;border-bottom:1px solid #21262d;cursor:pointer;transition:.15s}
-.call-item:hover{background:#21262d}
+.call-item:hover{background:#f0f2f5}
 .call-item.selected{background:#388bfd18;border-left:3px solid #58a6ff}
 .call-item.evaluated{border-left:3px solid #3fb950}
 .ci-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
 .ci-nums{font-size:14px;font-weight:600}
-.ci-time{font-size:11px;color:#8b949e}
-.ci-meta{font-size:11px;color:#8b949e;display:flex;gap:12px}
+.ci-time{font-size:11px;color:#888}
+.ci-meta{font-size:11px;color:#888;display:flex;gap:12px}
 .ci-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
 .ci-badge.inbound{background:#388bfd22;color:#58a6ff}
 .ci-badge.outbound{background:#f0883e22;color:#f0883e}
@@ -215,46 +215,46 @@ body{font-family:'Segoe UI',sans-serif;background:#0d1117;color:#e6edf3;min-heig
 .grade-D{background:#f8514922;color:#f85149}
 
 /* Eval panel */
-.eval-title{font-size:15px;font-weight:600;margin-bottom:16px;color:#e6edf3}
-.eval-meta{background:#21262d;border-radius:8px;padding:12px;margin-bottom:16px;font-size:12px}
-.eval-meta div{margin-bottom:4px;color:#8b949e} .eval-meta span{color:#e6edf3;font-weight:500}
+.eval-title{font-size:15px;font-weight:600;margin-bottom:16px;color:#333}
+.eval-meta{background:#f0f2f5;border-radius:8px;padding:12px;margin-bottom:16px;font-size:12px}
+.eval-meta div{margin-bottom:4px;color:#888} .eval-meta span{color:#333;font-weight:500}
 
 .criteria{margin-bottom:20px}
 .criterion{margin-bottom:14px}
-.crit-label{font-size:12px;color:#8b949e;margin-bottom:6px;display:flex;justify-content:space-between}
-.crit-label strong{color:#e6edf3}
+.crit-label{font-size:12px;color:#888;margin-bottom:6px;display:flex;justify-content:space-between}
+.crit-label strong{color:#333}
 .stars{display:flex;gap:6px}
-.star{width:32px;height:32px;border-radius:6px;background:#21262d;border:1px solid #30363d;
-  cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;transition:.15s;color:#30363d}
+.star{width:32px;height:32px;border-radius:6px;background:#f0f2f5;border:1px solid #e0e0e0;
+  cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;transition:.15s;color:#e0e0e0}
 .star:hover,.star.active{background:#d29922;border-color:#d29922;color:#fff}
 
-.eval-notes{width:100%;background:#21262d;border:1px solid #30363d;color:#e6edf3;
+.eval-notes{width:100%;background:#f0f2f5;border:1px solid #e0e0e0;color:#333;
   padding:10px;border-radius:6px;font-family:inherit;font-size:13px;resize:vertical;min-height:80px;margin-bottom:16px}
 .eval-notes:focus{outline:none;border-color:#58a6ff}
 
-.score-display{background:#21262d;border-radius:8px;padding:14px;margin-bottom:16px;text-align:center}
+.score-display{background:#f0f2f5;border-radius:8px;padding:14px;margin-bottom:16px;text-align:center}
 .score-big{font-size:36px;font-weight:700;color:#d29922}
-.score-sub{font-size:12px;color:#8b949e}
-.score-bar-bg{background:#30363d;border-radius:4px;height:8px;margin:8px 0}
+.score-sub{font-size:12px;color:#888}
+.score-bar-bg{background:#e0e0e0;border-radius:4px;height:8px;margin:8px 0}
 .score-bar-fill{height:8px;border-radius:4px;background:#d29922;transition:.5s}
 
 .btn-save{width:100%;background:#238636;color:#fff;border:none;padding:12px;border-radius:8px;
   cursor:pointer;font-size:14px;font-weight:600}
 .btn-save:hover{background:#2ea043}
-.btn-save:disabled{background:#21262d;color:#8b949e;cursor:not-allowed}
+.btn-save:disabled{background:#f0f2f5;color:#888;cursor:not-allowed}
 
 /* Tabs */
-.tabs{display:flex;gap:0;border-bottom:1px solid #30363d;margin-bottom:16px}
-.tab-btn{padding:8px 16px;background:none;border:none;color:#8b949e;cursor:pointer;font-size:13px;border-bottom:2px solid transparent}
+.tabs{display:flex;gap:0;border-bottom:1px solid #e0e0e0;margin-bottom:16px}
+.tab-btn{padding:8px 16px;background:none;border:none;color:#888;cursor:pointer;font-size:13px;border-bottom:2px solid transparent}
 .tab-btn.active{color:#58a6ff;border-bottom-color:#58a6ff}
 .tab-content{display:none}.tab-content.active{display:block}
 
 .hist-row{padding:10px 12px;border-bottom:1px solid #21262d;font-size:12px}
 .hist-top{display:flex;justify-content:space-between;margin-bottom:4px}
-.hist-scores{display:flex;gap:8px;flex-wrap:wrap;color:#8b949e}
-.hist-scores span{background:#21262d;padding:2px 6px;border-radius:4px}
+.hist-scores{display:flex;gap:8px;flex-wrap:wrap;color:#888}
+.hist-scores span{background:#f0f2f5;padding:2px 6px;border-radius:4px}
 
-.empty-state{text-align:center;padding:40px;color:#8b949e;font-size:13px}
+.empty-state{text-align:center;padding:40px;color:#888;font-size:13px}
 
 /* Audio player */
 .audio-wrap{margin-bottom:14px}
@@ -284,7 +284,7 @@ audio{width:100%;height:32px;border-radius:6px}
   <label>To</label><input type="date" id="fTo" value="<?php echo $today; ?>">
   <input type="text" id="fSearch" placeholder="Search number..." style="width:160px">
   <button class="btn-filter" onclick="loadCalls()">&#128269; Search</button>
-  <span id="callCount" style="font-size:12px;color:#8b949e"></span>
+  <span id="callCount" style="font-size:12px;color:#888"></span>
 </div>
 
 <div class="layout">
@@ -297,8 +297,14 @@ audio{width:100%;height:32px;border-radius:6px}
   <div class="eval-panel">
     <div id="evalEmpty" class="empty-state" style="margin-top:60px">
       <div style="font-size:32px;margin-bottom:12px">&#128203;</div>
-      <div style="font-weight:600;color:#e6edf3;margin-bottom:6px">Select a call to evaluate</div>
+      <div style="font-weight:600;color:#333;margin-bottom:6px">Select a call to evaluate</div>
       <div>Click any call from the list to score it</div>
+      <div style="margin-top:20px">
+        <button onclick="openManualEval()" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:10px 20px;font-size:13px;cursor:pointer;margin-top:8px">
+          + Manual Evaluation
+        </button>
+        <div style="font-size:11px;color:#666;margin-top:8px">Score an agent without a CDR record</div>
+      </div>
     </div>
     <div id="evalForm" style="display:none">
       <div class="tabs">
@@ -310,14 +316,14 @@ audio{width:100%;height:32px;border-radius:6px}
         <div class="eval-title">Call Evaluation</div>
         <div class="eval-meta">
           <div>Call Time: <span id="emCallTime">—</span></div>
-          <div>Agent: <span id="emAgent">—</span></div>
-          <div>Caller: <span id="emCaller">—</span></div>
+          <div>Agent Extension: <input id="emAgent" type="text" placeholder="e.g. 101" style="background:#f8f9fa;border:1px solid #e0e0e0;color:#333;border-radius:4px;padding:3px 8px;font-size:13px;width:100px;margin-left:4px"></div>
+          <div>Caller Number: <input id="emCaller" type="text" placeholder="e.g. 102 or +251..." style="background:#f8f9fa;border:1px solid #e0e0e0;color:#333;border-radius:4px;padding:3px 8px;font-size:13px;width:150px;margin-left:4px"></div>
           <div>Duration: <span id="emDuration">—</span></div>
         </div>
 
         <!-- Recording playback if available -->
         <div class="audio-wrap" id="audioWrap" style="display:none">
-          <div style="font-size:11px;color:#8b949e;margin-bottom:6px">Recording</div>
+          <div style="font-size:11px;color:#888;margin-bottom:6px">Recording</div>
           <audio id="evalAudio" controls></audio>
         </div>
 
@@ -458,10 +464,10 @@ async function loadCalls() {
     const rows = await resp.json();
     document.getElementById('callCount').textContent = rows.length + ' calls';
     if (!rows.length) { list.innerHTML='<div class="empty-state">No answered calls found</div>'; return; }
-    list.innerHTML = rows.map(r => {
+    list.innerHTML = rows.map((r, i) => {
         const ev = r.eval;
         const evBadge = ev ? `<span class="grade-badge grade-${ev.grade.replace('+','\\+')}">${ev.grade}</span>` : '';
-        return `<div class="call-item${ev?' evaluated':''}" onclick="selectCall(${JSON.stringify(JSON.stringify(r)).slice(1,-1)})">
+        return `<div class="call-item${ev?' evaluated':''}" data-idx="${i}">
           <div class="ci-top">
             <span class="ci-nums">${r.caller_id_number} &rarr; ${r.destination_number}</span>
             <span class="ci-time">${r.call_time}</span>
@@ -474,10 +480,14 @@ async function loadCalls() {
           </div>
         </div>`;
     }).join('');
+    // attach click handlers via event delegation
+    window._evalRows = rows;
+    list.querySelectorAll('.call-item').forEach(el => {
+        el.addEventListener('click', function() { selectCall(window._evalRows[+this.dataset.idx]); });
+    });
 }
 
-function selectCall(jsonStr) {
-    const r = JSON.parse(jsonStr);
+function selectCall(r) {
     selectedCall = r;
     // Highlight
     document.querySelectorAll('.call-item').forEach(el => el.classList.remove('selected'));
@@ -487,14 +497,18 @@ function selectCall(jsonStr) {
     document.getElementById('evalForm').style.display  = 'block';
 
     document.getElementById('emCallTime').textContent = r.call_time;
-    document.getElementById('emAgent').textContent    = r.destination_number;
-    document.getElementById('emCaller').textContent   = r.caller_id_number + (r.caller_id_name?' ('+r.caller_id_name+')':'');
+    document.getElementById('emAgent').value    = r.destination_number;
+    document.getElementById('emCaller').value   = r.caller_id_number + (r.caller_id_name?' ('+r.caller_id_name+')':'');
     document.getElementById('emDuration').textContent = fmtSecs(r.billsec);
 
     // Recording
     const aw = document.getElementById('audioWrap');
     if (r.record_name) {
-        const url = '/app/recordings/index.php?filename='+encodeURIComponent(r.record_name)+'&path='+encodeURIComponent(r.record_path||'');
+        // Serve .webm via FastAPI, .wav via FusionPBX recordings
+        const fname = r.record_name;
+        const url = fname.endsWith('.webm')
+            ? 'http://192.168.243.129:8001/api/recordings/' + encodeURIComponent(fname)
+            : '/app/recordings/index.php?filename='+encodeURIComponent(fname)+'&path='+encodeURIComponent(r.record_path||'');
         document.getElementById('evalAudio').src = url;
         aw.style.display = 'block';
     } else { aw.style.display = 'none'; }
@@ -512,6 +526,18 @@ async function saveEval() {
     if (!selectedCall) return;
     const btn = document.getElementById('btnSave');
     btn.disabled = true; btn.textContent = 'Saving...';
+
+    // For manual evaluations, read agent/caller from input fields
+    if (document.getElementById('evalForm').dataset.manual === '1') {
+        const agentVal  = document.getElementById('emAgent').value.trim();
+        const callerVal = document.getElementById('emCaller').value.trim();
+        if (!agentVal) { alert('Please enter the agent extension'); btn.disabled=false; btn.textContent='Save Evaluation'; return; }
+        selectedCall.destination_number = agentVal;
+        selectedCall.caller_id_number   = callerVal;
+        selectedCall.call_time          = new Date().toLocaleString();
+        selectedCall.cdr_uuid           = '';
+    }
+
     const body = {
         cdr_uuid:       selectedCall.cdr_uuid || '',
         agent_ext:      selectedCall.destination_number,
@@ -530,9 +556,15 @@ async function saveEval() {
     const r = await resp.json();
     if (r.ok) {
         btn.textContent = `Saved! Grade: ${r.grade} (${r.pct}%)`;
-        btn.style.background = '#388bfd';
-        event.currentTarget?.classList.add('evaluated');
-        loadCalls(); // refresh
+        btn.style.background = '#2ea043';
+        btn.style.color = '#fff';
+        // Show toast
+        const toast = document.createElement('div');
+        toast.textContent = `Evaluation saved — Grade ${r.grade} (${r.pct}%)`;
+        toast.style.cssText = 'position:fixed;top:20px;right:20px;background:#2ea043;color:#fff;padding:12px 20px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,.3)';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+        loadCalls(); // refresh left list with grade badge
     } else {
         btn.disabled = false; btn.textContent = 'Save Evaluation';
         alert('Error: ' + (r.error||'Unknown'));
@@ -561,10 +593,49 @@ async function loadHistory() {
             <span>Proc: ${r.score_procedure}</span>
             <span>Close: ${r.score_closing}</span>
           </div>
-          ${r.notes?`<div style="font-size:11px;color:#8b949e;margin-top:4px">${r.notes}</div>`:''}
+          ${r.notes?`<div style="font-size:11px;color:#888;margin-top:4px">${r.notes}</div>`:''}
           <div style="font-size:10px;color:#6e7681;margin-top:2px">by ${r.evaluator}</div>
         </div>`;
     }).join('');
+}
+
+function openManualEval() {
+    // Clear any selected call
+    document.querySelectorAll('.call-item').forEach(el => el.classList.remove('selected'));
+    selectedCall = {
+        cdr_uuid: null, call_uuid: null,
+        call_time: new Date().toLocaleString(),
+        destination_number: '', caller_id_number: '', caller_id_name: '',
+        billsec: 0, record_name: null
+    };
+
+    document.getElementById('evalEmpty').style.display = 'none';
+    document.getElementById('evalForm').style.display  = 'block';
+    document.getElementById('emCallTime').textContent  = 'Manual Evaluation — ' + new Date().toLocaleDateString();
+    document.getElementById('emAgent').value     = '';
+    document.getElementById('emCaller').value    = '';
+    document.getElementById('emDuration').textContent  = '—';
+
+    // Make agent/caller fields editable for manual entry
+    const agentEl  = document.getElementById('emAgent');
+    const callerEl = document.getElementById('emCaller');
+    agentEl.contentEditable  = 'true';
+    callerEl.contentEditable = 'true';
+    agentEl.style.border     = '1px dashed #444';
+    agentEl.style.padding    = '2px 6px';
+    agentEl.style.borderRadius = '4px';
+    agentEl.style.minWidth   = '60px';
+    agentEl.style.display    = 'inline-block';
+    callerEl.style.border    = '1px dashed #444';
+    callerEl.style.padding   = '2px 6px';
+    callerEl.style.borderRadius = '4px';
+    callerEl.style.display   = 'inline-block';
+    agentEl.setAttribute('placeholder', 'e.g. 101');
+    callerEl.setAttribute('placeholder', 'e.g. +251911...');
+
+    // Override submit to pick up manual values
+    document.getElementById('evalForm').dataset.manual = '1';
+    document.getElementById('audioWrap') && (document.getElementById('audioWrap').style.display = 'none');
 }
 
 loadCalls();

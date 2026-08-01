@@ -227,7 +227,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'acw_history') {
 }
 
 // ?? Save ACW (After-Call Work) to DB ????????????????????????????????????????
-if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
+// ?? Save recording (browser WebRTC recording ? server file + CDR link) ??????
+if (isset($_GET['action']) && $_GET['action'] === 'save_recording') {
     error_reporting(0);
     header('Content-Type: application/json');
     header('Access-Control-Allow-Origin: *');
@@ -1040,6 +1041,35 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUES
 $agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
 $domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
 
+// Detect if logged-in user is supervisor/admin
+$is_supervisor = false;
+try {
+    $sess_user = $_SESSION['username'] ?? '';
+    if ($sess_user) {
+        $conf2 = '/etc/fusionpbx/config.conf';
+        $dh='127.0.0.1';$dp='5432';$dn='fusionpbx';$du='fusionpbx';$dw='';
+        if (file_exists($conf2)) foreach(file($conf2) as $ln2) {
+            $ln2=trim($ln2);
+            if(strpos($ln2,'database.0.host')!==false)     $dh=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.port')!==false)     $dp=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.name')!==false)     $dn=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.username')!==false) $du=trim(explode('=',$ln2,2)[1]);
+            if(strpos($ln2,'database.0.password')!==false) $dw=trim(explode('=',$ln2,2)[1]);
+        }
+        $rdb = new PDO("pgsql:host={$dh};port={$dp};dbname={$dn}", $du, $dw, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        $rs = $rdb->prepare("SELECT g.group_name FROM v_users u
+            JOIN v_user_groups ug ON ug.user_uuid=u.user_uuid
+            JOIN v_groups g ON g.group_uuid=ug.group_uuid
+            WHERE LOWER(u.username)=LOWER(:u) LIMIT 5");
+        $rs->execute([':u'=>$sess_user]);
+        foreach($rs->fetchAll(PDO::FETCH_COLUMN) as $grp) {
+            if (in_array(strtolower($grp), ['superadmin','admin','supervisor'])) {
+                $is_supervisor = true; break;
+            }
+        }
+    }
+} catch(Exception $ignored){}
+
 // Generate initials from agent name
 preg_match('/([A-Za-z]+)(\d*)/', $agent_name, $m);
 $initials = strtoupper(substr($m[1] ?? $agent_name, 0, 2));
@@ -1195,7 +1225,29 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ?? Layout ?? */
-.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; }
+.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; transition: margin-right 0.3s ease; }
+
+/* CRM slide-in panel */
+.crm-panel {
+    position: fixed; top: 64px; right: -420px; width: 400px;
+    height: calc(100vh - 64px); background: #fff;
+    box-shadow: -4px 0 24px rgba(0,0,0,0.2);
+    z-index: 500; transition: right 0.3s ease;
+    display: flex; flex-direction: column;
+    border-left: 3px solid #0047AB;
+}
+.crm-panel.open { right: 0; }
+.crm-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: #0047AB; color: #fff; flex-shrink: 0;
+}
+.crm-panel-header span { font-size: 12px; font-weight: 600; }
+.crm-panel-header button {
+    background: rgba(255,255,255,0.2); border: none; color: #fff;
+    border-radius: 4px; padding: 3px 10px; cursor: pointer; font-size: 11px;
+}
+.crm-panel-header button:hover { background: rgba(255,255,255,0.35); }
+.crm-panel iframe { flex: 1; border: none; width: 100%; }
 
 /* ?? Summary Cards ?? */
 .summary-grid {
@@ -1324,13 +1376,13 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* ?? Floating Phone Widget ?? */
 .phone-fab {
-    position: fixed; bottom: 28px; right: 28px; z-index: 500;
+    position: fixed; bottom: 28px; right: 28px; z-index: 600;
     width: 58px; height: 58px; border-radius: 50%;
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     border: none; cursor: pointer; color: white; font-size: 24px;
     box-shadow: 0 4px 20px rgba(0,71,171,0.45);
     display: flex; align-items: center; justify-content: center;
-    transition: transform 0.2s, box-shadow 0.2s;
+    transition: transform 0.2s, box-shadow 0.2s, right 0.3s ease;
 }
 .phone-fab:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,71,171,0.55); }
 .phone-fab.incall { background: linear-gradient(135deg, #dc3545, #c82333); animation: fabPulse 1.5s infinite; }
@@ -1350,7 +1402,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 /* Static phone side panel */
 .phone-popup {
-    position: fixed; top: 60px; right: -320px; z-index: 499;
+    position: fixed; top: 60px; right: -320px; z-index: 601;
     width: 300px; max-height: calc(100vh - 60px);
     background: white; border-left: 1px solid #e0e0e0;
     box-shadow: -4px 0 20px rgba(0,0,0,0.12);
@@ -1759,7 +1811,10 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 <!-- ?? HEADER ?? -->
 <div class="header">
-    <div class="logo">SKY<span>KIN</span> Technologies</div>
+    <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="toggleAgentSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
+        <div class="logo">SKY<span>KIN</span> Technologies</div>
+    </div>
     <div class="agent-info">
         <div class="agent-avatar"><?php echo $initials; ?></div>
         <div class="agent-text-info">
@@ -1800,11 +1855,62 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 </div>
 
+<!-- ── Agent Side Menu ─────────────────────────────────────── -->
+<div id="agentSideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
+    <div style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
+        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
+        <div style="font-size:11px;opacity:.8;margin-top:3px">Agent Panel</div>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:8px 0">
+        <?php if ($is_supervisor): ?>
+        <a href="supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128202;</span> Supervisor View
+        </a>
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <?php endif; ?>
+
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Dashboard</div>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionKpi')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128200;</span> My Stats (KPIs)
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionMetrics')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#9201;</span> Call Time Metrics
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionPerformance')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127941;</span> Today's Performance
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionQueue')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128101;</span> Queue Status
+        </a>
+
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">History</div>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128222;</span> Call History
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127908;</span> Recordings
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128203;</span> ACW History
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('crm')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127760;</span> Customer Info
+        </a>
+
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128682;</span> Sign Out
+        </a>
+    </div>
+</div>
+<div id="agentSideMenuBackdrop" onclick="toggleAgentSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
+
 <!-- ?? MAIN ?? -->
 <div class="main">
 
     <!-- Summary Cards -->
-    <div class="summary-grid">
+    <div class="summary-grid" id="sectionKpi">
         <div class="card green">
             <div class="card-label">Total Calls Today</div>
             <div class="card-value" id="totalCalls">0</div>
@@ -1918,7 +2024,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 
     <!-- Call History + Recordings (tabbed) -->
-    <div class="full-section">
+    <div class="full-section" id="sectionHistory">
         <div class="tab-bar">
             <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
             <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
@@ -2241,18 +2347,13 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     <a href="/app/agent_dashboard/tickets.php"    style="color:#888;text-decoration:none;font-weight:bold;color:#0047AB;">Department Tickets</a> &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/supervisor.php" style="color:#888;text-decoration:none">Supervisor</a> &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/reports.php"    style="color:#888;text-decoration:none">Reports</a> &nbsp;|&nbsp;
-    <a href="/app/agent_dashboard/evaluation.php" style="color:#888;text-decoration:none">Evaluation</a> &nbsp;|&nbsp;
-    <a href="/app/agent_dashboard/crm.php"        style="color:#888;text-decoration:none">CRM</a>
+    <a href="/app/agent_dashboard/evaluation.php" style="color:#888;text-decoration:none">Evaluation</a>
+    <?php endif; ?>
 </div>
 
-<!-- ?? INCOMING CALL OVERLAY ?? -->
-<div class="incoming-overlay" id="incomingOverlay">
-    <div class="incoming-title">&#128222; Incoming Call</div>
-    <div class="incoming-number" id="incomingNumber">Unknown</div>
-    <div class="incoming-actions">
-        <button class="btn-answer" id="btnAnswer">Answer</button>
-        <button class="btn-decline" id="btnDecline">Decline</button>
-    </div>
+<!-- legacy hidden overlay (kept for compatibility, not shown) -->
+<div id="incomingOverlay" style="display:none">
+    <div></div>
 </div>
 
 <!-- ?? SIP SETTINGS MODAL ?? -->
@@ -2299,7 +2400,17 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
     </div>
     <div class="pp-body">
-        <div class="call-timer" id="callTimer">00:00</div>
+        <!-- Incoming call screen (shown instead of dialpad when call arrives) -->
+        <div id="incomingScreen" style="display:none; text-align:center; padding:24px 16px;">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">&#128222; Incoming Call</div>
+            <div id="incomingNumber" style="font-size:28px;font-weight:bold;color:#0047AB;margin-bottom:8px">Unknown</div>
+            <div style="font-size:12px;color:#666;margin-bottom:24px" id="incomingCidName"></div>
+            <div style="display:flex;gap:12px;justify-content:center;">
+                <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">&#128222; Answer</button>
+                <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">&#128548; Decline</button>
+            </div>
+        </div>
+        <div id="callTimer" class="call-timer">00:00</div>
         <!-- Hidden input syncs with dial pad display -->
         <input type="tel" class="dial-input" id="dialInput" placeholder="" maxlength="20" style="display:none">
         <div class="call-controls">
@@ -2601,7 +2712,7 @@ function fetchRecordings() {
         +'&to='+encodeURIComponent(to))
         .then(r => r.json())
         .then(data => updateRecordings(data.recordings || []))
-        .catch(() => updateRecordings(getDemoRecordings()));
+        .catch(() => updateRecordings([]));
 }
 
 function updateRecordings(recs) {
@@ -3009,6 +3120,9 @@ function setSipStatus(state, text) {
     } else if (state === 'calling') {
         dot.classList.add('calling'); badge.classList.add('show','calling');
         fab.classList.add('ringing'); openPhonePopup();
+        // Show hang-up button so caller can cancel before answer
+        document.getElementById('btnCall').style.display   = 'none';
+        document.getElementById('btnHangup').style.display = 'block';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
@@ -3025,9 +3139,12 @@ function setSipStatus(state, text) {
 function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
     document.getElementById('incomingNumber').textContent = callerNumber;
-    document.getElementById('incomingOverlay').style.display = 'block';
+    // Show incoming screen inside the phone panel, hide dial pad
+    document.getElementById('incomingScreen').style.display = 'block';
+    document.getElementById('dpPanel').style.display        = 'none';
     openPhonePopup();
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
+    startRingtone();
 }
 
 function answerCall() {
@@ -3038,10 +3155,13 @@ function answerCall() {
         console.error("Popup blocked or failed to open:", e);
     }
     if (sipBridge.answer) sipBridge.answer();
+    openCrmPanel(); // open ahununu.com inside dashboard
 }
 
 function declineCall() {
-    document.getElementById('incomingOverlay').style.display = 'none';
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display        = '';
+    stopRingtone();
     if (sipBridge.hangup) sipBridge.hangup();
     currentSession = null;
 }
@@ -3055,7 +3175,36 @@ function makeCall(number) {
     else showToast('SIP not ready. Open Phone Settings to connect.');
 }
 
+// ?? Ringtone (Web Audio API ? no file needed) ??????????????????????????????
+let _ringCtx = null, _ringNode = null, _ringInterval = null;
+function startRingtone() {
+    stopRingtone();
+    function _ring() {
+        try {
+            _ringCtx = new (window.AudioContext || window.webkitAudioContext)();
+            // Two short beeps: ring pattern
+            [0, 0.15].forEach(offset => {
+                const o = _ringCtx.createOscillator();
+                const g = _ringCtx.createGain();
+                o.connect(g); g.connect(_ringCtx.destination);
+                o.type = 'sine'; o.frequency.value = 440;
+                g.gain.setValueAtTime(0.4, _ringCtx.currentTime + offset);
+                g.gain.exponentialRampToValueAtTime(0.001, _ringCtx.currentTime + offset + 0.12);
+                o.start(_ringCtx.currentTime + offset);
+                o.stop(_ringCtx.currentTime + offset + 0.13);
+            });
+        } catch(e) {}
+    }
+    _ring();
+    _ringInterval = setInterval(_ring, 2500);
+}
+function stopRingtone() {
+    if (_ringInterval) { clearInterval(_ringInterval); _ringInterval = null; }
+    if (_ringCtx) { try { _ringCtx.close(); } catch(e) {} _ringCtx = null; }
+}
+
 function startCallUI(number) {
+    stopRingtone();
     setSipStatus('incall', 'In Call: ' + number);
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
@@ -3064,6 +3213,9 @@ function startCallUI(number) {
     document.getElementById('btnRecord').classList.add('visible');
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number;
+    // Hide incoming screen if still showing (edge case)
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display = '';
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
     
@@ -3132,6 +3284,8 @@ function toggleRecord() {
 }
 
 function endCall() {
+    stopRingtone();
+    closeCrmPanel();
     const callDur = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
     const callerNum = lastDialedNumber || document.getElementById('dialInput').value || '';
     const recFile = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
@@ -3156,7 +3310,8 @@ function endCall() {
     if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
     
     setAgentStatus('acw');
-    openAcwModal(callerNum, callDur, lastCallType, recFile);
+    // Small delay so recording upload completes before ACW modal opens
+    setTimeout(() => openAcwModal(callerNum, callDur, lastCallType, recFile), 800);
     setTimeout(() => { fetchData(); startCountdown(); }, 4000);
     setTimeout(() => fetchData(), 8000);
 }
@@ -3908,6 +4063,15 @@ if (document.getElementById('caseIssueType')) {
 <!-- Remote audio for WebRTC calls -->
 <audio id="remoteAudio" autoplay style="display:none"></audio>
 
+<!-- CRM slide-in panel -->
+<div class="crm-panel" id="crmPanel">
+    <div class="crm-panel-header">
+        <span>&#128100; Customer Info — ahununu.com</span>
+        <button onclick="closeCrmPanel()">&#10005; Close</button>
+    </div>
+    <iframe id="crmFrame" src="about:blank" allow="camera;microphone"></iframe>
+</div>
+
 <!-- SIP.js 0.21 local bundle (built from /opt/call_center node_modules) -->
 <script src="/app/agent_dashboard/js/sipjs.bundle.js"></script>
 <script>
@@ -3946,7 +4110,16 @@ function stopRec() {
         const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
         const fd = new FormData();
         fd.append('file', blob, id + '.webm');
-        fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd }).catch(()=>{});
+        const ext = localStorage.getItem('sip_ext') || '';
+        const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+        // Upload to FastAPI then link to FusionPBX CDR for Evaluation badge
+        try {
+            const resp = await fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
+            if (resp.ok) {
+                // Link recording filename to CDR so ?? badge shows in Evaluation
+                fetch('index.php?action=link_recording&filename=' + encodeURIComponent(id+'.webm') + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom));
+            }
+        } catch(e) {}
     };
     mr.stop(); window.mediaRecorderRef = null;
 }
@@ -4042,7 +4215,14 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
     ua.delegate = {
         onInvite(inv) {
             session = inv;
-            const num = inv.remoteIdentity?.uri?.user || 'Unknown';
+            // Try multiple places in SIP.js to get the caller number
+            const num = inv.remoteIdentity?.uri?.user
+                || inv.remoteIdentity?.displayName
+                || inv.request?.from?.uri?.user
+                || inv.request?.getHeader?.('P-Asserted-Identity')?.match(/sip:(\+?[\d]+)@/)?.[1]
+                || inv.request?.getHeader?.('From')?.match(/sip:(\+?[\d]+)@/)?.[1]
+                || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
+                || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);

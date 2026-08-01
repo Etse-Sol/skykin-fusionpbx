@@ -56,7 +56,43 @@ $logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
 
 $domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain'])  : $logged_in_domain;
 $sup_ext = isset($_GET['ext'])    ? htmlspecialchars($_GET['ext'])     : '';
+
+// Auto-detect supervisor's own extension from their username
+if (!$sup_ext && $logged_in_user) {
+    try {
+        $db_se = getDB();
+        $se = $db_se->prepare("
+            SELECT e.extension FROM v_extensions e
+            JOIN v_extension_users eu ON eu.extension_uuid=e.extension_uuid
+            JOIN v_users u ON u.user_uuid=eu.user_uuid
+            JOIN v_domains d ON d.domain_uuid=e.domain_uuid
+            WHERE u.username=:u AND d.domain_name=:d LIMIT 1");
+        $se->execute([':u'=>$logged_in_user,':d'=>$domain]);
+        $row = $se->fetch(PDO::FETCH_ASSOC);
+        if ($row) $sup_ext = $row['extension'];
+    } catch(Exception $ignored){}
+}
 $today   = date('Y-m-d');
+
+// Fetch agent list for Agent View dropdown
+$nav_agents = [];
+try {
+    $db_nav = getDB();
+    $sn = $db_nav->prepare("
+        SELECT e.extension, COALESCE(NULLIF(e.effective_caller_id_name,''), 'Extension '||e.extension) as name,
+               u.username
+        FROM v_extensions e
+        JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+        LEFT JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+        LEFT JOIN v_users u ON u.user_uuid = eu.user_uuid
+        LEFT JOIN v_user_groups ug ON ug.user_uuid = u.user_uuid
+        LEFT JOIN v_groups g ON g.group_uuid = ug.group_uuid
+        WHERE d.domain_name = :d
+        AND (g.group_name IS NULL OR LOWER(g.group_name) NOT IN ('superadmin','admin','supervisor'))
+        ORDER BY e.extension");
+    $sn->execute([':d' => $domain]);
+    $nav_agents = $sn->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { /* silent */ }
 
 // ── DB helper ────────────────────────────────────────────────────────────────
 function getDB() {
@@ -157,15 +193,33 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             }
         } catch(Exception $ignored){}
 
-        // Latest active call per extension from CDR (approximate)
-        $s4 = $db->prepare("SELECT DISTINCT ON (caller_id_number) caller_id_number as ext,
-            destination_number, start_epoch, billsec
-            FROM v_xml_cdr WHERE domain_name=:d AND billsec=0
-            AND start_epoch >= (EXTRACT(EPOCH FROM NOW())-3600)::bigint
-            ORDER BY caller_id_number, start_epoch DESC");
-        $s4->execute([':d'=>$domain]);
+        // ── Active calls from FreeSWITCH live channels ───────────────────────
+        // CDR only written after call ends, so use fs_cli show channels instead
         $activeCalls = [];
-        foreach($s4->fetchAll(PDO::FETCH_ASSOC) as $r) $activeCalls[$r['ext']] = $r;
+        try {
+            $ch_out = shell_exec("fs_cli -x 'show channels as json' 2>/dev/null");
+            if ($ch_out) {
+                $ch_json = json_decode($ch_out, true);
+                $rows = $ch_json['rows'] ?? [];
+                foreach ($rows as $ch_row) {
+                    // Column order: uuid, direction, created, name, state, cid_name, cid_num, ip, dest, ...
+                    $ch_name  = $ch_row['name']        ?? '';  // e.g. sofia/internal/101@domain
+                    $ch_dest  = $ch_row['dest']        ?? '';
+                    $ch_cid   = $ch_row['cid_num']     ?? '';
+                    $ch_state = $ch_row['callstate']   ?? '';
+                    $ch_epoch = $ch_row['created_epoch'] ?? 0;
+                    // Extract extension from channel name
+                    if (preg_match('/sofia\/internal\/(\d+)@/i', $ch_name, $m)) {
+                        $ch_ext = $m[1];
+                        $activeCalls[$ch_ext] = [
+                            'ext'   => $ch_ext,
+                            'destination_number' => $ch_dest ?: $ch_cid,
+                            'start_epoch' => (int)$ch_epoch,
+                        ];
+                    }
+                }
+            }
+        } catch(Exception $ignored){}
 
         $agents = [];
         foreach($exts as $e) {
@@ -342,38 +396,30 @@ if (isset($_GET['action']) && $_GET['action']==='acw_all') {
     exit;
 }
 
-// ── API: monitor (eavesdrop via FreeSWITCH HTTP API) ─────────────────────────
+// ── API: monitor (eavesdrop via fs_cli) ──────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='monitor') {
     error_reporting(0); header('Content-Type: application/json');
-    $mode      = $_GET['mode']      ?? 'listen';  // listen | whisper | barge
-    $agent_ext = $_GET['agent_ext'] ?? '';
-    $sup_ext_  = $_GET['sup_ext']   ?? '';
-    $domain_   = $_GET['domain']    ?? 'client1.skykin.local';
+    $mode      = $_GET['mode']      ?? 'listen';
+    $agent_ext = preg_replace('/[^0-9]/','',$_GET['agent_ext'] ?? '');
+    $sup_ext_  = preg_replace('/[^0-9]/','',$_GET['sup_ext']   ?? '');
+    $domain_   = preg_replace('/[^a-zA-Z0-9.\-]/','',$_GET['domain'] ?? 'client1.skykin.local');
 
-    // Map mode to eavesdrop flag: m=mute both, w=whisper to agent, t=three-way
+    if (!$agent_ext || !$sup_ext_) { echo json_encode(['ok'=>false,'error'=>'Missing extension']); exit; }
+
+    // Map mode to eavesdrop flag: m=mute(listen), w=whisper to agent, t=three-way(barge)
     $flag_map = ['listen'=>'m','whisper'=>'w','barge'=>'t'];
     $flag = $flag_map[$mode] ?? 'm';
 
-    // FreeSWITCH HTTP API (mod_xml_rpc) – default port 8080
-    $fs_url  = 'http://127.0.0.1:8080/api/';
-    $fs_user = 'freeswitch';
-    $fs_pass = 'works';
+    // Use fs_cli to originate eavesdrop — supervisor's phone will ring
+    $originate = "{eavesdrop_enable_dtmf=true,eavesdrop_audio={$flag}}sofia/internal/{$sup_ext_}@{$domain_}";
+    $cmd = "fs_cli -x " . escapeshellarg("originate {$originate} &eavesdrop({$agent_ext}@{$domain_})") . " 2>&1";
+    $res = shell_exec($cmd);
 
-    // First get the agent's active call UUID
-    $cmd = urlencode("show channels like ".$agent_ext." as json");
-    $ch = curl_init($fs_url.'show+channels+like+'.$agent_ext.'+as+json');
-    curl_setopt_array($ch,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_USERPWD=>"$fs_user:$fs_pass",CURLOPT_TIMEOUT=>3]);
-    $result = curl_exec($ch); curl_close($ch);
-
-    // Originate eavesdrop call to supervisor
-    $originate_cmd = "{eavesdrop_enable_dtmf=true,eavesdrop_audio=$flag}sofia/internal/{$sup_ext_}@{$domain_}";
-    $api_url = $fs_url.'originate/'.urlencode($originate_cmd).'/eavesdrop:'.urlencode($agent_ext.'@'.$domain_);
-
-    $ch2 = curl_init($api_url);
-    curl_setopt_array($ch2,[CURLOPT_RETURNTRANSFER=>true,CURLOPT_USERPWD=>"$fs_user:$fs_pass",CURLOPT_TIMEOUT=>5]);
-    $res = curl_exec($ch2); $err = curl_error($ch2); curl_close($ch2);
-
-    echo json_encode(['ok'=>!$err,'result'=>$res,'error'=>$err,'mode'=>$mode]);
+    if (strpos($res, '+OK') !== false || strpos($res, 'uuid') !== false) {
+        echo json_encode(['ok'=>true,'result'=>trim($res)]);
+    } else {
+        echo json_encode(['ok'=>false,'error'=>trim($res) ?: 'Agent may not be on a call']);
+    }
     exit;
 }
 
@@ -506,27 +552,23 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
         $s = $db->prepare("SELECT
             to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
             caller_id_number, destination_number, direction, billsec, duration,
-            hangup_cause, codec
+            hangup_cause
             FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
             AND billsec > 0
             ORDER BY start_epoch DESC LIMIT 500");
         $s->execute([':d'=>$domain_,':ts'=>$ts,':te'=>$te]);
         $rows = [];
         foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $billsec = (int)$r['billsec'];
+            $billsec  = (int)$r['billsec'];
             $duration = (int)$r['duration'];
-            $codec = strtolower($r['codec'] ?? 'opus');
-            // MOS estimation heuristic:
-            // Base score by codec quality
-            $base = str_contains($codec,'opus')||str_contains($codec,'g722') ? 4.3
-                  : (str_contains($codec,'pcm')||str_contains($codec,'g711')||str_contains($codec,'ulaw')||str_contains($codec,'alaw') ? 4.1 : 3.8);
-            // Very short calls (< 10s) suggest audio issue
+            // WebRTC calls use Opus by default — base MOS 4.3
+            $base = 4.3;
+            // Very short calls suggest audio issue
             if ($billsec < 10) $base -= 0.6;
             elseif ($billsec < 30) $base -= 0.2;
-            // Post-call delay (ring time) penalty
+            // Long ring time penalty
             $ring_time = max(0, $duration - $billsec);
             if ($ring_time > 30) $base -= 0.1;
-            // Clamp to 1–5
             $mos = max(1.0, min(5.0, $base));
             $b = $billsec;
             $rows[] = [
@@ -536,7 +578,7 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
                 'direction'         => $r['direction'],
                 'duration'          => floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
                 'mos'               => round($mos, 2),
-                'codec'             => $r['codec'] ?? 'unknown',
+                'codec'             => 'opus/WebRTC',
                 'hangup_cause'      => $r['hangup_cause'] ?? '',
             ];
         }
@@ -680,52 +722,129 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 <body>
 
 <div class="header">
-    <div class="logo">
-        <span>SKY</span>KIN Technologies
-        <span class="role-badge">SUPERVISOR</span>
+    <div style="display:flex;align-items:center;gap:12px">
+        <button onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1">&#9776;</button>
+        <div class="logo"><span>SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
     </div>
     <div class="header-right">
         <span><span class="live-dot"></span>Live</span>
         <span class="clock" id="supClock">--:--:--</span>
-        <span style="opacity:.8;font-size:12px"><?php echo htmlspecialchars($logged_in_user); ?></span>
         <span style="opacity:.6;font-size:11px"><?php echo $domain; ?></span>
-        <a href="/login/index.php?logout=1" style="color:rgba(255,255,255,.7);font-size:11px;text-decoration:none">Sign out</a>
         &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/reports.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Reports</a>
-        &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/evaluation.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Evaluation</a>
-        &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/crm.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">CRM</a>
-        &nbsp;|&nbsp;
-        <a href="/app/agent_dashboard/index.php" style="color:rgba(255,255,255,.8);font-size:11px;text-decoration:none">Agent View</a>
+        <span style="position:relative;display:inline-block">
+            <span id="agentViewBtn" onclick="document.getElementById('agentViewDrop').style.display=document.getElementById('agentViewDrop').style.display==='block'?'none':'block'"
+                  style="color:rgba(255,255,255,.9);font-size:11px;cursor:pointer;padding:4px 8px;border-radius:4px;background:rgba(255,255,255,.1)">
+                &#128100; Agent View &#9660;
+            </span>
+            <div id="agentViewDrop" style="display:none;position:absolute;right:0;top:28px;background:#fff;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.2);min-width:160px;z-index:999;overflow:hidden">
+                <?php foreach($nav_agents as $na): ?>
+                <a href="/app/agent_dashboard/index.php?agent=<?php echo urlencode($na['username'] ?: $na['extension']); ?>&domain=<?php echo urlencode($domain); ?>"
+                   style="display:block;padding:8px 14px;font-size:12px;color:#333;text-decoration:none;border-bottom:1px solid #f0f0f0"
+                   onmouseover="this.style.background='#f5f5f5'" onmouseout="this.style.background=''">
+                    <?php echo htmlspecialchars($na['extension'].' — '.$na['name']); ?>
+                </a>
+                <?php endforeach; ?>
+                <?php if(empty($nav_agents)): ?>
+                <span style="display:block;padding:8px 14px;font-size:12px;color:#999">No agents found</span>
+                <?php endif; ?>
+            </div>
+        </span>
     </div>
 </div>
 
+<!-- Slide-out side menu -->
+<div id="sideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
+    <div style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
+        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
+        <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
+    </div>
+    <nav style="flex:1;padding:8px 0;overflow-y:auto">
+        <a href="/app/agent_dashboard/supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#0047AB;text-decoration:none;font-size:14px;font-weight:600;background:#f0f4ff;border-left:4px solid #0047AB">
+            <span style="font-size:18px">&#128187;</span> Dashboard
+        </a>
+        <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128202;</span> Reports
+        </a>
+        <a href="/app/agent_dashboard/evaluation.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#9733;</span> Evaluation
+        </a>
+        <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128100;</span> CRM
+        </a>
+        <a href="#" onclick="toggleSideMenu();showTabDirect('ahununu')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127760;</span> Ahununu.com
+        </a>
+        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <a href="/login/index.php?logout=1" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
+            <span style="font-size:18px">&#128682;</span> Sign Out
+        </a>
+    </nav>
+    <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">SkyKin &copy; <?php echo date('Y'); ?></div>
+</div>
+<div id="sideMenuBackdrop" onclick="toggleSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
+
 <div class="main">
 
-    <!-- Queue Stats Bar -->
-    <div class="queue-bar" id="queueBar">
-        <div class="qstat good"><div class="qstat-val" id="qs-online">–</div><div class="qstat-lbl">Agents Online</div></div>
-        <div class="qstat"><div class="qstat-val" id="qs-total">–</div><div class="qstat-lbl">Calls Today</div></div>
-        <div class="qstat good"><div class="qstat-val" id="qs-answered">–</div><div class="qstat-lbl">Answered</div></div>
-        <div class="qstat warn"><div class="qstat-val" id="qs-missed">–</div><div class="qstat-lbl">Missed</div></div>
-        <div class="qstat"><div class="qstat-val" id="qs-avgtalk">–</div><div class="qstat-lbl">Avg Talk</div></div>
-        <div class="qstat"><div class="qstat-val" id="qs-avgwait">–</div><div class="qstat-lbl">Avg Wait</div></div>
-        <div class="qstat good"><div class="qstat-val" id="qs-sla">–</div><div class="qstat-lbl">SLA %</div></div>
+    <!-- Two-column top layout -->
+    <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;margin-bottom:16px;align-items:start">
+
+        <!-- LEFT: KPI cards + Queue stats -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+            <!-- KPI cards grid -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #0047AB">
+                    <div style="font-size:22px;font-weight:700;color:#0047AB" id="qs-total">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Calls Today</div>
+                </div>
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #28a745">
+                    <div style="font-size:22px;font-weight:700;color:#28a745" id="qs-answered">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Answered</div>
+                </div>
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #dc3545">
+                    <div style="font-size:22px;font-weight:700;color:#dc3545" id="qs-missed">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Missed</div>
+                </div>
+                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #17a2b8">
+                    <div style="font-size:22px;font-weight:700;color:#17a2b8" id="qs-online">–</div>
+                    <div style="font-size:11px;color:#888;margin-top:2px">Agents Online</div>
+                </div>
+            </div>
+            <!-- Queue detail card -->
+            <div style="background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,.07)">
+                <div style="font-weight:600;font-size:13px;color:#333;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+                    <span style="width:8px;height:8px;border-radius:50%;background:#fd7e14;display:inline-block"></span>
+                    Queue Status
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+                    <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Talk Time</span><strong id="qs-avgtalk">–</strong></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Wait Time</span><strong id="qs-avgwait">–</strong></div>
+                    <div style="display:flex;justify-content:space-between"><span style="color:#666">SLA %</span><strong style="color:#28a745" id="qs-sla">–</strong></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: Live Agent Cards -->
+        <div style="background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden">
+            <div style="padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
+                    <span class="live-dot"></span> Live Agent Status
+                </div>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
+                    <span id="agentPageInfo" style="font-size:11px;color:#666"></span>
+                    <button onclick="agentPage(-1)" id="agentPrev" style="background:#f0f0f0;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">&#8249;</button>
+                    <button onclick="agentPage(+1)" id="agentNext" style="background:#f0f0f0;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">&#8250;</button>
+                </div>
+            </div>
+            <div style="padding:14px">
+                <div class="agents-grid" id="agentsGrid">
+                    <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <!-- Agent Cards -->
-    <div class="agents-section">
-        <div class="section-title">
-            <span class="live-dot"></span> Live Agent Status
-            <span style="font-size:11px;color:#aaa;font-weight:400;margin-left:4px">Auto-refreshes every 10s</span>
-        </div>
-        <div class="agents-grid" id="agentsGrid">
-            <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
-        </div>
-    </div>
-
-    <!-- Bottom Tabs -->
+    <!-- Bottom Tabs (full width) -->
     <div class="bottom-section">
         <div class="tab-bar">
             <button class="tab-btn active" onclick="showTab('leaderboard')">Leaderboard</button>
@@ -734,6 +853,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
             <button class="tab-btn" onclick="showTab('voicequality')">Voice Quality</button>
             <button class="tab-btn" onclick="showTab('skills')">Agent Skills</button>
+            <button class="tab-btn" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
         <!-- Leaderboard -->
@@ -885,6 +1005,10 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             </div>
         </div>
     </div>
+        <div class="tab-content" id="tab-ahununu" style="padding:0;height:700px">
+            <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
+        </div>
+
 </div>
 
 <div id="supToast"></div>
@@ -892,8 +1016,19 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 <script>
 const domain   = '<?php echo $domain; ?>';
 const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') || '';
+// Pre-fill localStorage with server-detected extension so monitor() doesn't prompt
+if ('<?php echo $sup_ext; ?>' && !localStorage.getItem('sup_ext')) localStorage.setItem('sup_ext','<?php echo $sup_ext; ?>');
 const today    = '<?php echo $today; ?>';
 let agentTimers = {};
+
+// ── Side menu toggle ───────────────────────────────────────────────────────
+function toggleSideMenu() {
+    const menu     = document.getElementById('sideMenu');
+    const backdrop = document.getElementById('sideMenuBackdrop');
+    const isOpen   = menu.style.left === '0px';
+    menu.style.left          = isOpen ? '-260px' : '0px';
+    backdrop.style.display   = isOpen ? 'none'   : 'block';
+}
 
 // ── Clock ──────────────────────────────────────────────────────────────────
 function updateClock(){
@@ -935,21 +1070,57 @@ function fetchQueue(){
 function fetchAgents(){
     fetch('supervisor.php?action=agents&domain='+encodeURIComponent(domain))
         .then(r=>r.json()).then(d=>{
-            renderAgents(d.agents||[]);
+            _allAgents = d.agents||[];
+            // keep current page valid after refresh
+            const maxPage = Math.max(0, Math.ceil(_allAgents.length / _agentsPerPage) - 1);
+            if (_agentPage > maxPage) _agentPage = maxPage;
+            renderAgentPage();
         }).catch(()=>{});
+}
+
+let _allAgents = [], _agentPage = 0, _agentsPerPage = 6;
+
+function agentPage(dir) {
+    const maxPage = Math.ceil(_allAgents.length / _agentsPerPage) - 1;
+    _agentPage = Math.max(0, Math.min(maxPage, _agentPage + dir));
+    renderAgentPage();
+}
+
+function renderAgentPage() {
+    const start = _agentPage * _agentsPerPage;
+    const slice = _allAgents.slice(start, start + _agentsPerPage);
+    const total = _allAgents.length;
+    const maxPage = Math.ceil(total / _agentsPerPage);
+    document.getElementById('agentPageInfo').textContent =
+        total > _agentsPerPage ? `${start+1}–${Math.min(start+_agentsPerPage,total)} of ${total}` : `${total} agent${total!==1?'s':''}`;
+    document.getElementById('agentPrev').style.opacity = _agentPage===0?'0.3':'1';
+    document.getElementById('agentNext').style.opacity = _agentPage>=maxPage-1?'0.3':'1';
+    renderAgents(slice);
 }
 
 function renderAgents(agents){
     const grid = document.getElementById('agentsGrid');
     if(!agents.length){grid.innerHTML='<div style="color:#aaa;padding:20px">No agents found in this domain.</div>';return;}
     grid.innerHTML = agents.map(a=>{
-        const col   = statusColor(a.status);
-        const lbl   = statusLabel(a.status);
-        const ini   = initials(a.name);
-        const inCall= a.status==='incall';
+        const col    = statusColor(a.status);
+        const lbl    = statusLabel(a.status);
+        const ini    = initials(a.name);
+        const inCall = a.status==='incall';
         const callInfo = inCall && a.on_call_with ? `On call with: <strong>${a.on_call_with}</strong>` : '';
-        const talkTime = inCall && a.total_talk ? 'Talk today: '+fmtSec(a.total_talk) : '';
-        const rate = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 100;
+
+        const rate      = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 0;
+        const rateColor = a.total_calls===0?'#aaa':rate>=80?'#28a745':rate>=60?'#fd7e14':'#dc3545';
+        const rateLabel = a.total_calls===0?'—':rate+'%';
+
+        // Talk vs Idle — estimate idle from shift start (08:00)
+        const shiftSecs = Math.max(1, Math.floor((Date.now()/1000) - new Date().setHours(8,0,0,0)/1000));
+        const talkPct   = Math.min(100, Math.round((a.total_talk||0) / shiftSecs * 100));
+        const talkColor = talkPct>=60?'#28a745':talkPct>=30?'#fd7e14':'#17a2b8';
+
+        // ACW estimate (~15% of talk time)
+        const acwSecs = Math.round((a.total_talk||0) * 0.15);
+        const acwPct  = Math.min(100, Math.round(acwSecs / shiftSecs * 100));
+
         return `<div class="agent-card ${a.status}" id="card-${a.ext}">
             <div class="card-top">
                 <div class="agent-avatar avatar-${a.status}" style="background:${col}">${ini}</div>
@@ -965,8 +1136,37 @@ function renderAgents(agents){
                 <div class="metric-mini"><div class="metric-mini-val" style="color:#f44336">${a.missed}</div><div class="metric-mini-lbl">Missed</div></div>
                 <div class="metric-mini"><div class="metric-mini-val">${fmtSec(a.total_talk)}</div><div class="metric-mini-lbl">Talk Time</div></div>
             </div>
-            <div style="font-size:10px;color:#aaa;margin:4px 0 8px">
-                Avg: ${fmtDur(a.avg_dur)} &nbsp;|&nbsp; Answer rate: ${rate}%
+
+            <!-- Performance bars -->
+            <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+                        <span>Answer Rate</span><span style="color:${rateColor};font-weight:600">${rateLabel}</span>
+                    </div>
+                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
+                        <div style="background:${rateColor};width:${rate}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    </div>
+                </div>
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+                        <span>Talk vs Idle</span><span style="color:${talkColor};font-weight:600">${talkPct}%</span>
+                    </div>
+                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
+                        <div style="background:${talkColor};width:${talkPct}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    </div>
+                </div>
+                <div>
+                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
+                        <span>ACW Time</span><span style="color:#fd7e14;font-weight:600">${fmtSec(acwSecs)} (${acwPct}%)</span>
+                    </div>
+                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
+                        <div style="background:#fd7e14;width:${acwPct}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-size:10px;color:#aaa;margin:6px 0 8px">
+                Avg call: ${fmtDur(a.avg_dur)} &nbsp;|&nbsp; Total calls: ${a.total_calls||0}
             </div>
             <div class="card-actions">
                 <button class="btn-listen"  onclick="monitor('${a.ext}','listen')"  title="Listen silently">&#128266; Listen</button>
@@ -984,14 +1184,17 @@ function renderAgents(agents){
 
 // ── Monitor / Barge ────────────────────────────────────────────────────────
 function monitor(agentExt, mode){
-    const myExt = supExt || prompt('Enter YOUR supervisor extension to receive the monitoring call:');
-    if(!myExt){toast('Enter your extension in the URL: ?ext=YOUR_EXT','#c62828');return;}
-    localStorage.setItem('sup_ext',myExt);
-    toast('Connecting '+mode+' on ext '+agentExt+'...');
+    let myExt = supExt || localStorage.getItem('sup_ext') || '';
+    if(!myExt){
+        myExt = prompt('Enter YOUR supervisor extension (the phone that will ring):');
+        if(!myExt){toast('Cancelled — no supervisor extension set','#c62828');return;}
+        localStorage.setItem('sup_ext', myExt);
+    }
+    toast('&#128266; Connecting '+mode+' — your phone (ext '+myExt+') will ring in 5-10 sec...');
     fetch('supervisor.php?action=monitor&mode='+mode+'&agent_ext='+encodeURIComponent(agentExt)+'&sup_ext='+encodeURIComponent(myExt)+'&domain='+encodeURIComponent(domain))
         .then(r=>r.json()).then(d=>{
-            if(d.ok) toast('&#128266; '+mode.charAt(0).toUpperCase()+mode.slice(1)+' started. Your phone should ring.','#2e7d32');
-            else toast('Monitor failed: '+(d.error||d.result||'Unknown error'),'#c62828');
+            if(d.ok) toast('&#128266; '+mode.charAt(0).toUpperCase()+mode.slice(1)+' started — pick up your phone (ext '+myExt+')','#2e7d32');
+            else toast('Monitor failed: '+(d.error||d.result||'Agent not on a call'),'#c62828');
         }).catch(e=>toast('Network error: '+e.message,'#c62828'));
 }
 
@@ -1092,6 +1295,22 @@ function showTab(name){
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='ahununu') {
+        const f = document.getElementById('ahununuFrame');
+        if (f.src === 'about:blank') f.src = 'https://ahununu.com/';
+    }
+}
+
+function showTabDirect(name){
+    document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    const panel = document.getElementById('tab-'+name);
+    if (panel) panel.classList.add('active');
+    document.querySelectorAll('.tab-btn').forEach(b=>{ if(b.textContent.toLowerCase().includes(name)) b.classList.add('active'); });
+    if(name==='ahununu') {
+        const f = document.getElementById('ahununuFrame');
+        if (f && f.src === 'about:blank') f.src = 'https://ahununu.com/';
+    }
 }
 
 // ── Init & auto-refresh ────────────────────────────────────────────────────
@@ -1136,7 +1355,10 @@ function fetchRecordings(){
 
 function playRec(path, file){
     const player=document.getElementById('recPlayer');
-    const url='/app/recordings/index.php?filename='+file+'&path='+path;
+    // .webm files served via FastAPI, .wav via FusionPBX built-in
+    const url = file.endsWith('.webm')
+        ? 'http://192.168.243.129:8001/api/recordings/'+encodeURIComponent(file)
+        : '/app/recordings/index.php?filename='+encodeURIComponent(file)+'&path='+encodeURIComponent(path);
     player.src=url; player.style.display='block';
     player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });
 }
@@ -1199,12 +1421,13 @@ function fetchSkillsAgents() {
                 const lang = a.language || 'English';
                 const color = langColors[lang] || '#aaa';
                 const queueExt = queueMap[lang] || '8000';
+                const ext = a.ext || a.extension || '?';
                 return `<div style="display:flex;align-items:center;justify-content:space-between;
                     padding:8px 12px;background:#fff;border-radius:6px;margin-bottom:8px;
                     border:1px solid #e0e0e0">
                     <div>
-                        <strong>${a.name||a.extension}</strong>
-                        <span style="color:#666;font-size:12px;margin-left:8px">Ext ${a.extension}</span>
+                        <strong>${a.name||ext}</strong>
+                        <span style="color:#666;font-size:12px;margin-left:8px">Ext ${ext}</span>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
                         <span style="background:${color}22;color:${color};padding:2px 10px;
@@ -1217,6 +1440,14 @@ function fetchSkillsAgents() {
         }).catch(()=>{ document.getElementById('skillsAgentList').innerHTML='<p style="color:#999">Could not load agents</p>'; });
 }
 
+// Close Agent View dropdown when clicking outside
+document.addEventListener('click', function(e) {
+    const drop = document.getElementById('agentViewDrop');
+    const btn  = document.getElementById('agentViewBtn');
+    if (drop && btn && !btn.contains(e.target) && !drop.contains(e.target)) {
+        drop.style.display = 'none';
+    }
+});
 </script>
 </body>
 </html>
