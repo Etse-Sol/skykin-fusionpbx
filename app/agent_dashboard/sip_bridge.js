@@ -21,13 +21,18 @@ import {
             ua = null; reg = null;
         }
 
-        // Build WSS URI — if server already starts with wss:// use as-is,
-        // otherwise build from parts
-        let wsUri;
-        if (server.startsWith('wss://') || server.startsWith('ws://')) {
-            wsUri = server;
-        } else {
-            wsUri = 'wss://' + server + ':' + (port || '7443');
+        // Build WebSocket URI properly
+        let wsUri = server;
+        if (!wsUri.startsWith('wss://') && !wsUri.startsWith('ws://')) {
+            const isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
+            wsUri = (isHttps ? 'wss://' : 'ws://') + wsUri;
+        }
+        
+        // If the WebSocket URI does not specify a port or sub-path, append the port
+        const hostPart = wsUri.replace(/^wss?:\/\//i, '');
+        if (!hostPart.includes(':') && !hostPart.includes('/')) {
+            const isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
+            wsUri = wsUri + ':' + (port || (isHttps ? '7443' : '5066'));
         }
 
         try {

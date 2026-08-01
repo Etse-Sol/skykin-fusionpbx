@@ -102,7 +102,7 @@ final class config {
 			$file = getenv('SystemDrive') . DIRECTORY_SEPARATOR . 'ProgramData' . DIRECTORY_SEPARATOR . 'fusionpbx' . DIRECTORY_SEPARATOR . 'config.conf';
 		} elseif (file_exists(dirname(__DIR__, 2) . "/resources/config.php")) {
 			//use the current web directory to find it as a last resort
-			$file = "/var/www/fusionpbx/resources/config.php";
+			$file = dirname(__DIR__, 2) . "/resources/config.php";
 		}
 		return $file;
 	}
@@ -183,7 +183,11 @@ final class config {
 	 */
 	private function define_project_paths() {
 		// Load the document root
-		$doc_root = $this->get('document.root', '/var/www/fusionpbx');
+		$default_root = dirname(__DIR__, 2);
+		if (!file_exists($default_root . '/resources/classes/config.php')) {
+			$default_root = '/var/www/fusionpbx';
+		}
+		$doc_root = $this->get('document.root', $default_root);
 		$doc_path = $this->get('document.path', '');
 		//set the server variables and define project path constant
 		if (!empty($doc_path)) {

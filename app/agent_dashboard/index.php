@@ -2,6 +2,38 @@
 // SkyKin Technologies - Real-time Agent Dashboard
 session_start();
 
+// ── Shared Skykin DB: tries PostgreSQL, falls back to local SQLite ──────────
+function getSkykinDB() {
+    static $db = null;
+    if ($db) return $db;
+    $conf = '/etc/fusionpbx/config.conf';
+    $h = '127.0.0.1'; $p = '5432'; $n = 'fusionpbx'; $u = 'fusionpbx'; $pw = '';
+    if (file_exists($conf)) {
+        foreach (file($conf) as $ln) {
+            $ln = trim($ln);
+            if (strpos($ln, 'database.0.host')     !== false) $h  = trim(explode('=', $ln, 2)[1]);
+            if (strpos($ln, 'database.0.port')     !== false) $p  = trim(explode('=', $ln, 2)[1]);
+            if (strpos($ln, 'database.0.name')     !== false) $n  = trim(explode('=', $ln, 2)[1]);
+            if (strpos($ln, 'database.0.username') !== false) $u  = trim(explode('=', $ln, 2)[1]);
+            if (strpos($ln, 'database.0.password') !== false) $pw = trim(explode('=', $ln, 2)[1]);
+        }
+    }
+    // Try connection options: local config, remote DB, and default postgres user with correct password
+    foreach ([$h, '192.168.0.114'] as $_h) {
+        foreach ([[$u, $pw], ['fusionpbx', 'vtEWIukU24Lbr9Zi5NxchwVF2g'], ['postgres', 'vtEWIukU24Lbr9Zi5NxchwVF2g']] as [$_u, $_pw]) {
+            try {
+                $db = new PDO("pgsql:host={$_h};port={$p};dbname={$n};connect_timeout=2", $_u, $_pw, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+                return $db;
+            } catch (Exception $ignored) {}
+        }
+    }
+    // SQLite fallback for local development
+    $sqliteFile = __DIR__ . '/skykin_local.db';
+    $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $db->exec('PRAGMA journal_mode=WAL');
+    return $db;
+}
+
 // ?? If called as data API, serve JSON and exit immediately ???????????????????
 if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     error_reporting(0);
@@ -26,24 +58,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
              'ask_help_count'=>0,'call_reason_count'=>0,'queue_waiting'=>0,'agents_online'=>0,
              'avg_wait'=>0,'sla_rate'=>0,'recent_calls'=>[]];
 
-    $db = null;
     try {
-        $conf = '/etc/fusionpbx/config.conf';
-        $h='127.0.0.1'; $p='5432'; $n='fusionpbx'; $u='fusionpbx'; $pw='';
-        if (file_exists($conf)) {
-            foreach (file($conf) as $ln) {
-                $ln = trim($ln);
-                if (strpos($ln,'database.0.host')     !== false) $h  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.port')     !== false) $p  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.name')     !== false) $n  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.username') !== false) $u  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.password') !== false) $pw = trim(explode('=',$ln,2)[1]);
-            }
-        }
-        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}", $u, $pw, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        $db = getSkykinDB();
     } catch (Exception $e) {
-        try { $db = new PDO("pgsql:host=/var/run/postgresql;dbname=fusionpbx",'fusionpbx','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]); }
-        catch (Exception $e2) { $data['db_error']=$e2->getMessage(); echo json_encode($data); exit; }
+        $data['db_error'] = $e->getMessage();
+        echo json_encode($data);
+        exit;
     }
 
     try {
@@ -126,11 +146,41 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
 
             // Agents online
             try {
-                $sa = $db->prepare("SELECT COUNT(*) as cnt FROM v_call_center_agents WHERE domain_name=:d AND agent_status='Available'");
+                $sa = $db->prepare("SELECT COUNT(*) as cnt FROM v_call_center_agents WHERE domain_uuid = (SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1) AND agent_status='Available'");
                 $sa->execute([':d'=>$domain]);
                 $ra = $sa->fetch(PDO::FETCH_ASSOC);
                 $data['agents_online'] = $ra ? (int)$ra['cnt'] : 1;
             } catch(Exception $ignored){}
+
+            // Agent Timing Controls (live lookup)
+            try {
+                $pat = '%/' . $extension . '@%';
+                $st = $db->prepare(
+                    "SELECT agent_call_timeout, agent_no_answer_delay_time,
+                            agent_wrap_up_time, agent_reject_delay_time, agent_busy_delay_time
+                     FROM v_call_center_agents
+                     WHERE agent_contact LIKE :pat
+                     LIMIT 1"
+                );
+                $st->execute([':pat' => $pat]);
+                $data['agent_timing'] = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+            } catch(Exception $e){ $data['agent_timing_err'] = $e->getMessage(); }
+
+            // Agent Assigned Queue(s) & Tiers (live lookup)
+            try {
+                $pat = '%/' . $extension . '@%';
+                $sq = $db->prepare(
+                    "SELECT q.queue_name, q.queue_extension,
+                            t.tier_level, t.tier_position
+                     FROM v_call_center_tiers  t
+                     JOIN v_call_center_queues q ON q.call_center_queue_uuid = t.call_center_queue_uuid
+                     JOIN v_call_center_agents a ON a.call_center_agent_uuid = t.call_center_agent_uuid
+                     WHERE a.agent_contact LIKE :pat
+                     ORDER BY t.tier_level ASC, t.tier_position ASC"
+                );
+                $sq->execute([':pat' => $pat]);
+                $data['agent_queues'] = $sq->fetchAll(PDO::FETCH_ASSOC) ?: [];
+            } catch(Exception $e){ $data['agent_queues_err'] = $e->getMessage(); }
         }
     } catch (Exception $e) { $data['db_error']=$e->getMessage(); }
 
@@ -145,27 +195,30 @@ if (isset($_GET['action']) && $_GET['action'] === 'acw_history') {
     $ext       = isset($_GET['ext'])  ? trim($_GET['ext'])  : '';
     $date_from = isset($_GET['from']) ? $_GET['from']       : date('Y-m-d');
     $date_to   = isset($_GET['to'])   ? $_GET['to']         : date('Y-m-d');
-    $db = null;
     try {
-        $conf='/etc/fusionpbx/config.conf'; $h='127.0.0.1'; $p='5432'; $n='fusionpbx'; $u='fusionpbx'; $pw='';
-        if (file_exists($conf)) foreach (file($conf) as $ln) {
-            $ln=trim($ln);
-            if (strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
-            if (strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
-            if (strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
-            if (strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
-            if (strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT, caller_id TEXT,
+                call_type TEXT, duration INTEGER, disposition TEXT,
+                call_reason TEXT, notes TEXT, recording_filename TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+            $timeFmt = "strftime('%H:%M', created_at)";
+            $dateWhere = "date(created_at)>=:df AND date(created_at)<=:dt";
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
+                id SERIAL PRIMARY KEY, agent_id VARCHAR(50), caller_id VARCHAR(50),
+                call_type VARCHAR(20), duration INTEGER, disposition VARCHAR(100),
+                call_reason VARCHAR(200), notes TEXT, recording_filename VARCHAR(255),
+                created_at TIMESTAMP DEFAULT NOW())");
+            $timeFmt = "to_char(created_at,'HH24:MI')";
+            $dateWhere = "DATE(created_at)>=:df AND DATE(created_at)<=:dt";
         }
-        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
-        $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
-            id SERIAL PRIMARY KEY, agent_id VARCHAR(50), caller_id VARCHAR(50),
-            call_type VARCHAR(20), duration INTEGER, disposition VARCHAR(100),
-            call_reason VARCHAR(200), notes TEXT, recording_filename VARCHAR(255),
-            created_at TIMESTAMP DEFAULT NOW())");
-        $s = $db->prepare("SELECT to_char(created_at,'HH24:MI') as time,
+        $s = $db->prepare("SELECT {$timeFmt} as time,
             caller_id,call_type,duration,disposition,call_reason,notes
             FROM skykin_acw WHERE agent_id=:ext
-            AND DATE(created_at)>=:df AND DATE(created_at)<=:dt
+            AND {$dateWhere}
             ORDER BY created_at DESC LIMIT 200");
         $s->execute([':ext'=>$ext,':df'=>$date_from,':dt'=>$date_to]);
         echo json_encode(['records'=>$s->fetchAll(PDO::FETCH_ASSOC)]);
@@ -180,35 +233,38 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
     header('Access-Control-Allow-Origin: *');
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
 
-    $db = null;
     try {
-        $conf = '/etc/fusionpbx/config.conf';
-        $h='127.0.0.1'; $p='5432'; $n='fusionpbx'; $u='fusionpbx'; $pw='';
-        if (file_exists($conf)) {
-            foreach (file($conf) as $ln) {
-                $ln = trim($ln);
-                if (strpos($ln,'database.0.host')     !== false) $h  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.port')     !== false) $p  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.name')     !== false) $n  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.username') !== false) $u  = trim(explode('=',$ln,2)[1]);
-                if (strpos($ln,'database.0.password') !== false) $pw = trim(explode('=',$ln,2)[1]);
-            }
-        }
-        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}", $u, $pw, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
 
         // Create ACW table if it doesn't exist
-        $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
-            id SERIAL PRIMARY KEY,
-            agent_id VARCHAR(50),
-            caller_id VARCHAR(50),
-            call_type VARCHAR(20),
-            duration INTEGER,
-            disposition VARCHAR(100),
-            call_reason VARCHAR(200),
-            notes TEXT,
-            recording_filename VARCHAR(255),
-            created_at TIMESTAMP DEFAULT NOW()
-        )");
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT,
+                caller_id TEXT,
+                call_type TEXT,
+                duration INTEGER,
+                disposition TEXT,
+                call_reason TEXT,
+                notes TEXT,
+                recording_filename TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_acw (
+                id SERIAL PRIMARY KEY,
+                agent_id VARCHAR(50),
+                caller_id VARCHAR(50),
+                call_type VARCHAR(20),
+                duration INTEGER,
+                disposition VARCHAR(100),
+                call_reason VARCHAR(200),
+                notes TEXT,
+                recording_filename VARCHAR(255),
+                created_at TIMESTAMP DEFAULT NOW()
+            )");
+        }
 
         $s = $db->prepare("INSERT INTO skykin_acw
             (agent_id,caller_id,call_type,duration,disposition,call_reason,notes,recording_filename)
@@ -226,6 +282,757 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_acw') {
         echo json_encode(['saved'=>true]);
     } catch (Exception $e) {
         echo json_encode(['saved'=>false,'error'=>$e->getMessage()]);
+    }
+    exit;
+}
+
+// ── Save Case (Escalation) to DB ───────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'save_case') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    header('Access-Control-Allow-Origin: *');
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    try {
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+
+        // Create cases table (SQLite or PostgreSQL)
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_cases (
+                case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT, customer_phone TEXT, order_id TEXT,
+                issue_type TEXT, description TEXT, delivery_date TEXT,
+                department TEXT, agent_id TEXT,
+                priority TEXT DEFAULT 'Medium', status TEXT DEFAULT 'Received',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_cases (
+                case_id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(150), customer_phone VARCHAR(50),
+                order_id VARCHAR(50), issue_type VARCHAR(50), description TEXT,
+                delivery_date DATE, department VARCHAR(50), agent_id VARCHAR(50),
+                priority VARCHAR(20) DEFAULT 'Medium', status VARCHAR(20) DEFAULT 'Received',
+                created_at TIMESTAMP DEFAULT NOW()
+            )");
+            try {
+                $db->exec("ALTER TABLE skykin_cases ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'Medium'");
+                $db->exec("ALTER TABLE skykin_cases ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'Received'");
+            } catch (Exception $ignored) {}
+        }
+
+        $s = $db->prepare("INSERT INTO skykin_cases
+            (customer_name, customer_phone, order_id, issue_type, description, delivery_date, department, agent_id, priority, status)
+            VALUES (:cn, :cp, :oid, :it, :desc, :dd, :dept, :aid, :pri, :st)");
+        $s->execute([
+            ':cn'   => $input['customer_name']    ?? '',
+            ':cp'   => $input['customer_phone']   ?? '',
+            ':oid'  => $input['order_id']         ?? '',
+            ':it'   => $input['issue_type']        ?? 'Other',
+            ':desc' => $input['description']       ?? '',
+            ':dd'   => $input['delivery_date']     ?? date('Y-m-d'),
+            ':dept' => $input['department']       ?? '',
+            ':aid'  => $input['agent_id']         ?? '',
+            ':pri'  => $input['priority']         ?? 'Medium',
+            ':st'   => 'Received'
+        ]);
+        echo json_encode(['saved' => true]);
+    } catch (Exception $e) {
+        echo json_encode(['saved' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── Case History API ────────────────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'case_history') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $date_from = isset($_GET['from']) ? $_GET['from'] : date('Y-m-d');
+    $date_to   = isset($_GET['to'])   ? $_GET['to']   : date('Y-m-d');
+
+    try {
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_cases (
+                case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT, customer_phone TEXT, order_id TEXT,
+                issue_type TEXT, description TEXT, delivery_date TEXT,
+                department TEXT, agent_id TEXT,
+                priority TEXT DEFAULT 'Medium', status TEXT DEFAULT 'Received',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )");
+            $dateFmt   = "strftime('%Y-%m-%d %H:%M', created_at)";
+            $dateWhere = "date(created_at) >= :df AND date(created_at) <= :dt";
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_cases (
+                case_id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(150), customer_phone VARCHAR(50),
+                order_id VARCHAR(50), issue_type VARCHAR(50), description TEXT,
+                delivery_date DATE, department VARCHAR(50), agent_id VARCHAR(50),
+                priority VARCHAR(20) DEFAULT 'Medium', status VARCHAR(20) DEFAULT 'Received',
+                created_at TIMESTAMP DEFAULT NOW()
+            )");
+            try {
+                $db->exec("ALTER TABLE skykin_cases ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'Medium'");
+                $db->exec("ALTER TABLE skykin_cases ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'Received'");
+            } catch (Exception $ignored) {}
+            $dateFmt   = "to_char(created_at,'YYYY-MM-DD HH24:MI')";
+            $dateWhere = "created_at >= :df::date AND created_at < (:dt::date + interval '1 day')";
+        }
+
+        $s = $db->prepare("SELECT case_id, {$dateFmt} as formatted_date,
+            customer_name, customer_phone, order_id, issue_type, description, delivery_date, department, agent_id, priority, status
+            FROM skykin_cases
+            WHERE {$dateWhere}
+            ORDER BY created_at DESC LIMIT 200");
+        $s->execute([':df' => $date_from, ':dt' => $date_to]);
+        echo json_encode(['records' => $s->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Exception $e) {
+        echo json_encode(['records' => [], 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: Lookup Customer/Order ───────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'lookup_customer') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $query = trim($_GET['query'] ?? '');
+    
+    $data = [
+        'contact' => null,
+        'deliveries' => [],
+        'tickets' => [],
+        'current_intransit' => null
+    ];
+    
+    if ($query !== '') {
+        try {
+            $db = getSkykinDB();
+            $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+            
+            // Ensure skykin_deliveries table exists
+            if ($isSQLite) {
+                $db->exec("CREATE TABLE IF NOT EXISTS skykin_deliveries (
+                    delivery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    order_id TEXT UNIQUE NOT NULL,
+                    customer_name TEXT,
+                    customer_phone TEXT,
+                    delivery_address TEXT,
+                    delivery_date TEXT,
+                    status TEXT DEFAULT 'Pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )");
+            } else {
+                $db->exec("CREATE TABLE IF NOT EXISTS skykin_deliveries (
+                    delivery_id SERIAL PRIMARY KEY,
+                    order_id VARCHAR(50) UNIQUE NOT NULL,
+                    customer_name VARCHAR(150),
+                    customer_phone VARCHAR(50),
+                    delivery_address TEXT,
+                    delivery_date DATE,
+                    status VARCHAR(50) DEFAULT 'Pending',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )");
+            }
+            
+            // Seed skykin_deliveries if empty
+            $cnt = $db->query("SELECT COUNT(*) FROM skykin_deliveries")->fetchColumn();
+            if ($cnt == 0) {
+                $deliveries = [
+                    ['ORD-987654', 'Abebe Girma', '+251911000001', 'Bole, Addis Ababa', date('Y-m-d', strtotime('-3 days')), 'Delivered'],
+                    ['ORD-987655', 'Abebe Girma', '+251911000001', 'Bole, Addis Ababa', date('Y-m-d'), 'In Transit'],
+                    ['ORD-123456', 'Sara Mohammed', '+251922000002', 'Kazanchis, Addis Ababa', date('Y-m-d', strtotime('-2 days')), 'Delivered'],
+                    ['ORD-123457', 'Sara Mohammed', '+251922000002', 'Kazanchis, Addis Ababa', date('Y-m-d', strtotime('+1 day')), 'Pending'],
+                    ['ORD-111222', 'Dawit Bekele', '+251933000003', 'Piazza, Addis Ababa', date('Y-m-d', strtotime('-1 days')), 'Delivered'],
+                    ['ORD-333444', 'Abebe Girma', '0911000001', 'Bole, Addis Ababa', date('Y-m-d', strtotime('-5 days')), 'Delivered'],
+                    ['ORD-555666', 'Sara Mohammed', '0922000002', 'Kazanchis, Addis Ababa', date('Y-m-d', strtotime('-6 days')), 'Delivered']
+                ];
+                $ins = $db->prepare("INSERT INTO skykin_deliveries (order_id, customer_name, customer_phone, delivery_address, delivery_date, status) VALUES (?, ?, ?, ?, ?, ?)");
+                foreach ($deliveries as $d) {
+                    $ins->execute($d);
+                }
+            }
+            
+            // Check if query is an Order ID
+            $s_ord = $db->prepare("SELECT * FROM skykin_deliveries WHERE UPPER(order_id) = UPPER(:q) LIMIT 1");
+            $s_ord->execute([':q' => $query]);
+            $orderRow = $s_ord->fetch(PDO::FETCH_ASSOC);
+            
+            $customerPhone = $query;
+            if ($orderRow) {
+                $customerPhone = $orderRow['customer_phone'];
+            }
+            
+            $cleanPhone = preg_replace('/^(\+251|00251|0)/', '', $customerPhone);
+            
+            // Look up CRM contact profile
+            $hasContacts = false;
+            try {
+                $db->query("SELECT 1 FROM skykin_contacts LIMIT 1");
+                $hasContacts = true;
+            } catch (Exception $e) {}
+            
+            if ($hasContacts) {
+                $s_c = $db->prepare("SELECT * FROM skykin_contacts 
+                    WHERE phone LIKE :q OR alt_phone LIKE :q 
+                       OR phone LIKE :c OR alt_phone LIKE :c 
+                    ORDER BY contact_id LIMIT 1");
+                $s_c->execute([':q' => '%' . $customerPhone . '%', ':c' => '%' . $cleanPhone . '%']);
+                $data['contact'] = $s_c->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+            
+            // Create profile fallback if not found
+            if (!$data['contact']) {
+                $s_name = $db->prepare("SELECT customer_name FROM skykin_deliveries WHERE customer_phone = :phone LIMIT 1");
+                $s_name->execute([':phone' => $customerPhone]);
+                $foundName = $s_name->fetchColumn();
+                if (!$foundName) {
+                    $s_name2 = $db->prepare("SELECT customer_name FROM skykin_cases WHERE customer_phone = :phone LIMIT 1");
+                    $s_name2->execute([':phone' => $customerPhone]);
+                    $foundName = $s_name2->fetchColumn();
+                }
+                $data['contact'] = [
+                    'full_name' => $foundName ?: 'Customer (' . $customerPhone . ')',
+                    'phone' => $customerPhone,
+                    'email' => '-',
+                    'company' => '-',
+                    'language' => 'English',
+                    'account_type' => 'Customer',
+                    'notes' => ''
+                ];
+            }
+            
+            // Fetch deliveries
+            $s_dels = $db->prepare("SELECT * FROM skykin_deliveries 
+                WHERE customer_phone = :phone OR customer_phone LIKE :c 
+                ORDER BY delivery_date DESC");
+            $s_dels->execute([':phone' => $customerPhone, ':c' => '%' . $cleanPhone]);
+            $data['deliveries'] = $s_dels->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Current in-transit
+            foreach ($data['deliveries'] as $del) {
+                if ($del['status'] === 'In Transit' || $del['status'] === 'Pending') {
+                    $data['current_intransit'] = $del;
+                    break;
+                }
+            }
+            
+            // Fetch tickets
+            if ($isSQLite) {
+                $db->exec("CREATE TABLE IF NOT EXISTS skykin_cases (
+                    case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    customer_name TEXT, customer_phone TEXT, order_id TEXT,
+                    issue_type TEXT, description TEXT, delivery_date TEXT,
+                    department TEXT, agent_id TEXT,
+                    priority TEXT DEFAULT 'Medium', status TEXT DEFAULT 'Received',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )");
+                $dateFmt = "strftime('%Y-%m-%d %H:%M', created_at)";
+            } else {
+                $dateFmt = "to_char(created_at,'YYYY-MM-DD HH24:MI')";
+            }
+            
+            $s_tix = $db->prepare("SELECT case_id, {$dateFmt} as formatted_date,
+                customer_name, customer_phone, order_id, issue_type, description, delivery_date, department, agent_id, priority, status
+                FROM skykin_cases 
+                WHERE customer_phone = :phone OR customer_phone LIKE :c 
+                ORDER BY created_at DESC");
+            $s_tix->execute([':phone' => $customerPhone, ':c' => '%' . $cleanPhone]);
+            $data['tickets'] = $s_tix->fetchAll(PDO::FETCH_ASSOC);
+            
+        } catch (Exception $e) {
+            $data['error'] = $e->getMessage();
+        }
+    }
+    
+    echo json_encode($data);
+    exit;
+}
+
+// ── API: Save Callback ───────────────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'save_callback' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    
+    $customer_name  = $body['customer_name'] ?? '';
+    $customer_phone = $body['customer_phone'] ?? '';
+    $callback_time  = $body['callback_time'] ?? '';
+    $notes          = $body['notes'] ?? '';
+    $agent_id       = $body['agent_id'] ?? '';
+    
+    if (!$customer_phone || !$callback_time) {
+        echo json_encode(['ok' => false, 'error' => 'Phone and Time are required.']);
+        exit;
+    }
+    
+    try {
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+        
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_callbacks (
+                callback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                callback_time TEXT,
+                notes TEXT,
+                agent_id TEXT,
+                status TEXT DEFAULT 'Scheduled',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_callbacks (
+                callback_id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(150),
+                customer_phone VARCHAR(50),
+                callback_time TIMESTAMP,
+                notes TEXT,
+                agent_id VARCHAR(50),
+                status VARCHAR(50) DEFAULT 'Scheduled',
+                created_at TIMESTAMP DEFAULT NOW()
+            )");
+        }
+        
+        $s = $db->prepare("INSERT INTO skykin_callbacks (customer_name, customer_phone, callback_time, notes, agent_id) VALUES (:name, :phone, :time, :notes, :agent)");
+        $s->execute([
+            ':name' => $customer_name,
+            ':phone' => $customer_phone,
+            ':time' => $callback_time,
+            ':notes' => $notes,
+            ':agent' => $agent_id
+        ]);
+        
+        echo json_encode(['ok' => true]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: List Callbacks ───────────────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'list_callbacks') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $agent_id = $_GET['agent_id'] ?? '';
+    
+    try {
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+        
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_callbacks (
+                callback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                customer_name TEXT,
+                customer_phone TEXT,
+                callback_time TEXT,
+                notes TEXT,
+                agent_id TEXT,
+                status TEXT DEFAULT 'Scheduled',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )");
+            $timeFmt = "callback_time";
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_callbacks (
+                callback_id SERIAL PRIMARY KEY,
+                customer_name VARCHAR(150),
+                customer_phone VARCHAR(50),
+                callback_time TIMESTAMP,
+                notes TEXT,
+                agent_id VARCHAR(50),
+                status VARCHAR(50) DEFAULT 'Scheduled',
+                created_at TIMESTAMP DEFAULT NOW()
+            )");
+            $timeFmt = "to_char(callback_time, 'YYYY-MM-DD HH24:MI')";
+        }
+        
+        $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status 
+            FROM skykin_callbacks 
+            WHERE agent_id = :agent AND status = 'Scheduled' 
+            ORDER BY callback_time ASC LIMIT 100");
+        $s->execute([':agent' => $agent_id]);
+        
+        echo json_encode(['records' => $s->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Exception $e) {
+        echo json_encode(['records' => [], 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: Update Callback Status ──────────────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'update_callback_status' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $id = (int)($body['callback_id'] ?? 0);
+    $status = $body['status'] ?? 'Completed';
+    
+    try {
+        $db = getSkykinDB();
+        $s = $db->prepare("UPDATE skykin_callbacks SET status = :status WHERE callback_id = :id");
+        $s->execute([':status' => $status, ':id' => $id]);
+        echo json_encode(['ok' => true]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: Set Agent Status in FusionPBX Call Center via DB + ESL ─────────────
+// FusionPBX's real mechanism: UPDATE v_call_center_agents AND send
+//   callcenter_config agent set status <uuid> '<status>'
+// through the FreeSWITCH Event Socket (port 8021).
+// ESL credentials are read from .env: ESL_HOST, ESL_PORT, ESL_PASSWORD.
+// If ESL is unreachable (e.g. local dev with ACL blocking), the DB is still
+// updated and the response includes esl_error for debugging.
+if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    header('Access-Control-Allow-Origin: *');
+    $body       = json_decode(file_get_contents('php://input'), true) ?: [];
+    $agent_ext  = trim($body['agent_ext']  ?? '');
+    $new_status = trim($body['new_status'] ?? 'Available');
+    $domain_    = trim($body['domain']     ?? 'client1.skykin.local');
+
+    // Only allow valid FusionPBX agent_status values
+    $allowed = ['Available', 'Available (On Demand)', 'On Break', 'Logged Out'];
+    if (!in_array($new_status, $allowed, true)) {
+        echo json_encode(['ok' => false, 'error' => 'Invalid status: ' . $new_status]);
+        exit;
+    }
+    if (!$agent_ext) {
+        echo json_encode(['ok' => false, 'error' => 'agent_ext is required']);
+        exit;
+    }
+
+    try {
+        $db = getSkykinDB();
+
+        // ── 1. Resolve domain_uuid (robust: exact match → first domain fallback) ──
+        // v_call_center_agents uses domain_uuid FK; there is no domain_name column.
+        // The domain passed in the URL (e.g. client1.skykin.local) may differ from
+        // the v_domains name (e.g. 192.168.0.114). Fallback ensures we always match.
+        $s_dom = $db->prepare("SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1");
+        $s_dom->execute([':d' => $domain_]);
+        $domain_uuid = $s_dom->fetchColumn();
+        if (!$domain_uuid) {
+            // No exact domain_name match — fall back to the first (or only) domain
+            $domain_uuid = $db->query("SELECT domain_uuid FROM v_domains LIMIT 1")->fetchColumn();
+        }
+        if (!$domain_uuid) {
+            echo json_encode(['ok' => false, 'error' => 'No domain found in v_domains']);
+            exit;
+        }
+
+        // ── 2. Lookup the agent record (by agent_id or agent_contact pattern) ────
+        // FusionPBX stores agent_contact as e.g. "user/1003@192.168.0.114".
+        // Match by agent_id (the numeric ID) OR the SIP contact pattern.
+        $pat = '%/' . $agent_ext . '@%';
+        $s_agent = $db->prepare(
+            "SELECT call_center_agent_uuid, agent_name, user_uuid
+             FROM v_call_center_agents
+             WHERE (agent_id = :ext OR agent_contact LIKE :pat)
+               AND domain_uuid = :domain_uuid
+             LIMIT 1"
+        );
+        $s_agent->execute([':ext' => $agent_ext, ':pat' => $pat, ':domain_uuid' => $domain_uuid]);
+        $agent_row = $s_agent->fetch(PDO::FETCH_ASSOC);
+        if (!$agent_row) {
+            echo json_encode([
+                'ok'          => false,
+                'error'       => 'No Call Center agent found for ext ' . $agent_ext .
+                                 ' in domain_uuid ' . $domain_uuid .
+                                 '. Add this extension in FusionPBX → Call Center → Agents.',
+                'domain_uuid' => $domain_uuid,
+                'agent_ext'   => $agent_ext,
+            ]);
+            exit;
+        }
+        $agent_uuid = $agent_row['call_center_agent_uuid'];
+
+        // ── 3. Update the database ────────────────────────────────────────────────
+        $s_upd = $db->prepare(
+            "UPDATE v_call_center_agents SET agent_status = :s WHERE call_center_agent_uuid = :uuid"
+        );
+        $s_upd->execute([':s' => $new_status, ':uuid' => $agent_uuid]);
+
+        // ── 4. Send ESL command to FreeSWITCH ─────────────────────────────────────
+        // Load ESL credentials: env vars → .env file → defaults (127.0.0.1:8021/ClueCon)
+        // On production VM the ESL ACL allows 127.0.0.1 by default.
+        // For local dev: add ESL_HOST=<vm_ip> and ensure VM ACL allows your IP,
+        // or SSH-tunnel: ssh -L 8021:127.0.0.1:8021 user@<vm_ip>
+        $esl_host = '127.0.0.1';
+        $esl_port = 8021;
+        $esl_pass = 'ClueCon';
+        foreach ([__DIR__ . '/../../.env', __DIR__ . '/../.env', __DIR__ . '/.env'] as $envPath) {
+            if (file_exists($envPath)) {
+                foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $ln) {
+                    $ln = trim($ln);
+                    if (strpos($ln, '#') === 0 || strpos($ln, '=') === false) continue;
+                    [$k, $v] = explode('=', $ln, 2);
+                    $k = trim($k); $v = trim($v, " \t\n\r\0\x0B\"'");
+                    if ($k === 'ESL_HOST')     $esl_host = $v;
+                    if ($k === 'ESL_PORT')     $esl_port = intval($v);
+                    if ($k === 'ESL_PASSWORD') $esl_pass = $v;
+                }
+                break;
+            }
+        }
+        if (getenv('ESL_HOST'))     $esl_host = getenv('ESL_HOST');
+        if (getenv('ESL_PORT'))     $esl_port = intval(getenv('ESL_PORT'));
+        if (getenv('ESL_PASSWORD')) $esl_pass = getenv('ESL_PASSWORD');
+
+        // Load FusionPBX's own event_socket class (no require.php needed)
+        $esl_connected   = false;
+        $esl_response    = '';
+        $esl_state_resp  = '';
+        $esl_error       = '';
+        try {
+            if (!class_exists('config'))       require_once __DIR__ . '/../../resources/classes/config.php';
+            if (!class_exists('event_socket')) require_once __DIR__ . '/../../resources/classes/event_socket.php';
+            $esl = new event_socket();
+            if ($esl->connect($esl_host, $esl_port, $esl_pass)) {
+                $esl_connected = true;
+                // Set agent status (exact FusionPBX pattern from call_center_agent_status.php)
+                $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
+                $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
+                // Set agent state to Waiting when becoming Available or Logged Out
+                if ($new_status === 'Available' || $new_status === 'Logged Out') {
+                    $res2 = $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
+                    $esl_state_resp = is_array($res2) ? ($res2['$'] ?? implode(' | ', $res2)) : (string)$res2;
+                }
+            } else {
+                $esl_error = 'ESL connect failed — ACL rejected or wrong password. ' .
+                             'On production VM this works via 127.0.0.1. ' .
+                             'For local dev: add ESL_HOST=' . $esl_host . ' to .env and allow your IP in ' .
+                             'freeswitch/autoload_configs/event_socket.conf.xml, or SSH-tunnel port 8021.';
+            }
+        } catch (Throwable $esl_ex) {
+            $esl_error = $esl_ex->getMessage();
+        }
+
+        echo json_encode([
+            'ok'             => true,
+            'agent_name'     => $agent_row['agent_name'],
+            'agent_uuid'     => $agent_uuid,
+            'status'         => $new_status,
+            'db_updated'     => true,
+            'esl_connected'  => $esl_connected,
+            'esl_response'   => trim($esl_response),
+            'esl_state_resp' => trim($esl_state_resp),
+            'esl_error'      => $esl_error,
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: Get Available Agents (for call transfer target list) ────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $domain_ = trim($_GET['domain'] ?? 'client1.skykin.local');
+    $my_ext  = trim($_GET['my_ext'] ?? '');
+
+    try {
+        $db = getSkykinDB();
+        // Resolve domain_uuid with fallback (same logic as set_agent_status)
+        $s_dom = $db->prepare("SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1");
+        $s_dom->execute([':d' => $domain_]);
+        $domain_uuid = $s_dom->fetchColumn();
+        if (!$domain_uuid) {
+            $domain_uuid = $db->query("SELECT domain_uuid FROM v_domains LIMIT 1")->fetchColumn();
+        }
+        $s  = $db->prepare(
+            "SELECT agent_name, agent_contact, agent_status
+             FROM v_call_center_agents
+             WHERE domain_uuid = :domain_uuid AND agent_status = 'Available'
+             ORDER BY agent_name ASC"
+        );
+        $s->execute([':domain_uuid' => $domain_uuid]);
+        $agents = [];
+        foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            // Parse extension from contact URI: user/EXT@host or sofia/internal/EXT@domain
+            if (preg_match('/\/(\d{2,6})@/', $row['agent_contact'], $m)) {
+                $ext = $m[1];
+                if ($ext === $my_ext) continue; // exclude caller's own extension
+                $agents[] = [
+                    'name'      => $row['agent_name'],
+                    'extension' => $ext,
+                    'status'    => $row['agent_status'],
+                ];
+            }
+        }
+        echo json_encode(['agents' => $agents]);
+    } catch (Exception $e) {
+        echo json_encode(['agents' => [], 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── Isolated SMS Function & API Endpoint ────────────────────────────────────
+function sendSms($phoneNumber, $message) {
+    try {
+        $db = getSkykinDB();
+        $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+        
+        if ($isSQLite) {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_sms_logs (
+                sms_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone_number TEXT,
+                message TEXT,
+                status TEXT DEFAULT 'Logged',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )");
+        } else {
+            $db->exec("CREATE TABLE IF NOT EXISTS skykin_sms_logs (
+                sms_id SERIAL PRIMARY KEY,
+                phone_number VARCHAR(50),
+                message TEXT,
+                status VARCHAR(50) DEFAULT 'Logged',
+                created_at TIMESTAMP DEFAULT NOW()
+            )");
+        }
+        
+        // Log the attempt initially as 'Pending'
+        $s = $db->prepare("INSERT INTO skykin_sms_logs (phone_number, message, status) VALUES (:phone, :msg, :status)");
+        $s->execute([
+            ':phone' => $phoneNumber,
+            ':msg' => $message,
+            ':status' => 'Pending'
+        ]);
+        $smsId = $db->lastInsertId();
+        
+        // 1. Verify PHP cURL module is loaded
+        if (!extension_loaded('curl')) {
+            throw new Exception("PHP cURL extension is not enabled in this environment. Please enable extension=curl in php.ini.");
+        }
+        
+        // Fetch environment variables
+        $apiKey   = getenv('SMS_API_KEY');
+        $username = getenv('SMS_API_USERNAME');
+        $senderId = getenv('SMS_SENDER_ID');
+        
+        // Fallback: parse local .env if present in workspace/dashboard
+        if (!$apiKey || !$username) {
+            foreach ([__DIR__ . '/../../.env', __DIR__ . '/../.env', __DIR__ . '/.env'] as $envPath) {
+                if (file_exists($envPath)) {
+                    $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    foreach ($lines as $line) {
+                        $line = trim($line);
+                        if (strpos($line, '#') === 0 || strpos($line, '=') === false) continue;
+                        list($name, $value) = explode('=', $line, 2);
+                        $name = trim($name);
+                        $value = trim($value, " \t\n\r\0\x0B\"'");
+                        if ($name === 'SMS_API_KEY') $apiKey = $value;
+                        if ($name === 'SMS_API_USERNAME') $username = $value;
+                        if ($name === 'SMS_SENDER_ID') $senderId = $value;
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // 2. Verify credentials are configured
+        if (!$apiKey || !$username) {
+            throw new Exception("SMS credentials not configured. Please define SMS_API_KEY and SMS_API_USERNAME in your environment or .env file.");
+        }
+        
+        $isSandbox = (strtolower($username) === 'sandbox');
+        $endpoint = $isSandbox 
+            ? 'https://api.sandbox.africastalking.com/version1/messaging' 
+            : 'https://api.africastalking.com/version1/messaging';
+            
+        $postData = [
+            'username' => $username,
+            'to'       => $phoneNumber,
+            'message'  => $message
+        ];
+        if (!empty($senderId)) {
+            $postData['from'] = $senderId;
+        }
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $endpoint);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($postData));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            "apikey: {$apiKey}",
+            "Accept: application/json",
+            "Content-Type: application/x-www-form-urlencoded"
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+        
+        $success = false;
+        if ($response === false) {
+            $finalStatus = "Failed: Connection error (" . $curlError . ")";
+            throw new Exception($finalStatus);
+        } else {
+            $result = json_decode($response, true);
+            if ($httpCode >= 200 && $httpCode < 300 && isset($result['SMSMessageData']['Recipients'][0])) {
+                $recipient = $result['SMSMessageData']['Recipients'][0];
+                $recStatus = $recipient['status'] ?? 'Failed';
+                $recMsgId = $recipient['messageId'] ?? '';
+                
+                if (strtolower($recStatus) === 'success') {
+                    $finalStatus = "Sent (ID: " . $recMsgId . ")";
+                    $success = true;
+                } else {
+                    $finalStatus = "Failed: " . $recStatus;
+                    throw new Exception($finalStatus);
+                }
+            } else {
+                $errDetail = isset($result['errorMessage']) ? $result['errorMessage'] : $response;
+                $finalStatus = "Failed: HTTP {$httpCode} - " . substr(trim(strip_tags($errDetail)), 0, 100);
+                throw new Exception($finalStatus);
+            }
+        }
+        
+        $update = $db->prepare("UPDATE skykin_sms_logs SET status = :status WHERE sms_id = :id");
+        $update->execute([':status' => $finalStatus, ':id' => $smsId]);
+        
+        return $success;
+    } catch (Exception $e) {
+        error_log("sendSms error: " . $e->getMessage());
+        if (isset($db) && isset($smsId)) {
+            try {
+                $update = $db->prepare("UPDATE skykin_sms_logs SET status = :status WHERE sms_id = :id");
+                $update->execute([':status' => 'Failed: ' . $e->getMessage(), ':id' => $smsId]);
+            } catch(Exception $ignored) {}
+        }
+        throw $e;
+    }
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    
+    $phone = $body['phone'] ?? '';
+    $message = $body['message'] ?? '';
+    
+    if (!$phone || !$message) {
+        echo json_encode(['ok' => false, 'error' => 'Phone and message are required.']);
+        exit;
+    }
+    
+    try {
+        $ok = sendSms($phone, $message);
+        echo json_encode(['ok' => $ok]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
     }
     exit;
 }
@@ -258,8 +1065,7 @@ try {
             if (strpos($line, 'database.0.password') !== false) $db_pass = trim(explode('=', $line, 2)[1]);
         }
     }
-    $pdb = new PDO("pgsql:host={$db_host};port={$db_port};dbname={$db_name}", $db_user, $db_pass,
-                   [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $pdb = getSkykinDB();
 
     // 1) Try: username match via v_extension_users (v_extensions has no user_uuid or domain_name column)
     $s = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
@@ -287,7 +1093,41 @@ try {
     if (!$agent_ext && preg_match('/^\d{2,6}$/', $agent_name)) {
         $agent_ext = $agent_name;
     }
-} catch (Exception $e) { /* silent ? JS will fall back to localStorage */ }
+} catch (Exception $e) { /* silent — JS will fall back to localStorage */ }
+
+// ── Agent timing config + queue/tier assignments (any extension, read-only) ──
+// NOTE: In v_call_center_agents, agent_name is a human label (e.g. "Agent 1003"),
+//       NOT the extension number. The extension is encoded in agent_contact as
+//       "user/1003@host". We match via agent_contact LIKE '%/EXT@%'.
+$agent_timing = [];
+$agent_queues = [];
+if (!empty($agent_ext) && isset($pdb)) {
+    try {
+        // Timing rules — match by extension embedded in agent_contact SIP URI
+        $st = $pdb->prepare(
+            "SELECT agent_call_timeout, agent_no_answer_delay_time,
+                    agent_wrap_up_time, agent_reject_delay_time, agent_busy_delay_time
+             FROM v_call_center_agents
+             WHERE agent_contact LIKE :pat
+             LIMIT 1"
+        );
+        $st->execute([':pat' => '%/' . $agent_ext . '@%']);
+        $agent_timing = $st->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        // Assigned queues + tier — same contact pattern join
+        $sq = $pdb->prepare(
+            "SELECT q.queue_name, q.queue_extension,
+                    t.tier_level, t.tier_position
+             FROM v_call_center_tiers  t
+             JOIN v_call_center_queues q ON q.call_center_queue_uuid = t.call_center_queue_uuid
+             JOIN v_call_center_agents a ON a.call_center_agent_uuid = t.call_center_agent_uuid
+             WHERE a.agent_contact LIKE :pat
+             ORDER BY t.tier_level ASC, t.tier_position ASC"
+        );
+        $sq->execute([':pat' => '%/' . $agent_ext . '@%']);
+        $agent_queues = $sq->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Exception $e) { /* silent — display gracefully in UI */ }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -762,6 +1602,157 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     box-shadow: 0 8px 24px rgba(0,0,0,0.3); display: none;
     animation: slideUp 0.2s ease;
 }
+/* ?? Agent Configuration Strip ?? */
+.agent-config-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+}
+.agent-config-box {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    border-top: 3px solid #0047AB;
+}
+.agent-config-box.queues  { border-top-color: #fd7e14; }
+.agent-config-box.tier    { border-top-color: #6f42c1; }
+.agent-config-title {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .6px; color: #555; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+}
+.config-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 5px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px;
+}
+.config-row:last-child { border-bottom: none; }
+.config-label { color: #777; }
+.config-val   { font-weight: 600; color: #1e293b; }
+.config-val.na { color: #aaa; font-weight: 400; font-style: italic; }
+.queue-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: #fff7ed; border: 1px solid #fed7aa;
+    color: #c2410c; border-radius: 20px;
+    padding: 4px 10px; font-size: 12px; font-weight: 600; margin-bottom: 6px;
+}
+.queue-badge .qext { color: #9a3412; font-size: 11px; opacity: .8; }
+.tier-big {
+    font-size: 36px; font-weight: 800; color: #6f42c1;
+    text-align: center; margin: 8px 0 4px;
+    line-height: 1;
+}
+.tier-pos { text-align: center; font-size: 12px; color: #999; }
+.not-in-queue {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 10px 0; gap: 4px;
+}
+.not-in-queue .nq-icon { font-size: 28px; opacity: .35; }
+.not-in-queue .nq-label { font-size: 12px; color: #aaa; font-style: italic; }
+
+/* ?? Modal CSS Styling ?? */
+.custom-modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.65);
+    backdrop-filter: blur(4px); z-index: 1001; align-items: center; justify-content: center;
+}
+.custom-modal-overlay.show { display: flex; }
+.custom-modal-box {
+    background: white; border-radius: 12px; padding: 24px; width: 400px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25); display: flex; flex-direction: column; gap: 14px;
+    animation: slideUp 0.2s ease;
+}
+.custom-modal-hdr {
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid #e9ecef; padding-bottom: 10px; margin-bottom: 4px;
+}
+.custom-modal-hdr h3 { font-size: 15px; color: #0047AB; font-weight: 700; margin: 0; }
+.custom-modal-hdr .close-btn { background: none; border: none; font-size: 20px; color: #888; cursor: pointer; }
+.custom-modal-body { display: flex; flex-direction: column; gap: 12px; }
+
+/* ?? Lookup Customer Styling ?? */
+.lookup-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; }
+.profile-card { background: #fafbfc; border-radius: 8px; border: 1px solid #e2e8f0; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.profile-title { font-weight: 700; font-size: 15px; color: #1e293b; border-bottom: 1px solid #edf2f7; padding-bottom: 6px; }
+.profile-item { display: flex; justify-content: space-between; font-size: 13px; border-bottom: 1px dashed #f1f5f9; padding: 4px 0; }
+.profile-item span:first-child { color: #64748b; }
+.profile-item span:last-child { font-weight: 600; color: #334155; }
+.intransit-banner {
+    background: #fff7ed; border-left: 4px solid #f97316; border-radius: 8px;
+    padding: 14px; font-size: 13px; color: #c2410c; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 0 2px 8px rgba(249,115,22,0.08);
+}
+.intransit-banner strong { color: #9a3412; }
+.btn-action-sms { background: #0ea5e9; color: white; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: bold; }
+.btn-action-sms:hover { background: #0284c7; }
+
+/* ?? Highlight Callback Row ?? */
+.callback-urgent { background-color: #fffbeb !important; border-left: 3px solid #f59e0b; }
+.callback-urgent td { font-weight: 600; }
+.btn-action-resolve { background: #10b981; color: white; border: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: bold; }
+.btn-action-resolve:hover { background: #059669; }
+
+/* ── Transfer Call Modal ──────────────────────────────────────────────────── */
+.transfer-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(15,23,42,0.65);
+    backdrop-filter: blur(4px); z-index: 1002; align-items: center; justify-content: center;
+}
+.transfer-overlay.show { display: flex; }
+.transfer-modal {
+    background: white; border-radius: 14px; width: 100%; max-width: 380px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden;
+    animation: slideUp 0.2s ease;
+}
+.transfer-hdr {
+    padding: 14px 18px; border-bottom: 1px solid #e9ecef;
+    display: flex; align-items: center; justify-content: space-between;
+    background: linear-gradient(135deg, #6366f1, #4f46e5);
+}
+.transfer-hdr h3 { font-size: 14px; font-weight: 700; color: white; margin: 0; }
+.transfer-hdr button {
+    background: rgba(255,255,255,0.2); border: none; cursor: pointer;
+    font-size: 16px; color: white; width: 26px; height: 26px;
+    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.transfer-body {
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    max-height: 400px; overflow-y: auto;
+}
+.transfer-ext-row { display: flex; gap: 8px; align-items: center; }
+.transfer-ext-row input {
+    flex: 1; padding: 8px 10px; border: 1px solid #ddd;
+    border-radius: 8px; font-size: 14px; outline: none;
+}
+.transfer-ext-row input:focus { border-color: #6366f1; }
+.transfer-ext-row button {
+    background: #6366f1; color: white; border: none;
+    padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    font-size: 13px; font-weight: bold; white-space: nowrap;
+}
+.transfer-ext-row button:hover { background: #4f46e5; }
+.transfer-agents-list { display: flex; flex-direction: column; gap: 6px; }
+.transfer-agent-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px; border: 1px solid #e9ecef; border-radius: 8px;
+    cursor: pointer; transition: all 0.15s;
+}
+.transfer-agent-item:hover { background: #f5f3ff; border-color: #6366f1; }
+.transfer-agent-info { display: flex; flex-direction: column; }
+.transfer-agent-name { font-size: 13px; font-weight: 600; color: #1e293b; }
+.transfer-agent-ext { font-size: 11px; color: #64748b; }
+.transfer-agent-badge {
+    background: #d1fae5; color: #059669; font-size: 10px;
+    font-weight: 700; padding: 2px 8px; border-radius: 10px;
+}
+.transfer-loading { text-align: center; color: #888; font-size: 13px; padding: 20px; }
+.btn-transfer {
+    background: #6366f1; border: none; color: white;
+    padding: 10px 0; border-radius: 8px; cursor: pointer;
+    font-size: 13px; font-weight: bold;
+    grid-column: span 2; margin-top: 4px; display: none;
+}
+.btn-transfer:hover { background: #4f46e5; }
+.btn-transfer.visible { display: block; }
 </style>
 </head>
 <body>
@@ -856,18 +1847,8 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
-    <!-- Two Column Metrics -->
+    <!-- Two Column Metrics: Status & Activity | Queue Status -->
     <div class="section-grid">
-        <div class="section-box">
-            <div class="section-title"><span class="dot"></span> Call Time Metrics</div>
-            <div class="metric-row"><span class="metric-name">Listening Duration</span><span class="metric-val" id="listeningDuration">--</span></div>
-            <div class="metric-row"><span class="metric-name">Internal Call Times</span><span class="metric-val" id="internalCallTime">--</span></div>
-            <div class="metric-row"><span class="metric-name">Making Calls Times</span><span class="metric-val" id="outboundTime">--</span></div>
-            <div class="metric-row"><span class="metric-name">Hook-on Times</span><span class="metric-val" id="hookOnTimes">--</span></div>
-            <div class="metric-row"><span class="metric-name">Total Call Duration</span><span class="metric-val" id="totalDuration">--</span></div>
-            <div class="metric-row"><span class="metric-name">Arranging State (ACW)</span><span class="metric-val" id="acwDuration">--</span></div>
-            <div class="metric-row"><span class="metric-name">Transfer to IVR Times</span><span class="metric-val" id="ivrTransfer">--</span></div>
-        </div>
         <div class="section-box">
             <div class="section-title"><span class="dot" style="background:#28a745"></span> Status &amp; Activity</div>
             <div class="metric-row"><span class="metric-name">Busy Duration</span><span class="metric-val warn" id="busyDuration">--</span></div>
@@ -877,39 +1858,6 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="metric-row"><span class="metric-name">Internal Help Times</span><span class="metric-val" id="internalHelp">--</span></div>
             <div class="metric-row"><span class="metric-name">Login / Logout Count</span><span class="metric-val" id="loginCount">--</span></div>
             <div class="metric-row"><span class="metric-name">Force Sign-out Times</span><span class="metric-val bad" id="forceSignout">0</span></div>
-        </div>
-    </div>
-
-    <!-- Performance Progress -->
-    <div class="full-section">
-        <div class="section-title"><span class="dot" style="background:#00B4D8"></span> Today's Performance</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;">
-            <div class="progress-wrap">
-                <div class="progress-label"><span>Call Answer Rate</span><span id="answerRate">--%</span></div>
-                <div class="progress-bar"><div class="progress-fill blue" id="answerRateBar" style="width:0%"></div></div>
-            </div>
-            <div class="progress-wrap">
-                <div class="progress-label"><span>Talk Time vs Idle</span><span id="talkRatio">--%</span></div>
-                <div class="progress-bar"><div class="progress-fill green" id="talkRatioBar" style="width:0%"></div></div>
-            </div>
-            <div class="progress-wrap">
-                <div class="progress-label"><span>Target Achievement</span><span id="targetRate">--%</span></div>
-                <div class="progress-bar"><div class="progress-fill orange" id="targetRateBar" style="width:0%"></div></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Advanced Metrics -->
-    <div class="section-grid">
-        <div class="section-box">
-            <div class="section-title"><span class="dot" style="background:#6f42c1"></span> Monitoring &amp; Supervision</div>
-            <div class="metric-row"><span class="metric-name">Listening Count</span><span class="metric-val" id="listeningCount">0</span></div>
-            <div class="metric-row"><span class="metric-name">Listen as Third-Party</span><span class="metric-val" id="thirdPartyCount">0</span></div>
-            <div class="metric-row"><span class="metric-name">Force Advisor Count</span><span class="metric-val" id="forceAdvisorCount">0</span></div>
-            <div class="metric-row"><span class="metric-name">Handle Call on Behalf</span><span class="metric-val" id="handleOnBehalf">0</span></div>
-            <div class="metric-row"><span class="metric-name">Ask Help (Chat/Tool)</span><span class="metric-val" id="askHelpCount">0</span></div>
-            <div class="metric-row"><span class="metric-name">Call Reason Count</span><span class="metric-val" id="callReasonCount">--</span></div>
-            <div class="metric-row"><span class="metric-name">Forwarding Times</span><span class="metric-val" id="forwardingTimes">--</span></div>
         </div>
         <div class="section-box">
             <div class="section-title"><span class="dot" style="background:#fd7e14"></span> Queue Status</div>
@@ -922,12 +1870,62 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
     </div>
 
+    <!-- ?? Agent Configuration Strip ?? -->
+    <div class="agent-config-strip">
+
+        <!-- Timing Controls -->
+        <div class="agent-config-box">
+            <div class="agent-config-title">Agent Timing Controls</div>
+            <div id="timingContainer">
+                <div class="config-row"><span class="config-label">Call Timeout</span><span class="config-val" id="valCallTimeout">--</span></div>
+                <div class="config-row"><span class="config-label">No-Answer Delay</span><span class="config-val" id="valNoAnswerDelay">--</span></div>
+                <div class="config-row"><span class="config-label">Wrap-Up Time</span><span class="config-val" id="valWrapUpTime">--</span></div>
+                <div class="config-row"><span class="config-label">Reject Delay</span><span class="config-val" id="valRejectDelay">--</span></div>
+                <div class="config-row"><span class="config-label">Busy Delay</span><span class="config-val" id="valBusyDelay">--</span></div>
+            </div>
+            <div class="not-in-queue" id="timingNoRecord" style="display:none;">
+                <span class="nq-icon">&#128683;</span>
+                <span class="nq-label">No agent record found</span>
+            </div>
+        </div>
+
+        <!-- Assigned Queues -->
+        <div class="agent-config-box queues">
+            <div class="agent-config-title">Assigned Queue(s)</div>
+            <div id="queuesContainer" style="padding: 5px 0;">
+                <!-- Badges will be generated here -->
+            </div>
+            <div class="not-in-queue" id="queuesNoRecord" style="display:none;">
+                <span class="nq-icon">&#128683;</span>
+                <span class="nq-label">Not in a queue</span>
+            </div>
+        </div>
+
+        <!-- Tier / Skill Level -->
+        <div class="agent-config-box tier">
+            <div class="agent-config-title">Tier / Skill Level</div>
+            <div id="tierContainer">
+                <div class="tier-big" id="valTierBig">--</div>
+                <div class="tier-pos" id="valTierPos">Position: --</div>
+                <div id="tierBreakdown" style="margin-top:10px;"></div>
+            </div>
+            <div class="not-in-queue" id="tierNoRecord" style="display:none;">
+                <span class="nq-icon">&#128683;</span>
+                <span class="nq-label">Not in a queue</span>
+            </div>
+        </div>
+
+    </div>
+
     <!-- Call History + Recordings (tabbed) -->
     <div class="full-section">
         <div class="tab-bar">
             <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
             <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
             <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
+            <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
+            <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
+            <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
         </div>
 
         <!-- ?? Call History Tab ?? -->
@@ -1034,11 +2032,213 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                 </tbody>
             </table>
         </div>
+
+        <!-- Customer Lookup Tab -->
+        <div class="tab-panel" id="tabLookup" style="display:none">
+            <div style="display:flex; flex-direction:column; gap: 16px;">
+                <!-- Search bar -->
+                <div class="section-box" style="display:flex; gap:12px; align-items:center;">
+                    <label style="font-weight:bold; font-size:13px; color:#555; white-space:nowrap;">Manual Lookup:</label>
+                    <input type="text" id="lookupQuery" placeholder="Enter Phone Number or Order ID..." style="flex:1; padding:8px 12px; border:1px solid #ddd; border-radius:6px; font-size:14px;">
+                    <button class="btn-filter" onclick="performLookup(document.getElementById('lookupQuery').value)" style="padding:8px 20px; font-weight:bold;">Search</button>
+                    <button class="btn-filter-clear" onclick="clearLookup()" style="padding:8px 12px;">Clear</button>
+                </div>
+
+                <!-- Lookup Results Grid -->
+                <div class="lookup-grid">
+                    <!-- Left Side: Customer CRM Info & Current In-Transit Status -->
+                    <div style="display:flex; flex-direction:column; gap:16px;">
+                        <!-- Customer Profile Card -->
+                        <div class="section-box">
+                            <div class="section-title"><span class="dot" style="background:#0047AB"></span> Customer Profile</div>
+                            <div id="lookupProfileBox" class="profile-card">
+                                <p style="color:#888; font-style:italic; font-size:13px;">No customer looked up yet.</p>
+                            </div>
+                        </div>
+
+                        <!-- In-Transit Status Card -->
+                        <div class="section-box" id="inTransitBox" style="display:none;">
+                            <div class="section-title"><span class="dot" style="background:#fd7e14"></span> In-Transit Delivery</div>
+                            <div id="inTransitDetails" class="intransit-banner">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Side: History Tables (Deliveries and Tickets) -->
+                    <div style="display:flex; flex-direction:column; gap:16px;">
+                        <!-- Delivery History -->
+                        <div class="section-box">
+                            <div class="section-title"><span class="dot" style="background:#28a745"></span> Delivery History</div>
+                            <div style="overflow-x:auto;">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Order ID</th>
+                                            <th>Date</th>
+                                            <th>Address</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="lookupDeliveryBody">
+                                        <tr><td colspan="4" style="text-align:center; color:#aaa; padding:12px;">No deliveries found.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Ticket History -->
+                        <div class="section-box">
+                            <div class="section-title"><span class="dot" style="background:#dc3545"></span> Past Tickets / Complaints</div>
+                            <div style="overflow-x:auto;">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>Issue Type</th>
+                                            <th>Priority</th>
+                                            <th>Status</th>
+                                            <th>Description</th>
+                                            <th>SMS</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="lookupTicketsBody">
+                                        <tr><td colspan="6" style="text-align:center; color:#aaa; padding:12px;">No tickets found.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scheduled Callbacks Tab -->
+        <div class="tab-panel" id="tabCallbacks" style="display:none">
+            <div class="section-box" style="padding: 16px;">
+                <div class="section-title">
+                    <span class="dot" style="background:#ffc107"></span> My Scheduled Callbacks
+                    <button class="btn-filter" onclick="openCallbackModal()" style="margin-left:auto; font-size:11px; padding:4px 10px;">+ New Callback</button>
+                </div>
+                <div style="overflow-x:auto;">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Scheduled Time</th>
+                                <th>Customer Name</th>
+                                <th>Phone Number</th>
+                                <th>Notes / Reason</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="callbacksHistoryBody">
+                            <tr><td colspan="6" class="rec-empty">No upcoming callbacks scheduled.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- New Ticket Tab -->
+        <div class="tab-panel" id="tabEscalation" style="display:none">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <!-- Ticket Form -->
+                <div class="section-box" style="padding: 16px;">
+                    <div class="section-title"><span class="dot" style="background:#dc3545"></span> New Ticket</div>
+                    <form id="escalationForm" onsubmit="submitCase(event)" style="display:flex; flex-direction:column; gap:12px;">
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Customer Name</label>
+                            <input type="text" id="caseCustomerName" required placeholder="e.g. Abebe Girma" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Customer Phone</label>
+                            <input type="text" id="caseCustomerPhone" required placeholder="e.g. +251911000001" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Order / Delivery ID</label>
+                            <input type="text" id="caseOrderId" placeholder="e.g. ORD-123456" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Issue Type</label>
+                            <select id="caseIssueType" onchange="autoAssignDepartment(this.value)" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; background:#fff;">
+                                <option value="Not delivered">Not delivered</option>
+                                <option value="Wrong item">Wrong item</option>
+                                <option value="Damaged package">Damaged package</option>
+                                <option value="Late delivery">Late delivery</option>
+                                <option value="Billing issue">Billing issue</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Priority</label>
+                            <select id="casePriority" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; background:#fff;">
+                                <option value="Low">Low</option>
+                                <option value="Medium" selected>Medium</option>
+                                <option value="High">High</option>
+                            </select>
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Delivery Date</label>
+                            <input type="date" id="caseDeliveryDate" required style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Department</label>
+                            <select id="caseDepartment" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; background:#fff;">
+                                <option value="Logistics">Logistics</option>
+                                <option value="Warehouse">Warehouse</option>
+                                <option value="Billing">Billing</option>
+                                <option value="Customer Relations">Customer Relations</option>
+                            </select>
+                        </div>
+                        <div class="form-group-escalation">
+                            <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Description / Notes</label>
+                            <textarea id="caseDescription" rows="3" placeholder="Details about the complaint..." style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; font-family:inherit; resize:vertical;"></textarea>
+                        </div>
+                        <button type="submit" class="btn-filter" style="width:100%; padding:10px; font-weight:bold; cursor:pointer;">Submit Ticket</button>
+                    </form>
+                </div>
+                <!-- My Submitted Tickets Log -->
+                <div class="section-box" style="padding: 16px;">
+                    <div class="section-title"><span class="dot" style="background:#0047AB"></span> My Submitted Tickets</div>
+                    <div class="date-filter">
+                        <label>From:</label>
+                        <input type="date" id="caseFilterFrom" value="<?php echo $today; ?>">
+                        <label>To:</label>
+                        <input type="date" id="caseFilterTo" value="<?php echo $today; ?>">
+                        <button class="btn-filter" onclick="fetchCases()">Filter</button>
+                        <span id="caseCount" style="font-size:12px;color:#aaa;margin-left:4px;"></span>
+                    </div>
+                    <div style="overflow-x:auto;">
+                        <table class="data-table" style="width:100%;">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Customer</th>
+                                    <th>Phone</th>
+                                    <th>Order ID</th>
+                                    <th>Issue</th>
+                                    <th>Priority</th>
+                                    <th>Status</th>
+                                    <th>Dept</th>
+                                    <th>Agent</th>
+                                    <th>SMS</th>
+                                </tr>
+                            </thead>
+                            <tbody id="caseHistoryBody">
+                                <tr><td colspan="10" class="rec-empty">No tickets found.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div>
     </div>
 
 <div class="footer">
     SkyKin Technologies &copy; <?php echo date('Y'); ?> | Agent Dashboard v2.0 |
     Auto-refresh: <span id="refreshCountdown">10</span>s &nbsp;|&nbsp;
+    <a href="/app/agent_dashboard/tickets.php"    style="color:#888;text-decoration:none;font-weight:bold;color:#0047AB;">Department Tickets</a> &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/supervisor.php" style="color:#888;text-decoration:none">Supervisor</a> &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/reports.php"    style="color:#888;text-decoration:none">Reports</a> &nbsp;|&nbsp;
     <a href="/app/agent_dashboard/evaluation.php" style="color:#888;text-decoration:none">Evaluation</a> &nbsp;|&nbsp;
@@ -1110,6 +2310,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="btn-record" id="btnRecord" onclick="toggleRecord()">
                 <span class="rec-dot"></span> Record
             </button>
+            <button class="btn-hold"   id="btnPhoneSms" onclick="openSmsModalFromPhone()" style="display:none; background:#0ea5e9; color:white; grid-column:span 2; margin-top:4px;">Send SMS</button>
+            <button class="btn-hold"   id="btnPhoneCallback" onclick="openCallbackModalFromPhone()" style="display:none; background:#ffc107; color:#333; grid-column:span 2; margin-top:4px;">Schedule Callback</button>
+            <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">&#x21AA; Transfer Call</button>
         </div>
     </div>
 
@@ -1191,6 +2394,18 @@ let currentAgentStatus = 'ready';
 function toggleStatusMenu() {
     document.getElementById('statusDropMenu').classList.toggle('open');
 }
+
+// Maps our dashboard status keys → FusionPBX v_call_center_agents.agent_status values
+// These are the exact strings FreeSWITCH Call Center module reads
+const FPBX_STATUS_MAP = {
+    ready:  'Available',
+    idle:   'Available',
+    break:  'On Break',
+    acw:    'On Break',   // Block new calls during After-Call Work
+    logout: 'Logged Out',
+    incall: 'Available',  // Call center handles in-call state internally
+};
+
 function setAgentStatus(status) {
     currentAgentStatus = status;
     const labels = { ready:'Available', idle:'Idle', break:'On Break', acw:'Wrap-up (ACW)', logout:'Logged Out', incall:'On Call' };
@@ -1202,12 +2417,49 @@ function setAgentStatus(status) {
     dot.style.background = colors[key] || '#888';
     document.getElementById('statusDropMenu').classList.remove('open');
     if (status === 'logout') { window.location = '/logout.php'; return; }
-    const agentId = (document.getElementById('agentId') || {}).value || '101';
-    fetch('http://192.168.243.129:8001/api/agent/status', {
+
+    // ── Sync to FusionPBX v_call_center_agents + ESL ──────────────────────
+    const agentExt   = localStorage.getItem('sip_ext') || serverExt || '';
+    const fpbxStatus = FPBX_STATUS_MAP[key] || 'Available';
+    if (!agentExt) {
+        console.warn('[Status] Cannot sync to FusionPBX: no extension configured.');
+        return;
+    }
+    fetch('index.php?action=set_agent_status', {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({agent_id: agentId, status: labels[key] || status})
-    }).catch(() => {});
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            agent_ext:  agentExt,
+            new_status: fpbxStatus,
+            domain:     domain
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ok) {
+            showToast('\u26A0 FusionPBX status update failed: ' + (data.error || 'unknown error'));
+            console.error('[Status] Error:', data);
+            return;
+        }
+        // DB was updated successfully
+        console.log('[Status] DB updated \u2713 agent:', data.agent_name, '| uuid:', data.agent_uuid, '| status:', data.status);
+        if (data.esl_connected) {
+            // ESL command was sent — this is the real live FreeSWITCH update
+            console.log('[Status] ESL \u2713 response:', data.esl_response || '(ok)', '| state:', data.esl_state_resp || '(n/a)');
+            // Only show a toast if something looks wrong in the ESL response
+            if (data.esl_response && data.esl_response.toLowerCase().includes('err')) {
+                showToast('\u26A0 ESL command sent but FreeSWITCH returned: ' + data.esl_response);
+            }
+        } else if (data.esl_error) {
+            // ESL unreachable — DB is updated but FreeSWITCH live state unchanged until next reload
+            console.warn('[Status] ESL not reached (expected in local dev):', data.esl_error);
+            showToast('\u26A0 DB updated to "' + fpbxStatus + '" but FreeSWITCH ESL unreachable. ' +
+                      'Add ESL_HOST to .env to enable live updates, or deploy to VM.');
+        }
+    })
+    .catch(() => {
+        showToast('\u26A0 Could not reach local server to sync status to FusionPBX.');
+    });
 }
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.status-drop-wrap')) {
@@ -1217,7 +2469,7 @@ document.addEventListener('click', function(e) {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['callHistory','recordings','acw'].forEach(t => {
+    ['callHistory','recordings','acw','escalation','lookup','callbacks'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
@@ -1229,6 +2481,8 @@ function switchTab(tab) {
     if (activeBtn)   activeBtn.classList.add('active');
     if (tab === 'recordings') fetchRecordings();
     if (tab === 'acw')        fetchAcwHistory();
+    if (tab === 'escalation') fetchCases();
+    if (tab === 'callbacks')  fetchCallbacks();
 }
 
 // ?? Date filters ??????????????????????????????????
@@ -1325,8 +2579,14 @@ function fetchData() {
                 return getEmptyData();
             }
         })
-        .then(data => updateDashboard(data))
-        .catch(() => updateDashboard(getEmptyData()));
+        .then(data => {
+            updateDashboard(data);
+            if (typeof fetchCallbacks === 'function') fetchCallbacks();
+        })
+        .catch(() => {
+            updateDashboard(getEmptyData());
+            if (typeof fetchCallbacks === 'function') fetchCallbacks();
+        });
 }
 
 // ?? Fetch recordings ??????????????????????????????
@@ -1500,54 +2760,134 @@ function changePageSize() {
     renderCallPage(1);
 }
 
+function setTxt(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+}
+
 function updateDashboard(d) {
-    document.getElementById('totalCalls').textContent    = d.total_calls || 0;
-    document.getElementById('avgDuration').textContent   = formatDurationHMS(d.avg_duration || 0);
-    document.getElementById('totalTalk').textContent     = formatDuration(d.total_talk || 0);
-    document.getElementById('idleTime').textContent      = formatDuration(d.idle_duration || 0);
-    document.getElementById('missedCalls').textContent   = d.missed_calls || 0;
-    document.getElementById('transfers').textContent     = d.transfers || 0;
-    document.getElementById('holdTimes').textContent     = formatDuration(d.hold_times || 0);
+    setTxt('totalCalls', d.total_calls || 0);
+    setTxt('avgDuration', formatDurationHMS(d.avg_duration || 0));
+    setTxt('totalTalk', formatDuration(d.total_talk || 0));
+    setTxt('idleTime', formatDuration(d.idle_duration || 0));
+    setTxt('missedCalls', d.missed_calls || 0);
+    setTxt('transfers', d.transfers || 0);
+    setTxt('holdTimes', formatDuration(d.hold_times || 0));
 
-    document.getElementById('listeningDuration').textContent = formatDuration(d.listening_duration || 0);
-    document.getElementById('internalCallTime').textContent  = formatDuration(d.internal_call_time || 0);
-    document.getElementById('outboundTime').textContent      = formatDuration(d.outbound_time || 0);
-    document.getElementById('hookOnTimes').textContent       = d.hook_on_times || 0;
-    document.getElementById('totalDuration').textContent     = formatDuration(d.total_duration || 0);
-    document.getElementById('acwDuration').textContent       = formatDuration(d.acw_duration || 0);
-    document.getElementById('ivrTransfer').textContent       = d.ivr_transfer || 0;
+    setTxt('listeningDuration', formatDuration(d.listening_duration || 0));
+    setTxt('internalCallTime', formatDuration(d.internal_call_time || 0));
+    setTxt('outboundTime', formatDuration(d.outbound_time || 0));
+    setTxt('hookOnTimes', d.hook_on_times || 0);
+    setTxt('totalDuration', formatDuration(d.total_duration || 0));
+    setTxt('acwDuration', formatDuration(d.acw_duration || 0));
+    setTxt('ivrTransfer', d.ivr_transfer || 0);
 
-    document.getElementById('busyDuration').textContent  = formatDuration(d.busy_duration || 0);
-    document.getElementById('restDuration').textContent  = formatDuration(d.rest_duration || 0);
-    document.getElementById('overRest').textContent      = formatDurationHMS(d.over_rest || 0);
-    document.getElementById('interceptions').textContent = d.interceptions || 0;
-    document.getElementById('internalHelp').textContent  = d.internal_help || 0;
-    document.getElementById('loginCount').textContent    = (d.login_count || 1) + ' / 0';
-    document.getElementById('forceSignout').textContent  = d.force_signout || 0;
+    setTxt('busyDuration', formatDuration(d.busy_duration || 0));
+    setTxt('restDuration', formatDuration(d.rest_duration || 0));
+    setTxt('overRest', formatDurationHMS(d.over_rest || 0));
+    setTxt('interceptions', d.interceptions || 0);
+    setTxt('internalHelp', d.internal_help || 0);
+    setTxt('loginCount', (d.login_count || 1) + ' / 0');
+    setTxt('forceSignout', d.force_signout || 0);
 
-    document.getElementById('listeningCount').textContent    = d.listening_count || 0;
-    document.getElementById('thirdPartyCount').textContent   = d.third_party_count || 0;
-    document.getElementById('forceAdvisorCount').textContent = d.force_advisor_count || 0;
-    document.getElementById('handleOnBehalf').textContent    = d.handle_on_behalf || 0;
-    document.getElementById('askHelpCount').textContent      = d.ask_help_count || 0;
-    document.getElementById('callReasonCount').textContent   = d.call_reason_count || 0;
-    document.getElementById('forwardingTimes').textContent   = d.forwarding_times || 0;
+    setTxt('listeningCount', d.listening_count || 0);
+    setTxt('thirdPartyCount', d.third_party_count || 0);
+    setTxt('forceAdvisorCount', d.force_advisor_count || 0);
+    setTxt('handleOnBehalf', d.handle_on_behalf || 0);
+    setTxt('askHelpCount', d.ask_help_count || 0);
+    setTxt('callReasonCount', d.call_reason_count || 0);
+    setTxt('forwardingTimes', d.forwarding_times || 0);
 
-    document.getElementById('callsWaiting').textContent = d.queue_waiting || 0;
-    document.getElementById('agentsOnline').textContent  = d.agents_online || 0;
-    document.getElementById('avgWait').textContent       = (d.avg_wait || 0) + 's';
-    document.getElementById('slaRate').textContent       = (d.sla_rate || 0) + '%';
+    setTxt('callsWaiting', d.queue_waiting || 0);
+    setTxt('agentsOnline', d.agents_online || 0);
+    setTxt('avgWait', (d.avg_wait || 0) + 's');
+    setTxt('slaRate', (d.sla_rate || 0) + '%');
 
     const answerRate = d.total_calls > 0 ? Math.round((d.answered_calls / d.total_calls) * 100) : 0;
-    document.getElementById('answerRate').textContent        = answerRate + '%';
-    document.getElementById('answerRateBar').style.width     = answerRate + '%';
+    const answerRateEl = document.getElementById('answerRate');
+    if (answerRateEl) answerRateEl.textContent = answerRate + '%';
+    const answerRateBarEl = document.getElementById('answerRateBar');
+    if (answerRateBarEl) answerRateBarEl.style.width = answerRate + '%';
+
     const talkTotal  = (d.total_talk||0) + (d.idle_duration||0);
     const talkRatio  = talkTotal > 0 ? Math.round(((d.total_talk||0)/talkTotal)*100) : 0;
-    document.getElementById('talkRatio').textContent         = talkRatio + '%';
-    document.getElementById('talkRatioBar').style.width      = talkRatio + '%';
-    const targetRate = Math.min(100, Math.round(((d.total_calls||0)/30)*100));
-    document.getElementById('targetRate').textContent        = targetRate + '%';
-    document.getElementById('targetRateBar').style.width     = targetRate + '%';
+    const talkRatioEl = document.getElementById('talkRatio');
+    if (talkRatioEl) talkRatioEl.textContent = talkRatio + '%';
+    const talkRatioBarEl = document.getElementById('talkRatioBar');
+    if (talkRatioBarEl) talkRatioBarEl.style.width = talkRatio + '%';
+
+    const talkTargetRate = Math.min(100, Math.round(((d.total_calls||0)/30)*100));
+    const targetRateEl = document.getElementById('targetRate');
+    if (targetRateEl) targetRateEl.textContent = talkTargetRate + '%';
+    const targetRateBarEl = document.getElementById('targetRateBar');
+    if (targetRateBarEl) targetRateBarEl.style.width = talkTargetRate + '%';
+
+    // ── Dynamic update of Agent Config elements ──
+    const timing = d.agent_timing;
+    if (timing) {
+        document.getElementById('timingContainer').style.display = 'block';
+        document.getElementById('timingNoRecord').style.display = 'none';
+        
+        document.getElementById('valCallTimeout').textContent = timing.agent_call_timeout !== null ? timing.agent_call_timeout + 's' : '--';
+        document.getElementById('valNoAnswerDelay').textContent = timing.agent_no_answer_delay_time !== null ? timing.agent_no_answer_delay_time + 's' : '--';
+        document.getElementById('valWrapUpTime').textContent = timing.agent_wrap_up_time !== null ? timing.agent_wrap_up_time + 's' : '--';
+        document.getElementById('valRejectDelay').textContent = timing.agent_reject_delay_time !== null ? timing.agent_reject_delay_time + 's' : '--';
+        document.getElementById('valBusyDelay').textContent = timing.agent_busy_delay_time !== null ? timing.agent_busy_delay_time + 's' : '--';
+    } else {
+        document.getElementById('timingContainer').style.display = 'none';
+        document.getElementById('timingNoRecord').style.display = 'flex';
+    }
+
+    const queues = d.agent_queues || [];
+    const queuesContainer = document.getElementById('queuesContainer');
+    const queuesNoRecord = document.getElementById('queuesNoRecord');
+    const tierContainer = document.getElementById('tierContainer');
+    const tierNoRecord = document.getElementById('tierNoRecord');
+    
+    queuesContainer.innerHTML = '';
+    
+    if (queues.length > 0) {
+        queuesNoRecord.style.display = 'none';
+        tierNoRecord.style.display = 'none';
+        tierContainer.style.display = 'block';
+        
+        queues.forEach(q => {
+            const badge = document.createElement('div');
+            badge.className = 'queue-badge';
+            badge.textContent = q.queue_name;
+            if (q.queue_extension) {
+                const extSpan = document.createElement('span');
+                extSpan.className = 'qext';
+                extSpan.textContent = ` (${q.queue_extension})`;
+                badge.appendChild(extSpan);
+            }
+            queuesContainer.appendChild(badge);
+            queuesContainer.appendChild(document.createElement('br'));
+        });
+        
+        const levels = queues.map(q => parseInt(q.tier_level) || 0);
+        const minTier = Math.min(...levels);
+        const bestQueue = queues.find(q => (parseInt(q.tier_level) || 0) === minTier);
+        
+        document.getElementById('valTierBig').textContent = minTier;
+        document.getElementById('valTierPos').textContent = 'Position: ' + (bestQueue ? bestQueue.tier_position : '0');
+        
+        const breakdown = document.getElementById('tierBreakdown');
+        breakdown.innerHTML = '';
+        if (queues.length > 1) {
+            queues.forEach(q => {
+                const row = document.createElement('div');
+                row.className = 'config-row';
+                row.innerHTML = `<span class="config-label" style="font-size:11px;">${q.queue_name}</span>` +
+                                `<span class="config-val" style="font-size:11px;">L${q.tier_level} / P${q.tier_position}</span>`;
+                breakdown.appendChild(row);
+            });
+        }
+    } else {
+        queuesNoRecord.style.display = 'flex';
+        tierNoRecord.style.display = 'flex';
+        tierContainer.style.display = 'none';
+    }
 
     // Hand off to paginator
     allCalls   = d.recent_calls || [];
@@ -1582,18 +2922,26 @@ function loadSipSettings() {
     const ext  = localStorage.getItem('sip_ext')  || serverExt  || '';
     const pass = localStorage.getItem('sip_pass') || serverPass || '';
     const dom  = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-    // Always route through NGINX proxy (/wss/) which uses trusted cert
-    // Strip any stored protocol/port/path and rebuild cleanly
+    
+    // Retrieve stored server or default to hostname
     const rawServer = localStorage.getItem('sip_server') || location.hostname;
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
-    const server    = 'wss://' + cleanHost + '/wss/';
-    const port      = '443';
+    
+    // Retrieve stored port or default based on protocol
+    const isHttps   = location.protocol === 'https:';
+    const defaultPort = isHttps ? '7443' : '5066';
+    const port      = localStorage.getItem('sip_port') || defaultPort;
+    
+    // Build the WebSocket URL correctly matching saveSipSettings logic
+    const wsUrl     = (isHttps ? 'wss://' : 'ws://') + cleanHost;
+
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = cleanHost;
     document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, server, port, dom));
+    
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
 }
 
 function waitForSipBridge(cb, tries) {
@@ -1684,6 +3032,11 @@ function handleIncoming(callerNumber) {
 
 function answerCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
+    try {
+        referenceTab = window.open('about:blank', '_blank');
+    } catch(e) {
+        console.error("Popup blocked or failed to open:", e);
+    }
     if (sipBridge.answer) sipBridge.answer();
 }
 
@@ -1713,6 +3066,18 @@ function startCallUI(number) {
     document.getElementById('dialInput').value = number;
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    
+    // Show Call popup actions
+    if (document.getElementById('btnPhoneSms')) document.getElementById('btnPhoneSms').style.display = 'block';
+    if (document.getElementById('btnPhoneCallback')) document.getElementById('btnPhoneCallback').style.display = 'block';
+    const btnTransfer = document.getElementById('btnTransfer');
+    if (btnTransfer) { btnTransfer.style.display = 'block'; btnTransfer.classList.add('visible'); }
+    
+    // Auto-trigger customer/order lookup and switch tab
+    if (number) {
+        performLookup(number);
+        switchTab('lookup');
+    }
 }
 
 function updateCallTimer() {
@@ -1783,6 +3148,13 @@ function endCall() {
     document.getElementById('btnHold').textContent = 'Hold';
     document.getElementById('callTimer').style.display = 'none';
     document.getElementById('callTimer').textContent   = '00:00';
+    
+    // Hide call popup actions
+    if (document.getElementById('btnPhoneSms')) document.getElementById('btnPhoneSms').style.display = 'none';
+    if (document.getElementById('btnPhoneCallback')) document.getElementById('btnPhoneCallback').style.display = 'none';
+    const btnTransferEnd = document.getElementById('btnTransfer');
+    if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
+    
     setAgentStatus('acw');
     openAcwModal(callerNum, callDur, lastCallType, recFile);
     setTimeout(() => { fetchData(); startCountdown(); }, 4000);
@@ -1826,6 +3198,153 @@ function submitAcw() {
     showToast('Wrap-up submitted. You are now Available.');
 }
 
+// ── Case Escalation Actions ────────────────────────────────────────────────
+let referenceTab = null;
+
+function autoAssignDepartment(issueType) {
+    const mapping = {
+        'Not delivered': 'Logistics',
+        'Late delivery': 'Logistics',
+        'Wrong item': 'Warehouse',
+        'Damaged package': 'Warehouse',
+        'Billing issue': 'Billing',
+        'Other': 'Customer Relations'
+    };
+    const dept = mapping[issueType] || 'Customer Relations';
+    const deptSelect = document.getElementById('caseDepartment');
+    if (deptSelect) {
+        deptSelect.value = dept;
+    }
+}
+
+function autofillEscalationForm(phone) {
+    if (!phone) return;
+    document.getElementById('caseCustomerPhone').value = phone;
+    document.getElementById('caseCustomerName').value = 'Loading...';
+    
+    fetch('crm.php?api=lookup&phone=' + encodeURIComponent(phone))
+        .then(res => res.json())
+        .then(data => {
+            if (data && data.full_name) {
+                document.getElementById('caseCustomerName').value = data.full_name;
+            } else {
+                document.getElementById('caseCustomerName').value = 'Customer (' + phone + ')';
+            }
+        })
+        .catch(() => {
+            document.getElementById('caseCustomerName').value = 'Customer (' + phone + ')';
+        });
+}
+
+function escalateFromAcw() {
+    const notes = document.getElementById('acwNotes').value.trim();
+    
+    // Copy data to escalation form
+    document.getElementById('caseDescription').value = notes;
+    document.getElementById('caseDeliveryDate').value = new Date().toISOString().slice(0,10);
+    autofillEscalationForm(acwCallerId);
+    
+    // Submit ACW and close it
+    submitAcw();
+    
+    // Switch to Escalation Tab
+    switchTab('escalation');
+}
+
+function fetchCases() {
+    const from = document.getElementById('caseFilterFrom').value;
+    const to   = document.getElementById('caseFilterTo').value;
+    const ext  = localStorage.getItem('sip_ext') || serverExt || '';
+    
+    fetch('index.php?action=case_history&from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to)+'&agent_id='+encodeURIComponent(ext))
+        .then(r => r.json())
+        .then(d => {
+            const rows = d.records || [];
+            document.getElementById('caseCount').textContent = rows.length + ' record(s)';
+            if (!rows.length) {
+                document.getElementById('caseHistoryBody').innerHTML =
+                    '<tr><td colspan="10" class="rec-empty">No tickets found for this date range.</td></tr>';
+                return;
+            }
+            const statusColors = {
+                'Open': 'background: #fef3c7; color: #d97706;',
+                'Received': 'background: #fef3c7; color: #d97706;',
+                'In Progress': 'background: #e0f2fe; color: #0284c7;',
+                'Resolved': 'background: #d1fae5; color: #059669;'
+            };
+            const priorityColors = {
+                'High': 'background: #fee2e2; color: #dc2626;',
+                'Medium': 'background: #ffedd5; color: #ea580c;',
+                'Low': 'background: #f3f4f6; color: #4b5563;'
+            };
+            document.getElementById('caseHistoryBody').innerHTML = rows.map(r => {
+                const sStyle = statusColors[r.status] || 'background: #f3f4f6; color: #4b5563;';
+                const pStyle = priorityColors[r.priority] || 'background: #f3f4f6; color: #4b5563;';
+                return `
+                <tr>
+                    <td>${r.formatted_date}</td>
+                    <td>${r.customer_name}</td>
+                    <td>${r.customer_phone}</td>
+                    <td>${r.order_id||'-'}</td>
+                    <td><span class="badge badge-missed">${r.issue_type}</span></td>
+                    <td><span class="badge" style="${pStyle}">${r.priority || 'Medium'}</span></td>
+                    <td><span class="badge" style="${sStyle}">${r.status || 'Open'}</span></td>
+                    <td><span class="badge badge-transfer">${r.department}</span></td>
+                    <td>${r.agent_id}</td>
+                    <td><button class="btn-action-sms" onclick="openSmsModal('${r.customer_phone}')">SMS</button></td>
+                </tr>`;
+            }).join('');
+        }).catch(() => {
+            document.getElementById('caseHistoryBody').innerHTML =
+                '<tr><td colspan="10" class="rec-empty">Error loading ticket history.</td></tr>';
+        });
+}
+
+function submitCase(event) {
+    event.preventDefault();
+    const customer_name = document.getElementById('caseCustomerName').value.trim();
+    const customer_phone = document.getElementById('caseCustomerPhone').value.trim();
+    const order_id = document.getElementById('caseOrderId').value.trim();
+    const issue_type = document.getElementById('caseIssueType').value;
+    const priority = document.getElementById('casePriority').value;
+    const delivery_date = document.getElementById('caseDeliveryDate').value;
+    const department = document.getElementById('caseDepartment').value;
+    const description = document.getElementById('caseDescription').value.trim();
+    const agent_id = localStorage.getItem('sip_ext') || serverExt || '101';
+    
+    fetch('index.php?action=save_case', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+            customer_name, customer_phone, order_id,
+            issue_type, priority, delivery_date, department,
+            description, agent_id
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.saved) {
+            showToast('Ticket successfully submitted to ' + department);
+            document.getElementById('escalationForm').reset();
+            if (document.getElementById('caseIssueType')) {
+                autoAssignDepartment(document.getElementById('caseIssueType').value);
+            }
+            // Reset delivery date to today (local date)
+            const td = localDateStr();
+            document.getElementById('caseDeliveryDate').value = td;
+            // Pin the history filter to today so the new ticket is visible immediately
+            document.getElementById('caseFilterFrom').value = td;
+            document.getElementById('caseFilterTo').value   = td;
+            fetchCases();
+        } else {
+            alert('Failed to save ticket: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(err => {
+        alert('Error saving ticket: ' + err.message);
+    });
+}
+
 // ?? Toast ?????????????????????????????????????????
 let toastTimer = null;
 function showToast(msg) {
@@ -1865,11 +3384,396 @@ document.getElementById('dialInput').addEventListener('input', function() {
     dpNumber = this.value;
 });
 
+// ── CUSTOMER LOOKUP FLOW ────────────────────────────────────────────────────
+function performLookup(query) {
+    if (!query) return;
+    document.getElementById('lookupQuery').value = query;
+    
+    // Set loading states
+    document.getElementById('lookupProfileBox').innerHTML = '<p style="color:#666; font-size:13px;">Loading profile...</p>';
+    document.getElementById('lookupDeliveryBody').innerHTML = '<tr><td colspan="4" style="text-align:center; color:#aaa; padding:12px;">Loading deliveries...</td></tr>';
+    document.getElementById('lookupTicketsBody').innerHTML = '<tr><td colspan="6" style="text-align:center; color:#aaa; padding:12px;">Loading tickets...</td></tr>';
+    document.getElementById('inTransitBox').style.display = 'none';
+
+    fetch('index.php?action=lookup_customer&query=' + encodeURIComponent(query))
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                showToast('Error during lookup: ' + data.error);
+                return;
+            }
+            
+            // 1. Render Contact Profile
+            const contact = data.contact;
+            if (contact) {
+                document.getElementById('lookupProfileBox').innerHTML = `
+                    <div class="profile-title">${contact.full_name || 'Unknown Customer'}</div>
+                    <div class="profile-item"><span>Phone:</span><span>${contact.phone || '-'}</span></div>
+                    <div class="profile-item"><span>Alt Phone:</span><span>${contact.alt_phone || '-'}</span></div>
+                    <div class="profile-item"><span>Email:</span><span>${contact.email || '-'}</span></div>
+                    <div class="profile-item"><span>Company:</span><span>${contact.company || '-'}</span></div>
+                    <div class="profile-item"><span>Language:</span><span>${contact.language || 'English'}</span></div>
+                    <div class="profile-item"><span>Account Type:</span><span>${contact.account_type || 'Customer'}</span></div>
+                    <div style="font-size:12px; margin-top:8px; color:#555; line-height:1.4;"><strong>Notes:</strong><br>${contact.notes || 'None'}</div>
+                    <div style="display:flex; gap: 8px; margin-top: 12px;">
+                        <button class="btn-filter" onclick="openSmsModal('${contact.phone}')" style="flex:1; padding: 6px; font-size:11px;">SMS Update</button>
+                        <button class="btn-filter" onclick="openCallbackModal('${contact.phone}', '${contact.full_name}')" style="flex:1; padding: 6px; font-size:11px; background:#ffc107; color:#333;">Schedule Callback</button>
+                    </div>
+                `;
+            } else {
+                document.getElementById('lookupProfileBox').innerHTML = '<p style="color:#888; font-style:italic; font-size:13px;">No customer profiles found.</p>';
+            }
+
+            // 2. Render In-Transit Delivery banner
+            const inTransit = data.current_intransit;
+            if (inTransit) {
+                document.getElementById('inTransitBox').style.display = 'block';
+                document.getElementById('inTransitDetails').innerHTML = `
+                    <div><strong>Order ID:</strong> ${inTransit.order_id}</div>
+                    <div><strong>Address:</strong> ${inTransit.delivery_address}</div>
+                    <div><strong>Delivery Date:</strong> ${inTransit.delivery_date}</div>
+                    <div><strong>Status:</strong> <span class="badge" style="background:#ffedd5; color:#ea580c; font-weight:bold;">${inTransit.status}</span></div>
+                `;
+            } else {
+                document.getElementById('inTransitBox').style.display = 'none';
+            }
+
+            // 3. Render Delivery History
+            const dels = data.deliveries || [];
+            if (dels.length > 0) {
+                document.getElementById('lookupDeliveryBody').innerHTML = dels.map(d => {
+                    const statusStyle = d.status === 'Delivered' 
+                        ? 'background:#d1fae5; color:#059669;' 
+                        : (d.status === 'In Transit' || d.status === 'Pending' ? 'background:#ffedd5; color:#ea580c;' : 'background:#f3f4f6; color:#4b5563;');
+                    return `
+                        <tr>
+                            <td><strong style="color:#0047AB; cursor:pointer;" onclick="performLookup('${d.order_id}')">${d.order_id}</strong></td>
+                            <td>${d.delivery_date}</td>
+                            <td>${d.delivery_address || '-'}</td>
+                            <td><span class="badge" style="${statusStyle}">${d.status}</span></td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                document.getElementById('lookupDeliveryBody').innerHTML = '<tr><td colspan="4" style="text-align:center; color:#aaa; padding:12px;">No delivery history.</td></tr>';
+            }
+
+            // 4. Render Tickets
+            const tix = data.tickets || [];
+            if (tix.length > 0) {
+                const statusColors = {
+                    'Open': 'background: #fef3c7; color: #d97706;',
+                    'Received': 'background: #fef3c7; color: #d97706;',
+                    'In Progress': 'background: #e0f2fe; color: #0284c7;',
+                    'Resolved': 'background: #d1fae5; color: #059669;'
+                };
+                const priorityColors = {
+                    'High': 'background: #fee2e2; color: #dc2626;',
+                    'Medium': 'background: #ffedd5; color: #ea580c;',
+                    'Low': 'background: #f3f4f6; color: #4b5563;'
+                };
+                document.getElementById('lookupTicketsBody').innerHTML = tix.map(t => {
+                    const sStyle = statusColors[t.status] || 'background: #f3f4f6; color: #4b5563;';
+                    const pStyle = priorityColors[t.priority] || 'background: #f3f4f6; color: #4b5563;';
+                    return `
+                        <tr>
+                            <td>${t.formatted_date}</td>
+                            <td><span class="badge badge-missed">${t.issue_type}</span></td>
+                            <td><span class="badge" style="${pStyle}">${t.priority}</span></td>
+                            <td><span class="badge" style="${sStyle}">${t.status}</span></td>
+                            <td style="max-width:200px; white-space:normal; font-size:12px; color:#555;">${t.description || '-'}</td>
+                            <td><button class="btn-action-sms" onclick="openSmsModal('${t.customer_phone}')">SMS</button></td>
+                        </tr>
+                    `;
+                }).join('');
+            } else {
+                document.getElementById('lookupTicketsBody').innerHTML = '<tr><td colspan="6" style="text-align:center; color:#aaa; padding:12px;">No tickets found.</td></tr>';
+            }
+        })
+        .catch(() => {
+            document.getElementById('lookupProfileBox').innerHTML = '<p style="color:#ef4444; font-size:13px;">Error loading profile.</p>';
+            document.getElementById('lookupDeliveryBody').innerHTML = '<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:12px;">Error loading deliveries.</td></tr>';
+            document.getElementById('lookupTicketsBody').innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444; padding:12px;">Error loading tickets.</td></tr>';
+        });
+}
+
+function clearLookup() {
+    document.getElementById('lookupQuery').value = '';
+    document.getElementById('lookupProfileBox').innerHTML = '<p style="color:#888; font-style:italic; font-size:13px;">No customer looked up yet.</p>';
+    document.getElementById('lookupDeliveryBody').innerHTML = '<tr><td colspan="4" style="text-align:center; color:#aaa; padding:12px;">No deliveries found.</td></tr>';
+    document.getElementById('lookupTicketsBody').innerHTML = '<tr><td colspan="6" style="text-align:center; color:#aaa; padding:12px;">No tickets found.</td></tr>';
+    document.getElementById('inTransitBox').style.display = 'none';
+}
+
+// ── CALLBACK SCHEDULING FLOW ────────────────────────────────────────────────
+function openCallbackModal(phone, name) {
+    document.getElementById('cbPhone').value = phone || '';
+    document.getElementById('cbName').value = name || '';
+    
+    // Set default callback date to today, time to +1hr
+    const now = new Date();
+    document.getElementById('cbDate').value = now.toISOString().slice(0,10);
+    
+    now.setHours(now.getHours() + 1);
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    document.getElementById('cbTime').value = `${h}:${m}`;
+    document.getElementById('cbNotes').value = '';
+    
+    document.getElementById('callbackModal').classList.add('show');
+}
+
+function closeCallbackModal() {
+    document.getElementById('callbackModal').classList.remove('show');
+}
+
+function openCallbackModalFromPhone() {
+    const num = document.getElementById('dialInput').value.trim();
+    openCallbackModal(num, '');
+}
+
+function openCallbackModalFromAcw() {
+    openCallbackModal(acwCallerId, '');
+}
+
+function submitCallback() {
+    const customer_name = document.getElementById('cbName').value.trim();
+    const customer_phone = document.getElementById('cbPhone').value.trim();
+    const cbDate = document.getElementById('cbDate').value;
+    const cbTime = document.getElementById('cbTime').value;
+    const notes = document.getElementById('cbNotes').value.trim();
+    const agent_id = localStorage.getItem('sip_ext') || serverExt || '101';
+    
+    if (!customer_phone || !cbDate || !cbTime) {
+        alert('Phone number, date, and time are required.');
+        return;
+    }
+    
+    const callback_time = `${cbDate} ${cbTime}:00`;
+    
+    fetch('index.php?action=save_callback', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            customer_name, customer_phone, callback_time, notes, agent_id
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showToast('Callback scheduled successfully.');
+            closeCallbackModal();
+            fetchCallbacks();
+        } else {
+            alert('Failed to schedule callback: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(err => alert('Error saving callback: ' + err.message));
+}
+
+function fetchCallbacks() {
+    const ext = localStorage.getItem('sip_ext') || serverExt || '101';
+    fetch('index.php?action=list_callbacks&agent_id=' + encodeURIComponent(ext))
+        .then(r => r.json())
+        .then(data => {
+            const list = data.records || [];
+            if (list.length === 0) {
+                document.getElementById('callbacksHistoryBody').innerHTML = 
+                    '<tr><td colspan="6" class="rec-empty">No upcoming callbacks scheduled.</td></tr>';
+                return;
+            }
+            
+            // Sort by callback time ascending just in case, soonest first
+            list.sort((a,b) => new Date(a.formatted_time) - new Date(b.formatted_time));
+            
+            document.getElementById('callbacksHistoryBody').innerHTML = list.map((c, idx) => {
+                // Highlight the soonest callback (first item in sorted array)
+                const urgentClass = (idx === 0) ? 'class="callback-urgent"' : '';
+                return `
+                    <tr ${urgentClass}>
+                        <td>${c.formatted_time}</td>
+                        <td>${c.customer_name || 'Unknown'}</td>
+                        <td>${c.customer_phone}</td>
+                        <td style="max-width:200px; white-space:normal; font-size:12px; color:#555;">${c.notes || '-'}</td>
+                        <td><span class="badge" style="background:#ffedd5; color:#ea580c; font-weight:bold;">${c.status}</span></td>
+                        <td>
+                            <button class="btn-action-resolve" onclick="completeCallback(${c.callback_id})">Complete</button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        })
+        .catch(() => {
+            document.getElementById('callbacksHistoryBody').innerHTML = 
+                '<tr><td colspan="6" class="rec-empty">Error loading callbacks.</td></tr>';
+        });
+}
+
+function completeCallback(id) {
+    if (!confirm('Mark this callback as completed?')) return;
+    
+    fetch('index.php?action=update_callback_status', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ callback_id: id, status: 'Completed' })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showToast('Callback completed.');
+            fetchCallbacks();
+        } else {
+            alert('Error updating callback: ' + (data.error || 'Unknown'));
+        }
+    })
+    .catch(err => alert('Error completing callback: ' + err.message));
+}
+
+// ── SMS NOTIFICATION FLOW ───────────────────────────────────────────────────
+function openSmsModal(phone) {
+    document.getElementById('smsPhone').value = phone || '';
+    document.getElementById('smsTemplate').value = '';
+    document.getElementById('smsMessage').value = '';
+    document.getElementById('smsModal').classList.add('show');
+}
+
+function closeSmsModal() {
+    document.getElementById('smsModal').classList.remove('show');
+}
+
+function openSmsModalFromPhone() {
+    const num = document.getElementById('dialInput').value.trim();
+    openSmsModal(num);
+}
+
+function openSmsModalFromAcw() {
+    openSmsModal(acwCallerId);
+}
+
+function applySmsTemplate(val) {
+    const textarea = document.getElementById('smsMessage');
+    if (val === 'delivery_delay') {
+        textarea.value = "We're looking into your issue and will update you within 24 hours.";
+    } else if (val === 'replacement_date') {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const dateStr = tomorrow.toISOString().slice(0, 10);
+        textarea.value = `Your replacement package will arrive by ${dateStr}.`;
+    } else if (val === 'resolved') {
+        textarea.value = "Your ticket has been resolved. Thank you for your patience!";
+    } else {
+        textarea.value = "";
+    }
+}
+
+function submitSms() {
+    const phone = document.getElementById('smsPhone').value.trim();
+    const message = document.getElementById('smsMessage').value.trim();
+    
+    if (!phone || !message) {
+        alert('Phone number and message are required.');
+        return;
+    }
+    
+    fetch('index.php?action=send_sms', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ phone, message })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showToast('SMS notification logged successfully.');
+            closeSmsModal();
+        } else {
+            alert('Failed to send SMS: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(err => alert('Error sending SMS: ' + err.message));
+}
+
+// ── CALL TRANSFER FLOW ───────────────────────────────────────────────────────
+function openTransferModal() {
+    const modal = document.getElementById('transferModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    document.getElementById('transferExtInput').value = '';
+    loadAvailableAgents();
+}
+
+function closeTransferModal() {
+    const modal = document.getElementById('transferModal');
+    if (modal) modal.classList.remove('show');
+}
+
+function loadAvailableAgents() {
+    const myExt = localStorage.getItem('sip_ext') || serverExt || '';
+    const list  = document.getElementById('transferAgentsList');
+    list.innerHTML = '<div class="transfer-loading">Loading available agents...</div>';
+
+    fetch('index.php?action=get_available_agents&domain=' + encodeURIComponent(domain) + '&my_ext=' + encodeURIComponent(myExt))
+        .then(r => r.json())
+        .then(data => {
+            const agents = data.agents || [];
+            if (!agents.length) {
+                list.innerHTML = '<div class="transfer-loading">No available agents found at this time.</div>';
+                return;
+            }
+            list.innerHTML = agents.map(a => `
+                <div class="transfer-agent-item" onclick="executeTransfer('${a.extension}', '${a.name.replace(/'/g,'\\u0027')}')">
+                    <div class="transfer-agent-info">
+                        <span class="transfer-agent-name">${a.name}</span>
+                        <span class="transfer-agent-ext">Ext. ${a.extension}</span>
+                    </div>
+                    <span class="transfer-agent-badge">Available</span>
+                </div>
+            `).join('');
+        })
+        .catch(() => {
+            list.innerHTML = '<div class="transfer-loading" style="color:#ef4444;">Failed to load agents. Check server connection.</div>';
+        });
+}
+
+function executeTransfer(ext, name) {
+    if (!ext) return;
+    const displayName = name ? name + ' (Ext. ' + ext + ')' : 'Ext. ' + ext;
+    if (!confirm('Transfer current call to ' + displayName + '?')) return;
+    closeTransferModal();
+    if (window.sipBridge && window.sipBridge.transfer) {
+        window.sipBridge.transfer(ext);
+    } else {
+        showToast('Transfer not available: SIP softphone not connected.');
+    }
+}
+
+function executeManualTransfer() {
+    const ext = document.getElementById('transferExtInput').value.trim();
+    if (!ext) { alert('Please enter an extension number to transfer to.'); return; }
+    if (!/^\d{2,6}$/.test(ext)) { alert('Extension must be a 2-6 digit number.'); return; }
+    executeTransfer(ext, '');
+}
+
 // Init
 setInterval(updateClock, 1000);
 updateClock();
 fetchData();
 startCountdown();
+
+// ── Ticket form date defaults (local date, not UTC) ──────────────────────
+function localDateStr() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+const todayStr = localDateStr();
+if (document.getElementById('caseFilterFrom')) document.getElementById('caseFilterFrom').value = todayStr;
+if (document.getElementById('caseFilterTo'))   document.getElementById('caseFilterTo').value   = todayStr;
+if (document.getElementById('caseDeliveryDate')) document.getElementById('caseDeliveryDate').value = todayStr;
+if (document.getElementById('caseIssueType')) {
+    autoAssignDepartment(document.getElementById('caseIssueType').value);
+}
 </script>
 
 <!-- ACW Wrap-Up Modal -->
@@ -1899,6 +3803,100 @@ startCountdown();
             <div class="acw-actions">
                 <button class="btn-skip" onclick="closeAcwModal()">Skip</button>
                 <button class="btn-submit" onclick="submitAcw()">Submit &amp; Return Available</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Scheduling Callback Modal -->
+<div id="callbackModal" class="custom-modal-overlay">
+    <div class="custom-modal-box">
+        <div class="custom-modal-hdr">
+            <h3>Schedule Callback</h3>
+            <button class="close-btn" onclick="closeCallbackModal()">&times;</button>
+        </div>
+        <div class="custom-modal-body">
+            <div class="form-group">
+                <label>Customer Phone *</label>
+                <input type="text" id="cbPhone" required placeholder="e.g. +251911000001">
+            </div>
+            <div class="form-group">
+                <label>Customer Name</label>
+                <input type="text" id="cbName" placeholder="e.g. Abebe Girma">
+            </div>
+            <div class="form-group">
+                <label>Callback Date *</label>
+                <input type="date" id="cbDate" required>
+            </div>
+            <div class="form-group">
+                <label>Callback Time *</label>
+                <input type="time" id="cbTime" required>
+            </div>
+            <div class="form-group">
+                <label>Reason / Note</label>
+                <textarea id="cbNotes" rows="3" placeholder="Why is the callback needed?"></textarea>
+            </div>
+            <button class="btn-filter" onclick="submitCallback()" style="width:100%; padding:10px; font-weight:bold; margin-top:10px;">Schedule</button>
+        </div>
+    </div>
+</div>
+
+<!-- Send SMS Modal -->
+<div id="smsModal" class="custom-modal-overlay">
+    <div class="custom-modal-box">
+        <div class="custom-modal-hdr">
+            <h3>Send SMS Update</h3>
+            <button class="close-btn" onclick="closeSmsModal()">&times;</button>
+        </div>
+        <div class="custom-modal-body">
+            <div class="form-group">
+                <label>Phone Number *</label>
+                <input type="text" id="smsPhone" required placeholder="e.g. +251911000001">
+            </div>
+            <div class="form-group">
+                <label>Select Template</label>
+                <select id="smsTemplate" onchange="applySmsTemplate(this.value)" style="width:100%; padding:8px; border:1px solid #ddd; border-radius:6px; background:#fff;">
+                    <option value="">-- Custom Message --</option>
+                    <option value="delivery_delay">We're looking into your issue and will update you within 24 hours.</option>
+                    <option value="replacement_date">Your replacement package will arrive by [date].</option>
+                    <option value="resolved">Your ticket has been resolved. Thank you for your patience!</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Message *</label>
+                <textarea id="smsMessage" rows="4" required placeholder="Type custom message..."></textarea>
+            </div>
+            <button class="btn-filter" onclick="submitSms()" style="width:100%; padding:10px; font-weight:bold; margin-top:10px;">Send SMS</button>
+        </div>
+    </div>
+</div>
+
+<!-- Transfer Call Modal -->
+<div id="transferModal" class="transfer-overlay">
+    <div class="transfer-modal">
+        <div class="transfer-hdr">
+            <h3>&#x21AA; Transfer Call</h3>
+            <button onclick="closeTransferModal()">&#x2715;</button>
+        </div>
+        <div class="transfer-body">
+            <!-- Manual extension entry -->
+            <div>
+                <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase; display:block; margin-bottom:6px;">Transfer to Extension</label>
+                <div class="transfer-ext-row">
+                    <input type="tel" id="transferExtInput" placeholder="e.g. 102" maxlength="6"
+                           onkeypress="if(event.key==='Enter') executeManualTransfer()">
+                    <button onclick="executeManualTransfer()">Transfer</button>
+                </div>
+            </div>
+            <!-- Available agents list -->
+            <div style="border-top:1px solid #f0f0f0; padding-top:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <label style="font-size:11px; font-weight:700; color:#555; text-transform:uppercase;">Available Agents</label>
+                    <button onclick="loadAvailableAgents()" style="font-size:10px; background:none; border:1px solid #ddd; border-radius:4px; padding:2px 8px; cursor:pointer; color:#555;">&#x21BB; Refresh</button>
+                </div>
+                <div class="transfer-agents-list" id="transferAgentsList">
+                    <div class="transfer-loading">Loading...</div>
+                </div>
             </div>
         </div>
     </div>
@@ -1972,9 +3970,34 @@ function bindSession(s) {
             window.startCallUI && window.startCallUI(num);
             attachAudio(s);
             window.showToast && window.showToast('Call connected');
+            
+            // Auto-open reference site on answered incoming call
+            if (s instanceof Invitation) {
+                if (referenceTab && !referenceTab.closed) {
+                    referenceTab.location.href = 'https://ahununu.com/';
+                } else {
+                    try {
+                        window.open('https://ahununu.com/', '_blank');
+                    } catch(e) {
+                        console.error("Failed to open reference tab:", e);
+                    }
+                }
+                referenceTab = null;
+            }
+            
+            // Pre-fill escalation form with the caller's details
+            autofillEscalationForm(num);
         }
         if (state === SessionState.Terminated || state === SessionState.Terminating) {
             stopRec();
+            if (referenceTab) {
+                try {
+                    if (referenceTab.location.href === 'about:blank' || referenceTab.location.href === '') {
+                        referenceTab.close();
+                    }
+                } catch(e) {}
+                referenceTab = null;
+            }
             if (window.endCall) window.endCall();
         }
     });
@@ -1983,14 +4006,23 @@ function bindSession(s) {
 window.sipBridge.init = function(ext, pass, server, port, dom) {
     if (ua) { try { reg?.unregister(); ua.stop(); } catch(e) {} }
 
+    // Build WebSocket URI properly
+    let wsUri = server;
+    if (!wsUri.startsWith('wss://') && !wsUri.startsWith('ws://')) {
+        const isHttps = location.protocol === 'https:';
+        wsUri = (isHttps ? 'wss://' : 'ws://') + wsUri;
+    }
+    
+    // If the WebSocket URI does not specify a port or sub-path, append the port
+    const hostPart = wsUri.replace(/^wss?:\/\//i, '');
+    if (!hostPart.includes(':') && !hostPart.includes('/')) {
+        wsUri = wsUri + ':' + (port || (location.protocol === 'https:' ? '7443' : '5066'));
+    }
+
     ua = new UserAgent({
         uri: UserAgent.makeURI('sip:' + ext + '@' + dom),
         transportOptions: {
-            // server may be a full wss:// URL (e.g. wss://host/wss/) or just a hostname
-            // If it already looks like a complete URI, use it as-is; otherwise build from parts
-            server: (server.startsWith('wss://') || server.startsWith('ws://'))
-                ? server
-                : 'wss://' + server + ':' + (port || '7443')
+            server: wsUri
         },
         authorizationUsername: ext,
         authorizationPassword: pass
@@ -2083,6 +4115,33 @@ window.sipBridge.sendDtmf = function(tone) {
         const sender = pc?.getSenders().find(s => s.track?.kind === 'audio');
         if (sender?.dtmf) sender.dtmf.insertDTMF(tone, 100, 500);
     }
+};
+
+// ── Blind Transfer via SIP REFER ─────────────────────────────────────────────
+// FreeSWITCH receives the REFER, bridges the customer to the new extension,
+// then sends BYE to us. The customer ends up talking to the new agent.
+window.sipBridge.transfer = function(targetExt) {
+    if (!session) {
+        window.showToast && window.showToast('No active call to transfer.');
+        return;
+    }
+    const dom = pbxDomain();
+    const targetURI = UserAgent.makeURI('sip:' + targetExt + '@' + dom);
+    if (!targetURI) {
+        window.showToast && window.showToast('Invalid transfer target: ' + targetExt);
+        return;
+    }
+    // session.refer() sends SIP REFER — blind transfer (RFC 3515)
+    session.refer(targetURI)
+        .then(() => {
+            window.showToast && window.showToast('\u2713 Call transferred to ext. ' + targetExt + '. Waiting for FreeSWITCH to complete...');
+            // FreeSWITCH will send BYE after bridging; endCall() fires via stateChange listener.
+            // Proactively null session so we don't double-hang-up.
+            session = null;
+        })
+        .catch(err => {
+            window.showToast && window.showToast('Transfer failed: ' + err.message);
+        });
 };
 })();
 

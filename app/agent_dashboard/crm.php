@@ -28,26 +28,51 @@ function getDB() {
         if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
         if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
     }
-    $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+    try {
+        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n};connect_timeout=2",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+        return $db;
+    } catch(Exception $e) {}
+    
+    // SQLite fallback for local development
+    $sqliteFile = __DIR__ . '/skykin_local.db';
+    $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+    $db->exec('PRAGMA journal_mode=WAL');
     return $db;
 }
 
 // ── Ensure CRM table exists ──────────────────────────────────────────────────
 try {
     $db = getDB();
-    $db->exec("CREATE TABLE IF NOT EXISTS skykin_contacts (
-        contact_id    SERIAL PRIMARY KEY,
-        phone         TEXT NOT NULL UNIQUE,
-        alt_phone     TEXT,
-        full_name     TEXT NOT NULL,
-        email         TEXT,
-        company       TEXT,
-        language      TEXT DEFAULT 'English',
-        account_type  TEXT DEFAULT 'Customer',
-        notes         TEXT,
-        created_at    TIMESTAMP DEFAULT NOW(),
-        updated_at    TIMESTAMP DEFAULT NOW()
-    )");
+    $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+    if ($isSQLite) {
+        $db->exec("CREATE TABLE IF NOT EXISTS skykin_contacts (
+            contact_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone         TEXT NOT NULL UNIQUE,
+            alt_phone     TEXT,
+            full_name     TEXT NOT NULL,
+            email         TEXT,
+            company       TEXT,
+            language      TEXT DEFAULT 'English',
+            account_type  TEXT DEFAULT 'Customer',
+            notes         TEXT,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+        )");
+    } else {
+        $db->exec("CREATE TABLE IF NOT EXISTS skykin_contacts (
+            contact_id    SERIAL PRIMARY KEY,
+            phone         TEXT NOT NULL UNIQUE,
+            alt_phone     TEXT,
+            full_name     TEXT NOT NULL,
+            email         TEXT,
+            company       TEXT,
+            language      TEXT DEFAULT 'English',
+            account_type  TEXT DEFAULT 'Customer',
+            notes         TEXT,
+            created_at    TIMESTAMP DEFAULT NOW(),
+            updated_at    TIMESTAMP DEFAULT NOW()
+        )");
+    }
     // Sample contacts if empty
     $cnt = $db->query("SELECT COUNT(*) FROM skykin_contacts")->fetchColumn();
     if ($cnt == 0) {
@@ -84,8 +109,12 @@ if (isset($_GET['api'])) {
             $row = $s->fetch(PDO::FETCH_ASSOC);
             // Also get call history for this contact
             if ($row) {
+                $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+                $timeExpr = $isSQLite
+                    ? "datetime(start_epoch, 'unixepoch', 'localtime')"
+                    : "to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI')";
                 $s2 = $db->prepare("SELECT
-                    to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+                    {$timeExpr} as call_time,
                     direction, billsec, destination_number, hangup_cause
                     FROM v_xml_cdr
                     WHERE (caller_id_number LIKE :q OR destination_number LIKE :q
@@ -103,8 +132,10 @@ if (isset($_GET['api'])) {
             $search = $_GET['search'] ?? '';
             $where  = '1=1';
             $params = [];
+            $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+            $likeOp = $isSQLite ? 'LIKE' : 'ILIKE';
             if ($search) {
-                $where = "full_name ILIKE :q OR phone ILIKE :q OR company ILIKE :q OR email ILIKE :q";
+                $where = "full_name {$likeOp} :q OR phone {$likeOp} :q OR company {$likeOp} :q OR email {$likeOp} :q";
                 $params[':q'] = '%'.$search.'%';
             }
             $s = $db->prepare("SELECT * FROM skykin_contacts WHERE $where ORDER BY full_name LIMIT 200");
@@ -117,11 +148,13 @@ if (isset($_GET['api'])) {
         if ($_GET['api'] === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $body = json_decode(file_get_contents('php://input'), true);
             $id   = $body['contact_id'] ?? null;
+            $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+            $nowFunc = $isSQLite ? "datetime('now')" : "NOW()";
             if ($id) {
                 $s = $db->prepare("UPDATE skykin_contacts SET
                     phone=:ph, alt_phone=:ap, full_name=:fn, email=:em,
                     company=:co, language=:la, account_type=:at, notes=:no,
-                    updated_at=NOW() WHERE contact_id=:id");
+                    updated_at={$nowFunc} WHERE contact_id=:id");
                 $s->execute([':ph'=>$body['phone']??'',':ap'=>$body['alt_phone']??'',
                     ':fn'=>$body['full_name']??'',':em'=>$body['email']??'',
                     ':co'=>$body['company']??'',':la'=>$body['language']??'English',

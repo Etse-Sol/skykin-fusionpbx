@@ -245,8 +245,8 @@ class event_socket {
 			return false;
 		}
 
-		socket_set_timeout($this->fp, 0, $timeout_microseconds);
-		socket_set_blocking($this->fp, true);
+		stream_set_timeout($this->fp, 0, $timeout_microseconds);
+		stream_set_blocking($this->fp, true);
 
 		//wait auth request and send a response
 		while ($this->connected()) {

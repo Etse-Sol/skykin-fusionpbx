@@ -385,7 +385,7 @@ if (isset($_GET['action']) && $_GET['action']==='force_status') {
     $domain_   = $_GET['domain']    ?? 'client1.skykin.local';
     try {
         $db = getDB();
-        $s = $db->prepare("UPDATE v_call_center_agents SET agent_status=:s WHERE agent_name=:a AND domain_name=:d");
+        $s = $db->prepare("UPDATE v_call_center_agents SET agent_status=:s WHERE agent_name=:a AND domain_uuid = (SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1)");
         $s->execute([':s'=>$new_status,':a'=>$agent_ext,':d'=>$domain_]);
         echo json_encode(['ok'=>true,'updated'=>$s->rowCount()]);
     } catch(Exception $e) { echo json_encode(['ok'=>false,'error'=>$e->getMessage()]); }
