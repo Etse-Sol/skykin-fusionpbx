@@ -46,8 +46,8 @@ echo ""
 echo "[2/4] Adding /wss/ location to nginx..."
 
 if grep -q 'location /wss/' "$NGINX_SITE"; then
-    echo "      already present, updating upstream address"
-    sed -i -E "\#location /wss/#,\#^\t\}#{s#proxy_pass http://[^;]+;#proxy_pass http://${WS_ADDR};#}" "$NGINX_SITE"
+    echo "      already configured, leaving it untouched:"
+    grep -A2 'location /wss/' "$NGINX_SITE" | grep proxy_pass | sed 's/^/      /'
 else
     cp "$NGINX_SITE" "${NGINX_SITE}.bak.$(date +%Y%m%d%H%M%S)"
 
