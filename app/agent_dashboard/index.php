@@ -1080,7 +1080,9 @@ $today = date('Y-m-d');
 // ?? Resolve the agent's extension from FusionPBX DB ??????????????????????????
 $agent_ext      = '';
 $agent_password = '';
-$agent_wss      = 'wss://' . $_SERVER['HTTP_HOST'] . ':7443';
+// Reached through nginx on the page's own port so the socket reuses the
+// dashboard certificate; FreeSWITCH's own cert on 7443 is rejected by browsers.
+$agent_wss      = 'wss://' . preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST']) . '/wss/';
 try {
     $conf = '/etc/fusionpbx/config.conf';
     $db_host = '127.0.0.1'; $db_port = '5432';
@@ -2469,7 +2471,7 @@ const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 if (serverExt)  localStorage.setItem('sip_ext',  serverExt);
 if (serverPass) localStorage.setItem('sip_pass', serverPass);
 localStorage.setItem('sip_server', location.hostname);
-localStorage.setItem('sip_port',   '7443');
+localStorage.removeItem('sip_port');
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
@@ -3028,6 +3030,19 @@ let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFil
 // SIP.js module will populate window.sipBridge when loaded
 window.sipBridge = {}; var sipBridge = window.sipBridge;
 
+// On HTTPS the socket is routed through the nginx /wss/ proxy on the page's own
+// port, so it reuses the certificate the browser already accepted for the
+// dashboard. FreeSWITCH's self-signed cert on 7443 has no SAN, and a browser
+// cannot prompt to accept a cert for a WebSocket, so it aborts with code 1006.
+function buildSipWsUrl(host, port) {
+    const cleanHost = String(host || location.hostname)
+        .replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+    if (location.protocol === 'https:') {
+        return 'wss://' + cleanHost + (location.port ? ':' + location.port : '') + '/wss/';
+    }
+    return 'ws://' + cleanHost + ':' + (port || '5066');
+}
+
 function loadSipSettings() {
     const ext  = localStorage.getItem('sip_ext')  || serverExt  || '';
     const pass = localStorage.getItem('sip_pass') || serverPass || '';
@@ -3037,21 +3052,17 @@ function loadSipSettings() {
     const rawServer = localStorage.getItem('sip_server') || location.hostname;
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
     
-    // Retrieve stored port or default based on protocol
-    const isHttps   = location.protocol === 'https:';
-    const defaultPort = isHttps ? '7443' : '5066';
-    const port      = localStorage.getItem('sip_port') || defaultPort;
-    
-    // Build the WebSocket URL correctly matching saveSipSettings logic
-    const wsUrl     = (isHttps ? 'wss://' : 'ws://') + cleanHost;
+    const isHttps = location.protocol === 'https:';
+    const port    = localStorage.getItem('sip_port') || '5066';
+    const wsUrl   = buildSipWsUrl(cleanHost, port);
 
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = cleanHost;
-    document.getElementById('sipPort').value   = port;
+    document.getElementById('sipPort').value   = isHttps ? (location.port || '443') : port;
     document.getElementById('sipDomain').value = dom;
     
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
 }
 
 function waitForSipBridge(cb, tries) {
@@ -3066,16 +3077,16 @@ function saveSipSettings() {
     const pass = document.getElementById('sipPass').value.trim();
     const dom  = document.getElementById('sipDomain').value.trim();
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
-    // Build WSS URL ? always use wss:// on HTTPS
     const rawServer = document.getElementById('sipServer').value.trim() || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/:\d+$/,'');
     const isHttps   = location.protocol === 'https:';
-    const wsUrl     = (isHttps ? 'wss://' : 'ws://') + cleanHost;
-    const port      = isHttps ? '7443' : (document.getElementById('sipPort').value.trim() || '5066');
+    // The port field only applies to plain ws; HTTPS always goes via the /wss/ proxy
+    const port      = isHttps ? '' : (document.getElementById('sipPort').value.trim() || '5066');
+    const wsUrl     = buildSipWsUrl(cleanHost, port);
     localStorage.setItem('sip_ext',    ext);
     localStorage.setItem('sip_pass',   pass);
     localStorage.setItem('sip_server', cleanHost);
-    localStorage.setItem('sip_port',   port);
+    if (port) localStorage.setItem('sip_port', port); else localStorage.removeItem('sip_port');
     localStorage.setItem('sip_domain', dom);
     document.getElementById('settingsModal').classList.remove('show');
     waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
@@ -4185,10 +4196,13 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
         wsUri = (isHttps ? 'wss://' : 'ws://') + wsUri;
     }
     
-    // If the WebSocket URI does not specify a port or sub-path, append the port
+    // If the WebSocket URI does not specify a port or sub-path, add one.
+    // HTTPS gets the nginx /wss/ proxy path so the socket shares the page cert.
     const hostPart = wsUri.replace(/^wss?:\/\//i, '');
-    if (!hostPart.includes(':') && !hostPart.includes('/')) {
-        wsUri = wsUri + ':' + (port || (location.protocol === 'https:' ? '7443' : '5066'));
+    if (!hostPart.includes('/') && !hostPart.includes(':')) {
+        wsUri = location.protocol === 'https:'
+            ? wsUri + '/wss/'
+            : wsUri + ':' + (port || '5066');
     }
 
     ua = new UserAgent({

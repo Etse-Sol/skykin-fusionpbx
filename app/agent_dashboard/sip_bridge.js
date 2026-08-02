@@ -28,11 +28,12 @@ import {
             wsUri = (isHttps ? 'wss://' : 'ws://') + wsUri;
         }
         
-        // If the WebSocket URI does not specify a port or sub-path, append the port
+        // If the WebSocket URI does not specify a port or sub-path, add one.
+        // HTTPS gets the nginx /wss/ proxy path so the socket shares the page cert.
         const hostPart = wsUri.replace(/^wss?:\/\//i, '');
-        if (!hostPart.includes(':') && !hostPart.includes('/')) {
+        if (!hostPart.includes('/') && !hostPart.includes(':')) {
             const isHttps = typeof location !== 'undefined' && location.protocol === 'https:';
-            wsUri = wsUri + ':' + (port || (isHttps ? '7443' : '5066'));
+            wsUri = isHttps ? wsUri + '/wss/' : wsUri + ':' + (port || '5066');
         }
 
         try {
