@@ -678,6 +678,28 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .btn-force-out{background:#ffebee;color:#c62828}
 .agents-list-head{display:grid;grid-template-columns:36px 1fr 70px 90px 60px 60px 70px 18px;gap:8px;align-items:center;padding:6px 12px;font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #eee;background:#fafbfc;position:sticky;top:0;z-index:1}
 
+/* Dashboard proportions */
+.dashboard-overview{display:flex;flex-direction:column;gap:16px}
+.dashboard-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.dashboard-kpi{min-height:92px;background:#fff;border:1px solid #edf0f5;border-radius:10px;padding:14px 16px;
+    box-shadow:0 1px 5px rgba(0,0,0,.05);border-top:3px solid #0047AB;display:flex;flex-direction:column;justify-content:center}
+.dashboard-kpi-value{font-size:25px;font-weight:700;line-height:1;color:#0047AB}
+.dashboard-kpi-label{font-size:11px;color:#777;margin-top:7px}
+.dashboard-kpi.answered{border-top-color:#28a745}.dashboard-kpi.answered .dashboard-kpi-value{color:#28a745}
+.dashboard-kpi.missed{border-top-color:#dc3545}.dashboard-kpi.missed .dashboard-kpi-value{color:#dc3545}
+.dashboard-kpi.online{border-top-color:#17a2b8}.dashboard-kpi.online .dashboard-kpi-value{color:#17a2b8}
+.queue-health-card{grid-column:span 2;border-top-color:#fd7e14}
+.queue-health-title{font-size:11px;font-weight:700;color:#555;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.queue-health-dot{width:7px;height:7px;border-radius:50%;background:#fd7e14}
+.queue-health-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.queue-health-metric{border-left:1px solid #eee;padding-left:10px}
+.queue-health-metric:first-child{border-left:none;padding-left:0}
+.queue-health-value{display:block;font-size:16px;font-weight:700;color:#333}
+.queue-health-label{display:block;font-size:9px;color:#999;margin-top:3px}
+.live-agents-panel{background:#fff;border:1px solid #edf0f5;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.06);overflow:hidden}
+.live-agents-header{padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.live-agents-tools{display:flex;align-items:center;gap:10px}
+
 /* Bottom tabs */
 .bottom-section{background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.08);overflow:hidden}
 .tab-bar{display:flex;border-bottom:2px solid #f0f0f0;padding:0 16px;gap:4px}
@@ -718,8 +740,25 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .progress-bar-fill{background:#0047AB;border-radius:4px;height:6px;transition:width .5s}
 
 /* Responsive */
-@media(max-width:900px){.queue-bar{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:600px){.queue-bar{grid-template-columns:repeat(2,1fr)}.agents-grid{grid-template-columns:1fr}}
+@media(max-width:900px){
+    .queue-bar{grid-template-columns:repeat(3,1fr)}
+    .dashboard-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .queue-health-card{grid-column:span 2}
+}
+@media(max-width:700px){
+    .live-agents-header{align-items:flex-start;flex-direction:column}
+    .live-agents-tools{width:100%;justify-content:flex-end}
+    .agent-row-main,.agents-list-head{grid-template-columns:32px minmax(110px,1fr) 70px 60px 18px}
+    .agent-row-main>:nth-child(4),.agent-row-main>:nth-child(6),.agent-row-main>:nth-child(7),
+    .agents-list-head>:nth-child(4),.agents-list-head>:nth-child(6),.agents-list-head>:nth-child(7){display:none}
+    .agent-row-detail{padding-left:12px}
+}
+@media(max-width:600px){
+    .queue-bar{grid-template-columns:repeat(2,1fr)}
+    .dashboard-kpis{grid-template-columns:1fr 1fr}
+    .queue-health-card{grid-column:span 2}
+    .tab-bar{overflow-x:auto}
+}
 </style>
 </head>
 <body>
@@ -812,51 +851,51 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 
         <!-- Dashboard Tab (landing overview) -->
         <div class="tab-content active" id="tab-dashboard" style="padding:16px">
-    <!-- Two-column top layout -->
-    <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start">
+            <div class="dashboard-overview">
+                <!-- Full-width summary strip -->
+                <div class="dashboard-kpis">
+                    <div class="dashboard-kpi">
+                        <div class="dashboard-kpi-value" id="qs-total">–</div>
+                        <div class="dashboard-kpi-label">Calls Today</div>
+                    </div>
+                    <div class="dashboard-kpi answered">
+                        <div class="dashboard-kpi-value" id="qs-answered">–</div>
+                        <div class="dashboard-kpi-label">Answered</div>
+                    </div>
+                    <div class="dashboard-kpi missed">
+                        <div class="dashboard-kpi-value" id="qs-missed">–</div>
+                        <div class="dashboard-kpi-label">Missed</div>
+                    </div>
+                    <div class="dashboard-kpi online">
+                        <div class="dashboard-kpi-value" id="qs-online">–</div>
+                        <div class="dashboard-kpi-label">Agents Online</div>
+                    </div>
+                    <div class="dashboard-kpi queue-health-card">
+                        <div class="queue-health-title"><span class="queue-health-dot"></span> Queue Health</div>
+                        <div class="queue-health-metrics">
+                            <div class="queue-health-metric">
+                                <strong class="queue-health-value" id="qs-avgtalk">–</strong>
+                                <span class="queue-health-label">Avg Talk</span>
+                            </div>
+                            <div class="queue-health-metric">
+                                <strong class="queue-health-value" id="qs-avgwait">–</strong>
+                                <span class="queue-health-label">Avg Wait</span>
+                            </div>
+                            <div class="queue-health-metric">
+                                <strong class="queue-health-value" id="qs-sla" style="color:#28a745">–</strong>
+                                <span class="queue-health-label">SLA</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-        <!-- LEFT: KPI cards + Queue stats -->
-        <div style="display:flex;flex-direction:column;gap:12px">
-            <!-- KPI cards grid -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #0047AB">
-                    <div style="font-size:22px;font-weight:700;color:#0047AB" id="qs-total">–</div>
-                    <div style="font-size:11px;color:#888;margin-top:2px">Calls Today</div>
-                </div>
-                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #28a745">
-                    <div style="font-size:22px;font-weight:700;color:#28a745" id="qs-answered">–</div>
-                    <div style="font-size:11px;color:#888;margin-top:2px">Answered</div>
-                </div>
-                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #dc3545">
-                    <div style="font-size:22px;font-weight:700;color:#dc3545" id="qs-missed">–</div>
-                    <div style="font-size:11px;color:#888;margin-top:2px">Missed</div>
-                </div>
-                <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,.07);border-top:3px solid #17a2b8">
-                    <div style="font-size:22px;font-weight:700;color:#17a2b8" id="qs-online">–</div>
-                    <div style="font-size:11px;color:#888;margin-top:2px">Agents Online</div>
-                </div>
-            </div>
-            <!-- Queue detail card -->
-            <div style="background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,.07)">
-                <div style="font-weight:600;font-size:13px;color:#333;margin-bottom:12px;display:flex;align-items:center;gap:6px">
-                    <span style="width:8px;height:8px;border-radius:50%;background:#fd7e14;display:inline-block"></span>
-                    Queue Status
-                </div>
-                <div style="display:flex;flex-direction:column;gap:8px;font-size:13px">
-                    <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Talk Time</span><strong id="qs-avgtalk">–</strong></div>
-                    <div style="display:flex;justify-content:space-between"><span style="color:#666">Avg Wait Time</span><strong id="qs-avgwait">–</strong></div>
-                    <div style="display:flex;justify-content:space-between"><span style="color:#666">SLA %</span><strong style="color:#28a745" id="qs-sla">–</strong></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- RIGHT: Live Agent Cards -->
-        <div style="background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.07);overflow:hidden">
-            <div style="padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between">
+                <!-- Full-width live agent list -->
+                <div class="live-agents-panel">
+                    <div class="live-agents-header">
                 <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
                     <span class="live-dot"></span> Live Agent Status
                 </div>
-                <div style="display:flex;align-items:center;gap:10px">
+                <div class="live-agents-tools">
                     <span style="font-size:11px;color:#aaa">Auto-refreshes every 10s</span>
                     <span id="agentPageInfo" style="font-size:11px;color:#666"></span>
                     <button onclick="agentPage(-1)" id="agentPrev" style="background:#f0f0f0;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">&#8249;</button>
@@ -879,7 +918,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                 </div>
             </div>
         </div>
-    </div>
+            </div>
         </div>
 
         <!-- Leaderboard -->
