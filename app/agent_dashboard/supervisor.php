@@ -628,52 +628,55 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .qstat.good .qstat-val{color:#2e7d32}
 .qstat-lbl{font-size:11px;color:#888;margin-top:3px}
 
-/* Agent cards grid */
+/* Agent list (expandable rows) */
 .agents-section{margin-bottom:20px}
 .section-title{font-size:15px;font-weight:700;color:#0047AB;margin-bottom:12px;display:flex;align-items:center;gap:8px}
-.agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-.agent-card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 1px 6px rgba(0,0,0,.08);
-    border-left:4px solid #ccc;transition:box-shadow .2s}
-.agent-card:hover{box-shadow:0 3px 12px rgba(0,0,0,.12)}
-.agent-card.ready{border-left-color:#4caf50}
-.agent-card.incall{border-left-color:#2196f3}
-.agent-card.acw{border-left-color:#ff9800}
-.agent-card.break{border-left-color:#9c27b0}
-.agent-card.offline{border-left-color:#bbb;opacity:.75}
-
-.card-top{display:flex;align-items:center;gap:10px;margin-bottom:12px}
-.agent-avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;
-    font-weight:700;font-size:14px;color:#fff;flex-shrink:0}
+.agents-grid{display:flex;flex-direction:column;gap:0;max-height:520px;overflow-y:auto}
+.agent-row{border-bottom:1px solid #f0f0f0;transition:background .15s}
+.agent-row:last-child{border-bottom:none}
+.agent-row:hover{background:#f8fbff}
+.agent-row.open{background:#f0f5ff}
+.agent-row.offline{opacity:.7}
+.agent-row-main{display:grid;grid-template-columns:36px 1fr 70px 90px 60px 60px 70px 18px;gap:8px;align-items:center;padding:10px 12px;cursor:pointer;user-select:none}
+.agent-row-main:hover .row-chevron{color:#0047AB}
+.agent-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:12px;color:#fff;flex-shrink:0}
 .avatar-ready{background:#4caf50}.avatar-incall{background:#2196f3}
 .avatar-acw{background:#ff9800}.avatar-break{background:#9c27b0}.avatar-offline{background:#aaa}
-
-.card-name{font-weight:700;font-size:13px}
-.card-ext{font-size:11px;color:#888}
-.status-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700;margin-top:2px}
+.row-name{font-weight:700;font-size:13px;color:#222;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-ext{font-size:11px;color:#888}
+.row-meta{font-size:12px;color:#555;text-align:center}
+.row-meta.missed{color:#f44336;font-weight:600}
+.row-meta.talk{color:#0047AB;font-weight:600}
+.row-oncall{font-size:11px;color:#1565c0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-chevron{font-size:14px;color:#bbb;transition:transform .2s,color .15s;text-align:center}
+.agent-row.open .row-chevron{transform:rotate(90deg);color:#0047AB}
+.status-badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-ready{background:#e8f5e9;color:#2e7d32}
 .badge-incall{background:#e3f2fd;color:#1565c0}
 .badge-acw{background:#fff3e0;color:#e65100}
 .badge-break{background:#f3e5f5;color:#6a1b9a}
 .badge-offline{background:#f5f5f5;color:#757575}
+.badge-lunch{background:#fbe9e7;color:#bf360c}
+.badge-meeting{background:#eceff1;color:#455a64}
 
-.card-metrics{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:10px 0;padding:10px 0;border-top:1px solid #f0f0f0;border-bottom:1px solid #f0f0f0}
-.metric-mini{text-align:center}
-.metric-mini-val{font-size:15px;font-weight:700;color:#0047AB}
-.metric-mini-lbl{font-size:9px;color:#aaa;text-transform:uppercase}
-
-.call-timer-card{text-align:center;font-size:12px;color:#2196f3;font-weight:600;margin:6px 0;display:none}
-.call-timer-card.show{display:block}
-
-.card-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-top:10px}
-.card-actions button{padding:6px 4px;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;transition:opacity .15s}
-.card-actions button:hover{opacity:.85}
+.agent-row-detail{display:none;padding:0 12px 12px 56px;border-top:1px dashed #e8eef8}
+.agent-row.open .agent-row-detail{display:block}
+.detail-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0 12px}
+.detail-metric{background:#fff;border:1px solid #eef2f7;border-radius:8px;padding:8px 10px}
+.detail-metric-lbl{font-size:10px;color:#888;text-transform:uppercase;margin-bottom:2px}
+.detail-metric-val{font-size:14px;font-weight:700;color:#0047AB}
+.detail-actions{display:flex;flex-wrap:wrap;gap:6px}
+.detail-actions button{padding:7px 12px;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;transition:opacity .15s}
+.detail-actions button:hover{opacity:.85}
+.detail-actions button:disabled{opacity:.4;cursor:not-allowed}
 .btn-listen{background:#e3f2fd;color:#1565c0}
 .btn-whisper{background:#f3e5f5;color:#6a1b9a}
 .btn-barge{background:#fce4ec;color:#c62828}
-.supervisor-actions{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px}
-.btn-force-avail{background:#e8f5e9;color:#2e7d32;padding:5px;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600}
-.btn-force-break{background:#fff3e0;color:#e65100;padding:5px;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600}
-.btn-force-out{background:#ffebee;color:#c62828;padding:5px;border:none;border-radius:6px;cursor:pointer;font-size:10px;font-weight:600;grid-column:span 2}
+.btn-force-avail{background:#e8f5e9;color:#2e7d32}
+.btn-force-break{background:#fff3e0;color:#e65100}
+.btn-force-out{background:#ffebee;color:#c62828}
+.agents-list-head{display:grid;grid-template-columns:36px 1fr 70px 90px 60px 60px 70px 18px;gap:8px;align-items:center;padding:6px 12px;font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #eee;background:#fafbfc;position:sticky;top:0;z-index:1}
 
 /* Bottom tabs */
 .bottom-section{background:#fff;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.08);overflow:hidden}
@@ -860,7 +863,17 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                     <button onclick="agentPage(+1)" id="agentNext" style="background:#f0f0f0;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:12px">&#8250;</button>
                 </div>
             </div>
-            <div style="padding:14px">
+            <div style="padding:0">
+                <div class="agents-list-head">
+                    <span></span>
+                    <span>Agent</span>
+                    <span>Status</span>
+                    <span>On Call</span>
+                    <span style="text-align:center">Ans</span>
+                    <span style="text-align:center">Miss</span>
+                    <span style="text-align:center">Talk</span>
+                    <span></span>
+                </div>
                 <div class="agents-grid" id="agentsGrid">
                     <div style="color:#aaa;font-size:13px;padding:20px">Loading agents...</div>
                 </div>
@@ -1091,7 +1104,7 @@ function fetchAgents(){
         }).catch(()=>{});
 }
 
-let _allAgents = [], _agentPage = 0, _agentsPerPage = 6;
+let _allAgents = [], _agentPage = 0, _agentsPerPage = 12, _openAgentExt = null;
 
 function agentPage(dir) {
     const maxPage = Math.ceil(_allAgents.length / _agentsPerPage) - 1;
@@ -1114,85 +1127,76 @@ function renderAgentPage() {
 function renderAgents(agents){
     const grid = document.getElementById('agentsGrid');
     if(!agents.length){grid.innerHTML='<div style="color:#aaa;padding:20px">No agents found in this domain.</div>';return;}
+
+    // Prefer keeping In Call agents visible first within the current page slice
+    const order = {incall:0, ready:1, acw:2, break:3, lunch:4, meeting:5, offline:6};
+    agents = agents.slice().sort((a,b)=>(order[a.status]??9)-(order[b.status]??9));
+
     grid.innerHTML = agents.map(a=>{
         const col    = statusColor(a.status);
         const lbl    = statusLabel(a.status);
         const ini    = initials(a.name);
         const inCall = a.status==='incall';
-        const callInfo = inCall && a.on_call_with ? `On call with: <strong>${a.on_call_with}</strong>` : '';
+        const onCall = inCall && a.on_call_with ? a.on_call_with : '—';
+        const isOpen = window._openAgentExt === a.ext;
 
         const rate      = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 0;
-        const rateColor = a.total_calls===0?'#aaa':rate>=80?'#28a745':rate>=60?'#fd7e14':'#dc3545';
         const rateLabel = a.total_calls===0?'—':rate+'%';
+        const monDisabled = inCall ? '' : 'disabled title="Agent is not on a call"';
 
-        // Talk vs Idle — estimate idle from shift start (08:00)
-        const shiftSecs = Math.max(1, Math.floor((Date.now()/1000) - new Date().setHours(8,0,0,0)/1000));
-        const talkPct   = Math.min(100, Math.round((a.total_talk||0) / shiftSecs * 100));
-        const talkColor = talkPct>=60?'#28a745':talkPct>=30?'#fd7e14':'#17a2b8';
-
-        // ACW estimate (~15% of talk time)
-        const acwSecs = Math.round((a.total_talk||0) * 0.15);
-        const acwPct  = Math.min(100, Math.round(acwSecs / shiftSecs * 100));
-
-        return `<div class="agent-card ${a.status}" id="card-${a.ext}">
-            <div class="card-top">
+        return `<div class="agent-row ${a.status}${isOpen?' open':''}" id="row-${a.ext}">
+            <div class="agent-row-main" onclick="toggleAgentRow('${a.ext}')">
                 <div class="agent-avatar avatar-${a.status}" style="background:${col}">${ini}</div>
                 <div>
-                    <div class="card-name">${a.name}</div>
-                    <div class="card-ext">Ext: ${a.ext}</div>
-                    <span class="status-badge badge-${a.status}">${lbl}</span>
+                    <div class="row-name">${a.name}</div>
+                    <div class="row-ext">Ext ${a.ext}</div>
                 </div>
+                <div><span class="status-badge badge-${a.status}">${lbl}</span></div>
+                <div class="row-oncall">${onCall}</div>
+                <div class="row-meta" style="text-align:center">${a.answered}</div>
+                <div class="row-meta missed" style="text-align:center">${a.missed}</div>
+                <div class="row-meta talk" style="text-align:center">${fmtSec(a.total_talk)}</div>
+                <div class="row-chevron">&#8250;</div>
             </div>
-            ${callInfo ? `<div class="call-timer-card show" id="ctimer-${a.ext}">${callInfo}</div>` : ''}
-            <div class="card-metrics">
-                <div class="metric-mini"><div class="metric-mini-val">${a.answered}</div><div class="metric-mini-lbl">Answered</div></div>
-                <div class="metric-mini"><div class="metric-mini-val" style="color:#f44336">${a.missed}</div><div class="metric-mini-lbl">Missed</div></div>
-                <div class="metric-mini"><div class="metric-mini-val">${fmtSec(a.total_talk)}</div><div class="metric-mini-lbl">Talk Time</div></div>
-            </div>
-
-            <!-- Performance bars -->
-            <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
-                <div>
-                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
-                        <span>Answer Rate</span><span style="color:${rateColor};font-weight:600">${rateLabel}</span>
+            <div class="agent-row-detail">
+                <div class="detail-metrics">
+                    <div class="detail-metric">
+                        <div class="detail-metric-lbl">Answer Rate</div>
+                        <div class="detail-metric-val">${rateLabel}</div>
                     </div>
-                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
-                        <div style="background:${rateColor};width:${rate}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    <div class="detail-metric">
+                        <div class="detail-metric-lbl">Avg Call</div>
+                        <div class="detail-metric-val">${fmtDur(a.avg_dur)}</div>
                     </div>
-                </div>
-                <div>
-                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
-                        <span>Talk vs Idle</span><span style="color:${talkColor};font-weight:600">${talkPct}%</span>
-                    </div>
-                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
-                        <div style="background:${talkColor};width:${talkPct}%;height:100%;border-radius:4px;transition:width .4s"></div>
+                    <div class="detail-metric">
+                        <div class="detail-metric-lbl">Total Calls</div>
+                        <div class="detail-metric-val">${a.total_calls||0}</div>
                     </div>
                 </div>
-                <div>
-                    <div style="display:flex;justify-content:space-between;font-size:10px;color:#888;margin-bottom:2px">
-                        <span>ACW Time</span><span style="color:#fd7e14;font-weight:600">${fmtSec(acwSecs)} (${acwPct}%)</span>
-                    </div>
-                    <div style="background:#f0f0f0;border-radius:4px;height:5px">
-                        <div style="background:#fd7e14;width:${acwPct}%;height:100%;border-radius:4px;transition:width .4s"></div>
-                    </div>
+                <div class="detail-actions">
+                    <button class="btn-listen"  ${monDisabled} onclick="event.stopPropagation();monitor('${a.ext}','listen')">&#128266; Listen</button>
+                    <button class="btn-whisper" ${monDisabled} onclick="event.stopPropagation();monitor('${a.ext}','whisper')">&#128172; Whisper</button>
+                    <button class="btn-barge"   ${monDisabled} onclick="event.stopPropagation();monitor('${a.ext}','barge')">&#128483; Barge</button>
+                    <button class="btn-force-avail" onclick="event.stopPropagation();forceStatus('${a.ext}','Available')">&#10003; Set Available</button>
+                    <button class="btn-force-break" onclick="event.stopPropagation();forceStatus('${a.ext}','On Break')">&#9749; Set Break</button>
+                    <button class="btn-force-out"   onclick="event.stopPropagation();forceStatus('${a.ext}','Logged Out')">&#10006; Force Sign-Out</button>
                 </div>
-            </div>
-
-            <div style="font-size:10px;color:#aaa;margin:6px 0 8px">
-                Avg call: ${fmtDur(a.avg_dur)} &nbsp;|&nbsp; Total calls: ${a.total_calls||0}
-            </div>
-            <div class="card-actions">
-                <button class="btn-listen"  onclick="monitor('${a.ext}','listen')"  title="Listen silently">&#128266; Listen</button>
-                <button class="btn-whisper" onclick="monitor('${a.ext}','whisper')" title="Whisper to agent only">&#128172; Whisper</button>
-                <button class="btn-barge"   onclick="monitor('${a.ext}','barge')"   title="Join call (all hear)">&#128483; Barge</button>
-            </div>
-            <div class="supervisor-actions">
-                <button class="btn-force-avail" onclick="forceStatus('${a.ext}','Available')">&#10003; Set Available</button>
-                <button class="btn-force-break"  onclick="forceStatus('${a.ext}','On Break')">&#9749; Set Break</button>
-                <button class="btn-force-out"    onclick="forceStatus('${a.ext}','Logged Out')">&#10006; Force Sign-Out</button>
             </div>
         </div>`;
     }).join('');
+}
+
+function toggleAgentRow(ext){
+    const row = document.getElementById('row-'+ext);
+    if(!row) return;
+    const wasOpen = row.classList.contains('open');
+    document.querySelectorAll('.agent-row.open').forEach(r=>r.classList.remove('open'));
+    if(!wasOpen){
+        row.classList.add('open');
+        window._openAgentExt = ext;
+    } else {
+        window._openAgentExt = null;
+    }
 }
 
 // ── Monitor / Barge ────────────────────────────────────────────────────────
