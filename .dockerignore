@@ -1,0 +1,23 @@
+.git
+.github
+.gitignore
+node_modules
+**/node_modules
+*.md
+!docker/README.md
+.env
+.env.*
+!.env.docker.example
+*.log
+*.bak*
+docker-compose.override.yml
+_tmp_*
+.vscode
+.idea
+Documents
+Virtual Machines
+**/*.vmdk
+**/*.vdi
+**/*.ova
+themes/**/cache
+resources/templates/provision/**/firmware

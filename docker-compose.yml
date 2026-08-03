@@ -1,0 +1,52 @@
+# SkyKin FusionPBX — Docker (web + Postgres)
+# FreeSWITCH stays on your Debian VM / host. Point ESL + WS at it.
+#
+# Start:  docker compose up --build -d
+# App:    http://localhost:8080/app/agent_dashboard/index.php
+# Stop:   docker compose down
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: skykin-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-fusionpbx}
+      POSTGRES_USER: ${DB_USER:-fusionpbx}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-fusionpbx}
+    volumes:
+      - skykin_pgdata:/var/lib/postgresql/data
+    ports:
+      - "${DB_PUBLISH_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fusionpbx} -d ${DB_NAME:-fusionpbx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    container_name: skykin-web
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-fusionpbx}
+      DB_USER: ${DB_USER:-fusionpbx}
+      DB_PASSWORD: ${DB_PASSWORD:-fusionpbx}
+      # FreeSWITCH on the host/VM (Windows Docker Desktop uses host.docker.internal)
+      ESL_HOST: ${ESL_HOST:-host.docker.internal}
+      ESL_PORT: ${ESL_PORT:-8021}
+      ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      # Live-edit agent dashboard without rebuild; SQLite DB lives here on the host
+      - ./app/agent_dashboard:/var/www/fusionpbx/app/agent_dashboard
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  skykin_pgdata:
