@@ -1871,33 +1871,27 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <?php endif; ?>
 
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Dashboard</div>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionKpi')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128200;</span> My Stats (KPIs)
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Menu</div>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('dashboard')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128187;</span> Dashboard
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionMetrics')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#9201;</span> Call Time Metrics
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionPerformance')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#127941;</span> Today's Performance
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionQueue')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128101;</span> Queue Status
-        </a>
-
-        <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">History</div>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:16px">&#128222;</span> Call History
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:16px">&#127908;</span> Recordings
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();scrollToSection('sectionHistory');switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:16px">&#128203;</span> ACW History
         </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('crm')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#127760;</span> Customer Info
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('escalation')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127915;</span> New Ticket
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('lookup')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128269;</span> Customer Lookup
+        </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('callbacks')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#128197;</span> Callbacks
         </a>
 
         <div style="height:1px;background:#eee;margin:6px 0"></div>
@@ -1911,6 +1905,19 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <!-- ?? MAIN ?? -->
 <div class="main">
 
+    <div class="full-section" id="sectionHistory">
+        <div class="tab-bar">
+            <button class="tab-btn active" id="tabDashboardBtn" onclick="switchTab('dashboard')">Dashboard</button>
+            <button class="tab-btn" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
+            <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
+            <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
+            <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
+            <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
+            <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
+        </div>
+
+        <!-- ?? Dashboard Tab (landing overview) ?? -->
+        <div class="tab-panel active" id="tabDashboard">
     <!-- Summary Cards -->
     <div class="summary-grid" id="sectionKpi">
         <div class="card green">
@@ -2024,20 +2031,10 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
 
     </div>
-
-    <!-- Call History + Recordings (tabbed) -->
-    <div class="full-section" id="sectionHistory">
-        <div class="tab-bar">
-            <button class="tab-btn active" id="tabCallHistoryBtn" onclick="switchTab('callHistory')">Call History</button>
-            <button class="tab-btn" id="tabRecordingsBtn" onclick="switchTab('recordings')">Recordings</button>
-            <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
-            <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
-            <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
-            <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
         </div>
 
         <!-- ?? Call History Tab ?? -->
-        <div class="tab-panel active" id="tabCallHistory">
+        <div class="tab-panel" id="tabCallHistory" style="display:none">
             <div class="date-filter">
                 <label>From:</label>
                 <input type="date" id="filterFrom" value="<?php echo $today; ?>">
@@ -2581,7 +2578,7 @@ document.addEventListener('click', function(e) {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['callHistory','recordings','acw','escalation','lookup','callbacks'].forEach(t => {
+    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }

@@ -759,8 +759,17 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
-        <a href="/app/agent_dashboard/supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#0047AB;text-decoration:none;font-size:14px;font-weight:600;background:#f0f4ff;border-left:4px solid #0047AB">
+        <a href="#" onclick="toggleSideMenu();showTabDirect('dashboard')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#0047AB;text-decoration:none;font-size:14px;font-weight:600;background:#f0f4ff;border-left:4px solid #0047AB">
             <span style="font-size:18px">&#128187;</span> Dashboard
+        </a>
+        <a href="#" onclick="toggleSideMenu();showTabDirect('leaderboard')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127942;</span> Leaderboard
+        </a>
+        <a href="#" onclick="toggleSideMenu();showTabDirect('callhistory')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#128222;</span> Call History
+        </a>
+        <a href="#" onclick="toggleSideMenu();showTabDirect('recordings')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#127908;</span> Recordings
         </a>
         <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128202;</span> Reports
@@ -785,8 +794,23 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 
 <div class="main">
 
+    <!-- Tabs: Dashboard first, then detail views -->
+    <div class="bottom-section">
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
+            <button class="tab-btn" data-tab="leaderboard" onclick="showTab('leaderboard')">Leaderboard</button>
+            <button class="tab-btn" data-tab="callhistory" onclick="showTab('callhistory')">All Call History</button>
+            <button class="tab-btn" data-tab="acwall" onclick="showTab('acwall')">ACW Review</button>
+            <button class="tab-btn" data-tab="recordings" onclick="showTab('recordings')">Call Recordings</button>
+            <button class="tab-btn" data-tab="voicequality" onclick="showTab('voicequality')">Voice Quality</button>
+            <button class="tab-btn" data-tab="skills" onclick="showTab('skills')">Agent Skills</button>
+            <button class="tab-btn" data-tab="ahununu" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
+        </div>
+
+        <!-- Dashboard Tab (landing overview) -->
+        <div class="tab-content active" id="tab-dashboard" style="padding:16px">
     <!-- Two-column top layout -->
-    <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;margin-bottom:16px;align-items:start">
+    <div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start">
 
         <!-- LEFT: KPI cards + Queue stats -->
         <div style="display:flex;flex-direction:column;gap:12px">
@@ -843,21 +867,10 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             </div>
         </div>
     </div>
-
-    <!-- Bottom Tabs (full width) -->
-    <div class="bottom-section">
-        <div class="tab-bar">
-            <button class="tab-btn active" onclick="showTab('leaderboard')">Leaderboard</button>
-            <button class="tab-btn" onclick="showTab('callhistory')">All Call History</button>
-            <button class="tab-btn" onclick="showTab('acwall')">ACW Review</button>
-            <button class="tab-btn" onclick="showTab('recordings')">Call Recordings</button>
-            <button class="tab-btn" onclick="showTab('voicequality')">Voice Quality</button>
-            <button class="tab-btn" onclick="showTab('skills')">Agent Skills</button>
-            <button class="tab-btn" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
         <!-- Leaderboard -->
-        <div class="tab-content active" id="tab-leaderboard">
+        <div class="tab-content" id="tab-leaderboard">
             <div class="date-filter">
                 <label>From:</label><input type="date" id="lbFrom" value="<?php echo $today;?>">
                 <label>To:</label><input type="date" id="lbTo" value="<?php echo $today;?>">
@@ -1287,8 +1300,11 @@ function fetchAcwAll(){
 function showTab(name){
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-    document.getElementById('tab-'+name).classList.add('active');
-    event.target.classList.add('active');
+    const panel = document.getElementById('tab-'+name);
+    if (panel) panel.classList.add('active');
+    const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
+    if (btn) btn.classList.add('active');
+    else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
@@ -1306,7 +1322,14 @@ function showTabDirect(name){
     document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
     const panel = document.getElementById('tab-'+name);
     if (panel) panel.classList.add('active');
-    document.querySelectorAll('.tab-btn').forEach(b=>{ if(b.textContent.toLowerCase().includes(name)) b.classList.add('active'); });
+    const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
+    if (btn) btn.classList.add('active');
+    if(name==='leaderboard') fetchLeaderboard();
+    if(name==='callhistory') fetchCallHistory();
+    if(name==='acwall')      fetchAcwAll();
+    if(name==='recordings')  fetchRecordings();
+    if(name==='voicequality') fetchVoiceQuality();
+    if(name==='skills') fetchSkillsAgents();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = 'https://ahununu.com/';
@@ -1316,7 +1339,6 @@ function showTabDirect(name){
 // ── Init & auto-refresh ────────────────────────────────────────────────────
 fetchQueue();
 fetchAgents();
-fetchLeaderboard();
 
 // ── Recordings ─────────────────────────────────────────────────────────────
 function fetchRecordings(){
