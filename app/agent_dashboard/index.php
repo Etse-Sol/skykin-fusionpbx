@@ -2405,8 +2405,8 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div id="incomingNumber" style="font-size:28px;font-weight:bold;color:#0047AB;margin-bottom:8px">Unknown</div>
             <div style="font-size:12px;color:#666;margin-bottom:24px" id="incomingCidName"></div>
             <div style="display:flex;gap:12px;justify-content:center;">
-                <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">&#128222; Answer</button>
-                <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">&#128548; Decline</button>
+                <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Answer</button>
+                <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Decline</button>
             </div>
         </div>
         <div id="callTimer" class="call-timer">00:00</div>
@@ -3203,6 +3203,7 @@ function stopRingtone() {
 }
 
 function startCallUI(number) {
+    window._callEnded = false; // Reset so endCall() works for this new call
     stopRingtone();
     setSipStatus('incall', 'In Call: ' + number);
     document.getElementById('btnCall').style.display   = 'none';
@@ -3239,7 +3240,9 @@ function updateCallTimer() {
 }
 
 function hangupCall() {
-    if (sipBridge.hangup) sipBridge.hangup(); else endCall();
+    if (sipBridge.hangup) sipBridge.hangup();
+    // Immediately reset the UI — do not wait for the async SIP Terminated event
+    endCall();
 }
 
 function toggleHold() {
@@ -3283,36 +3286,54 @@ function toggleRecord() {
 }
 
 function endCall() {
-    stopRingtone();
-    closeCrmPanel();
-    const callDur = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
+    // Guard: prevent double-firing (hangupCall + SIP Terminated both call endCall)
+    if (window._callEnded) return;
+    window._callEnded = true;
+
+    try { stopRingtone(); } catch(e) {}
+    // closeCrmPanel may not always be defined — guard it
+    if (typeof closeCrmPanel === 'function') { try { closeCrmPanel(); } catch(e) {} }
+
+    const callDur  = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
     const callerNum = lastDialedNumber || document.getElementById('dialInput').value || '';
-    const recFile = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
-    currentSession = null; onHold = false; isRecording = false; isMuted = false;
-    clearInterval(callTimerInterval); callStartTime = null;
-    document.getElementById('btnCall').style.display   = 'block';
-    document.getElementById('btnHangup').style.display = 'none';
-    document.getElementById('btnHold').style.display   = 'none';
-    document.getElementById('btnMute').style.display   = 'none';
-    document.getElementById('btnMute').textContent     = 'Mute';
-    document.getElementById('btnMute').classList.remove('muted');
-    document.getElementById('btnRecord').classList.remove('visible','recording');
-    document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> Record';
-    document.getElementById('btnHold').textContent = 'Hold';
-    document.getElementById('callTimer').style.display = 'none';
-    document.getElementById('callTimer').textContent   = '00:00';
-    
-    // Hide call popup actions
-    if (document.getElementById('btnPhoneSms')) document.getElementById('btnPhoneSms').style.display = 'none';
-    if (document.getElementById('btnPhoneCallback')) document.getElementById('btnPhoneCallback').style.display = 'none';
-    const btnTransferEnd = document.getElementById('btnTransfer');
-    if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
-    
-    setAgentStatus('acw');
+    const recFile   = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
+
+    // ── Critical UI reset (must always run) ────────────────────────────────
+    try {
+        currentSession = null; onHold = false; isRecording = false; isMuted = false;
+        clearInterval(callTimerInterval); callStartTime = null;
+        document.getElementById('btnCall').style.display   = 'block';
+        document.getElementById('btnHangup').style.display = 'none';
+        document.getElementById('btnHold').style.display   = 'none';
+        document.getElementById('btnMute').style.display   = 'none';
+        document.getElementById('btnMute').textContent     = 'Mute';
+        document.getElementById('btnMute').classList.remove('muted');
+        document.getElementById('btnRecord').classList.remove('visible','recording');
+        document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> Record';
+        document.getElementById('btnHold').textContent = 'Hold';
+        document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent   = '00:00';
+        document.getElementById('incomingScreen').style.display = 'none';
+        document.getElementById('dpPanel').style.display = '';
+    } catch(e) { console.error('endCall UI reset error:', e); }
+
+    // ── Secondary UI (optional elements) ───────────────────────────────────
+    try {
+        if (document.getElementById('btnPhoneSms'))      document.getElementById('btnPhoneSms').style.display      = 'none';
+        if (document.getElementById('btnPhoneCallback')) document.getElementById('btnPhoneCallback').style.display = 'none';
+        const btnTransferEnd = document.getElementById('btnTransfer');
+        if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
+    } catch(e) {}
+
+    try { setAgentStatus('acw'); } catch(e) {}
+
     // Small delay so recording upload completes before ACW modal opens
-    setTimeout(() => openAcwModal(callerNum, callDur, lastCallType, recFile), 800);
-    setTimeout(() => { fetchData(); startCountdown(); }, 4000);
-    setTimeout(() => fetchData(), 8000);
+    setTimeout(() => { try { openAcwModal(callerNum, callDur, lastCallType, recFile); } catch(e) {} }, 800);
+    setTimeout(() => { try { fetchData(); startCountdown(); } catch(e) {} }, 4000);
+    setTimeout(() => { try { fetchData(); } catch(e) {} }, 8000);
+
+    // Reset guard after a safe window (5 s) so future calls work normally
+    setTimeout(() => { window._callEnded = false; }, 5000);
 }
 
 // ?? ACW Modal ?????????????????????????????????????
