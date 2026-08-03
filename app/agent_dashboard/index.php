@@ -1893,6 +1893,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <a href="#" onclick="toggleAgentSideMenu();switchTab('callbacks')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:16px">&#128197;</span> Callbacks
         </a>
+        <a href="#" onclick="toggleAgentSideMenu();switchTab('ahununu')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#127760;</span> Ahununu.com
+        </a>
 
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
@@ -1914,6 +1917,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
             <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
             <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
+            <button class="tab-btn" id="tabAhununuBtn" onclick="switchTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
         <!-- ?? Dashboard Tab (landing overview) ?? -->
@@ -2337,6 +2341,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                 </div>
             </div>
         </div>
+
+        <!-- ?? Ahununu.com Tab ?? -->
+        <div class="tab-panel" id="tabAhununu" style="display:none;padding:0">
+            <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:700px;border:none" allow="camera;microphone"></iframe>
+        </div>
         </div>
     </div>
 
@@ -2586,9 +2595,25 @@ function toggleAgentSideMenu() {
     if (backdrop) backdrop.style.display = isOpen ? 'none' : 'block';
 }
 
+// ?? Customer info panel (ahununu.com) ??????????????
+// Slides in over the dashboard during a call; the Ahununu tab is the
+// full-size view for browsing between calls.
+function openCrmPanel(url) {
+    const panel = document.getElementById('crmPanel');
+    const frame = document.getElementById('crmFrame');
+    if (!panel || !frame) return;
+    if (frame.src === 'about:blank') frame.src = url || 'https://ahununu.com/';
+    panel.classList.add('open');
+}
+
+function closeCrmPanel() {
+    const panel = document.getElementById('crmPanel');
+    if (panel) panel.classList.remove('open');
+}
+
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks'].forEach(t => {
+    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks','ahununu'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
@@ -2602,6 +2627,10 @@ function switchTab(tab) {
     if (tab === 'acw')        fetchAcwHistory();
     if (tab === 'escalation') fetchCases();
     if (tab === 'callbacks')  fetchCallbacks();
+    if (tab === 'ahununu') {
+        const f = document.getElementById('ahununuFrame');
+        if (f && f.src === 'about:blank') f.src = 'https://ahununu.com/';
+    }
 }
 
 // ?? Date filters ??????????????????????????????????
