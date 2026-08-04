@@ -1,6 +1,28 @@
 <?php
 // SkyKin Technologies - Real-time Agent Dashboard
+
+// Share FusionPBX session (same cookie / save path as the rest of the PBX)
+$fpbx_session_path = '/var/lib/php/sessions';
+if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
+session_name('PHPSESSID');
 session_start();
+
+// Session expired / not logged in → login page (not a 404)
+// API calls get JSON 401 so the browser can redirect cleanly
+if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
+    if (isset($_GET['action'])) {
+        header('Content-Type: application/json');
+        http_response_code(401);
+        echo json_encode([
+            'ok'    => false,
+            'error' => 'Session expired. Please log in again.',
+            'login' => '/',
+        ]);
+        exit;
+    }
+    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/index.php'));
+    exit;
+}
 
 // ── Shared Skykin DB: tries PostgreSQL, falls back to local SQLite ──────────
 function getSkykinDB() {
@@ -2481,6 +2503,19 @@ localStorage.removeItem('sip_port');
 let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
+
+// If an API call gets 401 (session expired), send the agent to FusionPBX login
+(function() {
+    const _fetch = window.fetch.bind(window);
+    window.fetch = function() {
+        return _fetch.apply(this, arguments).then(function(res) {
+            if (res.status === 401) {
+                window.location = '/?path=' + encodeURIComponent(window.location.pathname + window.location.search);
+            }
+            return res;
+        });
+    };
+})();
 
 // ?? Clock ??????????????????????????????????????????
 function updateClock() {
