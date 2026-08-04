@@ -6,8 +6,8 @@ if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
 session_name('PHPSESSID');
 session_start();
 
-if (empty($_SESSION['user_uuid'])) {
-    header('Location: /login/index.php?redirect=' . urlencode($_SERVER['REQUEST_URI']));
+if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
+    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/evaluation.php'));
     exit;
 }
 
@@ -275,7 +275,7 @@ audio{width:100%;height:32px;border-radius:6px}
   </div>
   <div class="topbar-right">
     <div class="user-pill"><?php echo htmlspecialchars($logged_in_user); ?> &nbsp;|&nbsp; <?php echo htmlspecialchars($domain); ?></div>
-    <a href="/logout/index.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
+    <a href="/logout.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
   </div>
 </div>
 

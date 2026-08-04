@@ -6,10 +6,9 @@ if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
 session_name('PHPSESSID');
 session_start();
 
-// If not logged in, redirect to login page
-if (empty($_SESSION['user_uuid'])) {
-    $redirect = urlencode($_SERVER['REQUEST_URI']);
-    header('Location: /login/index.php?redirect='.$redirect);
+// If not logged in / session expired, send to FusionPBX login
+if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
+    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/tickets.php'));
     exit;
 }
 

@@ -9,10 +9,10 @@ session_name('PHPSESSID');
 session_start();
 
 // ── Auth check ────────────────────────────────────────────────────────────────
-// If not logged in, send to FusionPBX login
-if (empty($_SESSION['user_uuid'])) {
-    $redirect = urlencode($_SERVER['REQUEST_URI']);
-    header('Location: /login/index.php?redirect='.$redirect);
+// If not logged in / session expired, send to FusionPBX login (not /login/index.php — that 404s)
+if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
+    $path = $_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/supervisor.php';
+    header('Location: /?path=' . urlencode($path));
     exit;
 }
 
@@ -45,7 +45,7 @@ if (!$has_access) {
     <h2>Supervisor Access Required</h2>
     <p>Your account (<strong>'.htmlspecialchars($_SESSION['username'] ?? 'Unknown').'</strong>) does not have the <strong>supervisor</strong> or <strong>superadmin</strong> role.</p>
     <p style="margin-top:8px;font-size:12px;color:#aaa">Ask your administrator to assign you the <strong>admin</strong> or <strong>supervisor</strong> group in FusionPBX &rarr; Accounts &rarr; Users.</p>
-    <br><a href="/app/agent_dashboard/index.php">Go to Agent Dashboard</a> &nbsp;|&nbsp; <a href="/login/index.php">Login as different user</a>
+    <br><a href="/app/agent_dashboard/index.php">Go to Agent Dashboard</a> &nbsp;|&nbsp; <a href="/logout.php">Login as different user</a>
     </div></body></html>';
     exit;
 }
@@ -826,7 +826,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
             <span style="font-size:18px">&#127760;</span> Ahununu.com
         </a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <a href="/login/index.php?logout=1" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
+        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
             <span style="font-size:18px">&#128682;</span> Sign Out
         </a>
     </nav>
