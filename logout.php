@@ -40,9 +40,12 @@
 		setcookie(session_name(), '', time() - 42000,
 			$params['path'] ?? '/',
 			$params['domain'] ?? '',
-			$params['secure'] ?? false,
-			$params['httponly'] ?? true
+			false,
+			true
 		);
+	}
+	if (!empty($_COOKIE['remember'])) {
+		setcookie('remember', '', time() - 42000, '/');
 	}
 
 //redirect the user to the logout page

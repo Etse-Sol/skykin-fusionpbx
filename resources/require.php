@@ -97,15 +97,26 @@
 	if (!defined('STDIN') && empty($no_session) && session_status() === PHP_SESSION_NONE) {
 		// Keep sessions alive for 8 hours of inactivity (default PHP is only 24 minutes)
 		ini_set('session.gc_maxlifetime', '28800');
-		ini_set('session.cookie_httponly', !isset($conf['session.cookie_httponly']) ? 'true' : (!empty($config->get('session.cookie_httponly')) ? 'true' : 'false'));
-		// Only mark cookie Secure when the request is actually HTTPS — forcing Secure on
-		// plain HTTP (client1.skykin.local) makes browsers drop the session cookie.
+
 		$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
 			|| (isset($_SERVER['SERVER_PORT']) && (string)$_SERVER['SERVER_PORT'] === '443')
-			|| (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
-		$secure_default = $https ? 'true' : 'false';
-		ini_set('session.cookie_secure', !isset($conf['session.cookie_secure']) ? $secure_default : (!empty($config->get('session.cookie_secure')) ? 'true' : 'false'));
-		ini_set('session.cookie_samesite', $config->get('session.cookie_samesite', 'Lax'));
+			|| (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower((string)$_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+
+		// Use 0/1 — PHP treats the string "false" as enabling boolean ini settings.
+		ini_set('session.cookie_httponly', '1');
+		// Never force Secure on plain HTTP (config.conf may say true; that breaks HTTP logins).
+		ini_set('session.cookie_secure', $https ? '1' : '0');
+		ini_set('session.cookie_samesite', $config->get('session.cookie_samesite', 'Lax') ?: 'Lax');
+
+		$cookie_params = session_get_cookie_params();
+		session_set_cookie_params([
+			'lifetime' => 0,
+			'path' => $cookie_params['path'] ?? '/',
+			'domain' => $cookie_params['domain'] ?? '',
+			'secure' => $https,
+			'httponly' => true,
+			'samesite' => 'Lax',
+		]);
 		session_start();
 	}
 

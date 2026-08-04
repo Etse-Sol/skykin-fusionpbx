@@ -26,28 +26,61 @@
 //includes files
 	require_once __DIR__ . "/resources/require.php";
 
-// SkyKin: if already logged in, do NOT destroy the session (that logged people
-// out when a background /login.php tab refreshed). Send them to their home page.
-// To switch users, open /logout.php explicitly.
+// SkyKin: if already logged in, do not silently bounce away from login.
+// Show a chooser so the user can continue or sign in as someone else.
 	if (!empty($_SESSION['authorized'])) {
-		$skykin_domain = $_SESSION['user_context'] ?? ($_SESSION['domain_name'] ?? 'client1.skykin.local');
-		$skykin_user   = $_SESSION['username'] ?? ($_SESSION['user']['username'] ?? 'agent');
-		if (!empty($_SESSION['groups'])) {
-			foreach ($_SESSION['groups'] as $g) {
-				$name = strtolower((string)($g['group_name'] ?? ''));
-				if ($name === 'agent') {
-					header('Location: /app/agent_dashboard/index.php?agent=' . rawurlencode($skykin_user) . '&domain=' . rawurlencode($skykin_domain));
-					exit;
-				}
-				if ($name === 'supervisor') {
-					header('Location: /app/agent_dashboard/supervisor.php?domain=' . rawurlencode($skykin_domain));
-					exit;
+		// Explicit switch-user: clear session then show login form
+		if (isset($_GET['switch']) && $_GET['switch'] === '1') {
+			$_SESSION = [];
+			if (ini_get('session.use_cookies')) {
+				$params = session_get_cookie_params();
+				setcookie(session_name(), '', time() - 42000,
+					$params['path'] ?? '/',
+					$params['domain'] ?? '',
+					false,
+					true
+				);
+				if (!empty($_COOKIE['remember'])) {
+					setcookie('remember', '', time() - 42000, '/');
 				}
 			}
+			session_destroy();
+			session_start();
+			$_SESSION['authorized'] = false;
+			// fall through to check_auth → login form
 		}
-		$dest = $settings->get('login', 'destination', PROJECT_PATH.'/core/dashboard/');
-		header('Location: '.$dest);
-		exit;
+		else {
+			$who = htmlspecialchars($_SESSION['username'] ?? ($_SESSION['user']['username'] ?? 'user'), ENT_QUOTES, 'UTF-8');
+			$skykin_domain = $_SESSION['user_context'] ?? ($_SESSION['domain_name'] ?? 'client1.skykin.local');
+			$skykin_user   = $_SESSION['username'] ?? ($_SESSION['user']['username'] ?? 'agent');
+			$home = PROJECT_PATH.'/core/dashboard/';
+			if (!empty($_SESSION['groups'])) {
+				foreach ($_SESSION['groups'] as $g) {
+					$name = strtolower((string)($g['group_name'] ?? ''));
+					if ($name === 'agent') {
+						$home = '/app/agent_dashboard/index.php?agent=' . rawurlencode($skykin_user) . '&domain=' . rawurlencode($skykin_domain);
+						break;
+					}
+					if ($name === 'supervisor') {
+						$home = '/app/agent_dashboard/supervisor.php?domain=' . rawurlencode($skykin_domain);
+						break;
+					}
+				}
+			}
+			header('Content-Type: text/html; charset=UTF-8');
+			echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>SkyKin – Signed in</title>';
+			echo '<style>body{font-family:Segoe UI,Arial,sans-serif;background:#f4f7fb;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}';
+			echo '.box{background:#fff;border-radius:12px;padding:32px;max-width:420px;width:90%;box-shadow:0 8px 28px rgba(0,0,0,.08);text-align:center}';
+			echo 'h1{font-size:20px;color:#0047AB;margin:0 0 8px}p{color:#555;font-size:14px;margin:0 0 22px}';
+			echo 'a.btn{display:inline-block;margin:6px;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px}';
+			echo 'a.cont{background:#0047AB;color:#fff}a.switch{background:#eef2f7;color:#333}</style></head><body>';
+			echo '<div class="box"><h1>Already signed in</h1>';
+			echo '<p>You are logged in as <strong>'.$who.'</strong>.</p>';
+			echo '<a class="btn cont" href="'.htmlspecialchars($home, ENT_QUOTES, 'UTF-8').'">Continue</a>';
+			echo '<a class="btn switch" href="/login.php?switch=1">Sign in as different user</a>';
+			echo '</div></body></html>';
+			exit;
+		}
 	}
 
 //additional includes — shows login form when not authorized; redirects after successful login
