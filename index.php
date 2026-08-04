@@ -27,6 +27,24 @@
 //includes files
 	require_once __DIR__ . "/resources/require.php";
 
+// SkyKin: role-based landing from main domain
+// agent → agent dashboard, supervisor → supervisor dashboard
+if (isset($_SESSION["username"]) && !empty($_SESSION["groups"])) {
+	$skykin_domain = $_SESSION["user_context"] ?? ($_SESSION["domain_name"] ?? 'client1.skykin.local');
+	$skykin_user   = $_SESSION["username"] ?? ($_SESSION["user"]["username"] ?? 'agent');
+	foreach ($_SESSION["groups"] as $g) {
+		$name = strtolower((string)($g["group_name"] ?? ''));
+		if ($name === 'agent') {
+			header("Location: /app/agent_dashboard/index.php?agent=" . rawurlencode($skykin_user) . "&domain=" . rawurlencode($skykin_domain));
+			exit;
+		}
+		if ($name === 'supervisor') {
+			header("Location: /app/agent_dashboard/supervisor.php?domain=" . rawurlencode($skykin_domain));
+			exit;
+		}
+	}
+}
+
 //if logged in, redirect to login destination
 	if (isset($_SESSION["username"])) {
 		if (!empty($settings->get('login', 'destination'))) {

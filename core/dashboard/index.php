@@ -1,11 +1,16 @@
 <?php
-// SkyKin: Redirect agents to custom dashboard
+// SkyKin: role-based landing — agents → agent dashboard, supervisors → supervisor dashboard
 if (isset($_SESSION["groups"])) {
+    $skykin_domain = $_SESSION["user_context"] ?? ($_SESSION["domain_name"] ?? "client1.skykin.local");
+    $skykin_user   = $_SESSION["username"] ?? ($_SESSION["user"]["username"] ?? "agent");
     foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
+        $name = strtolower((string)($g["group_name"] ?? ""));
+        if ($name === "agent") {
+            header("Location: /app/agent_dashboard/index.php?agent=" . rawurlencode($skykin_user) . "&domain=" . rawurlencode($skykin_domain));
+            exit;
+        }
+        if ($name === "supervisor") {
+            header("Location: /app/agent_dashboard/supervisor.php?domain=" . rawurlencode($skykin_domain));
             exit;
         }
     }
