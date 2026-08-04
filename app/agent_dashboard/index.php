@@ -1,12 +1,6 @@
 <?php
 // SkyKin Technologies - Real-time Agent Dashboard
-
-// Share FusionPBX session (same cookie / save path as the rest of the PBX)
-$fpbx_session_path = '/var/lib/php/sessions';
-if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
-ini_set('session.gc_maxlifetime', '28800');
-session_name('PHPSESSID');
-session_start();
+require_once __DIR__ . '/session_bootstrap.php';
 
 // Session expired / not logged in → login page (not a 404)
 // API calls get JSON 401 so the browser can redirect cleanly
@@ -24,6 +18,9 @@ if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
     header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/index.php'));
     exit;
 }
+
+// Release session lock so background polls / other tabs are not blocked
+session_write_close();
 
 // ── Shared Skykin DB: tries PostgreSQL, falls back to local SQLite ──────────
 function getSkykinDB() {
@@ -2662,13 +2659,25 @@ let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
 
-// If an API call gets 401 (session expired), send the agent to FusionPBX login
+// Background API 401 must NOT force logout — a single failed poll (tab sleep,
+// brief lock, race) was kicking agents to login when they switched tabs.
 (function() {
     const _fetch = window.fetch.bind(window);
+    let authFailCount = 0;
     window.fetch = function() {
-        return _fetch.apply(this, arguments).then(function(res) {
+        const args = arguments;
+        const init = args[1] || {};
+        if (!init.credentials) {
+            args[1] = Object.assign({}, init, { credentials: 'same-origin' });
+        }
+        return _fetch.apply(this, args).then(function(res) {
             if (res.status === 401) {
-                window.location = '/?path=' + encodeURIComponent(window.location.pathname + window.location.search);
+                authFailCount++;
+                if (authFailCount >= 3) {
+                    window.location = '/login.php?switch=1';
+                }
+            } else if (res.ok) {
+                authFailCount = 0;
             }
             return res;
         });

@@ -1,15 +1,7 @@
 <?php
 // SkyKin Technologies – Supervisor Dashboard
+require_once __DIR__ . '/session_bootstrap.php';
 
-// ── FusionPBX session bootstrap ──────────────────────────────────────────────
-// Share FusionPBX session by using its session name and save path
-$fpbx_session_path = '/var/lib/php/sessions';
-if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
-ini_set('session.gc_maxlifetime', '28800');
-session_name('PHPSESSID');
-session_start();
-
-// ── Auth check ────────────────────────────────────────────────────────────────
 // ── Auth check ────────────────────────────────────────────────────────────────
 // API endpoints must return JSON on expiry (not an HTML login redirect),
 // otherwise Live Agent Status polling silently dies.
@@ -25,6 +17,9 @@ if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
     header('Location: /?path=' . urlencode($path));
     exit;
 }
+
+// Release session lock early so Live Status polls do not block other tabs
+session_write_close();
 
 // Allowed roles — superadmin, admin, or supervisor (custom group) can open this page
 $allowed_groups = ['superadmin', 'admin', 'supervisor'];
@@ -1441,10 +1436,15 @@ function fetchQueue(){
 function fetchAgents(){
     fetch('supervisor.php?action=agents&domain='+encodeURIComponent(domain), {credentials:'same-origin'})
         .then(r=>{
+            // Do not hard-logout on a single 401 (tab switch / brief session lock)
             if (r.status === 401) {
-                window.location.href = '/?path=' + encodeURIComponent(window.location.pathname + window.location.search);
+                window._authFailCount = (window._authFailCount || 0) + 1;
+                if (window._authFailCount >= 3) {
+                    window.location.href = '/login.php?switch=1';
+                }
                 return null;
             }
+            window._authFailCount = 0;
             return r.json();
         })
         .then(d=>{
