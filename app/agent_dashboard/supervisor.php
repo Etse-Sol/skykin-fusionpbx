@@ -122,6 +122,100 @@ function getDB() {
     return $db;
 }
 
+function ensureLeaveRequestsTable($db) {
+    $db->exec("CREATE TABLE IF NOT EXISTS skykin_leave_requests (
+        id SERIAL PRIMARY KEY,
+        domain VARCHAR(255) NOT NULL,
+        agent_ext VARCHAR(50) NOT NULL,
+        agent_name VARCHAR(255),
+        request_type VARCHAR(50) NOT NULL,
+        reason TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        requested_at TIMESTAMP DEFAULT NOW(),
+        resolved_at TIMESTAMP,
+        resolved_by VARCHAR(255)
+    )");
+}
+
+/** Apply call-center status via DB + ESL (used by force_status and leave approve). */
+function applyAgentCcStatus($db, $agent_ext, $new_status, $domain_) {
+    $allowed = ['Available', 'Available (On Demand)', 'On Break', 'Logged Out'];
+    if (!in_array($new_status, $allowed, true)) {
+        return ['ok' => false, 'error' => 'Invalid status: ' . $new_status];
+    }
+    $s_dom = $db->prepare("SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1");
+    $s_dom->execute([':d' => $domain_]);
+    $domain_uuid = $s_dom->fetchColumn();
+    if (!$domain_uuid) {
+        $domain_uuid = $db->query("SELECT domain_uuid FROM v_domains LIMIT 1")->fetchColumn();
+    }
+    if (!$domain_uuid) {
+        return ['ok' => false, 'error' => 'No domain found'];
+    }
+    $pat = '%/' . $agent_ext . '@%';
+    $s_agent = $db->prepare(
+        "SELECT call_center_agent_uuid, agent_name
+         FROM v_call_center_agents
+         WHERE (agent_id = :ext OR agent_contact LIKE :pat OR agent_name = :ext)
+           AND domain_uuid = :domain_uuid
+         LIMIT 1"
+    );
+    $s_agent->execute([':ext' => $agent_ext, ':pat' => $pat, ':domain_uuid' => $domain_uuid]);
+    $agent_row = $s_agent->fetch(PDO::FETCH_ASSOC);
+    if (!$agent_row) {
+        return ['ok' => false, 'error' => 'No Call Center agent found for ext ' . $agent_ext];
+    }
+    $agent_uuid = $agent_row['call_center_agent_uuid'];
+    $s_upd = $db->prepare("UPDATE v_call_center_agents SET agent_status = :s WHERE call_center_agent_uuid = :uuid");
+    $s_upd->execute([':s' => $new_status, ':uuid' => $agent_uuid]);
+
+    $esl_host = '127.0.0.1';
+    $esl_port = 8021;
+    $esl_pass = 'ClueCon';
+    foreach ([__DIR__ . '/../../.env', __DIR__ . '/../.env', __DIR__ . '/.env'] as $envPath) {
+        if (file_exists($envPath)) {
+            foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $ln) {
+                $ln = trim($ln);
+                if (strpos($ln, '#') === 0 || strpos($ln, '=') === false) continue;
+                [$k, $v] = explode('=', $ln, 2);
+                $k = trim($k); $v = trim($v, " \t\n\r\0\x0B\"'");
+                if ($k === 'ESL_HOST')     $esl_host = $v;
+                if ($k === 'ESL_PORT')     $esl_port = intval($v);
+                if ($k === 'ESL_PASSWORD') $esl_pass = $v;
+            }
+            break;
+        }
+    }
+    $esl_connected = false;
+    $esl_response = '';
+    $esl_error = '';
+    try {
+        if (!class_exists('config'))       require_once __DIR__ . '/../../resources/classes/config.php';
+        if (!class_exists('event_socket')) require_once __DIR__ . '/../../resources/classes/event_socket.php';
+        $esl = new event_socket();
+        if ($esl->connect($esl_host, $esl_port, $esl_pass)) {
+            $esl_connected = true;
+            $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
+            $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
+            if ($new_status === 'Available' || $new_status === 'Logged Out') {
+                $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
+            }
+        } else {
+            $esl_error = 'ESL connect failed';
+        }
+    } catch (Throwable $ex) {
+        $esl_error = $ex->getMessage();
+    }
+    return [
+        'ok' => true,
+        'agent_name' => $agent_row['agent_name'],
+        'status' => $new_status,
+        'esl_connected' => $esl_connected,
+        'esl_response' => trim($esl_response),
+        'esl_error' => $esl_error,
+    ];
+}
+
 // ── API: agents ──────────────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='agents') {
     error_reporting(0); header('Content-Type: application/json');
@@ -290,6 +384,19 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             }
         } catch(Exception $ignored){}
 
+        // Pending leave requests for this domain
+        $pendingLeaves = [];
+        try {
+            ensureLeaveRequestsTable($db);
+            $pl = $db->prepare("SELECT id, agent_ext, request_type, reason, requested_at
+                FROM skykin_leave_requests
+                WHERE domain = :d AND status = 'pending'");
+            $pl->execute([':d' => $domain]);
+            foreach ($pl->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+                $pendingLeaves[$pr['agent_ext']] = $pr;
+            }
+        } catch (Exception $ignored) {}
+
         $agents = [];
         foreach($exts as $e) {
             $ext  = $e['extension'];
@@ -337,12 +444,19 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 $call_duration = time() - (int)$ac['start_epoch'];
             }
 
+            $leave = $pendingLeaves[$ext] ?? null;
             $agents[] = [
                 'ext'          => $ext,
                 'name'         => $name,
                 'status'       => $status,
                 'cc_status'    => $cc_label,
                 'registered'   => isset($registered[$ext]),
+                'leave_pending'=> $leave ? [
+                    'id' => (int)$leave['id'],
+                    'request_type' => $leave['request_type'],
+                    'reason' => $leave['reason'],
+                    'requested_at' => $leave['requested_at'],
+                ] : null,
                 'total_calls'  => (int)($st['total'] ?? 0),
                 'answered'     => (int)($st['answered'] ?? 0),
                 'missed'       => (int)($st['missed'] ?? 0),
@@ -523,10 +637,97 @@ if (isset($_GET['action']) && $_GET['action']==='force_status') {
     $domain_   = $_GET['domain']    ?? 'client1.skykin.local';
     try {
         $db = getDB();
-        $s = $db->prepare("UPDATE v_call_center_agents SET agent_status=:s WHERE agent_name=:a AND domain_uuid = (SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1)");
-        $s->execute([':s'=>$new_status,':a'=>$agent_ext,':d'=>$domain_]);
-        echo json_encode(['ok'=>true,'updated'=>$s->rowCount()]);
+        $result = applyAgentCcStatus($db, $agent_ext, $new_status, $domain_);
+        // Cancel any pending leave for this agent when supervisor forces status
+        if (!empty($result['ok'])) {
+            try {
+                ensureLeaveRequestsTable($db);
+                $c = $db->prepare("UPDATE skykin_leave_requests
+                    SET status='cancelled', resolved_at=NOW(), resolved_by=:by
+                    WHERE domain=:d AND agent_ext=:e AND status='pending'");
+                $c->execute([
+                    ':by' => $_SESSION['username'] ?? 'supervisor',
+                    ':d' => $domain_,
+                    ':e' => $agent_ext,
+                ]);
+            } catch (Exception $ignored) {}
+        }
+        echo json_encode($result);
     } catch(Exception $e) { echo json_encode(['ok'=>false,'error'=>$e->getMessage()]); }
+    exit;
+}
+
+// ── API: leave_requests (pending list for supervisor) ────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'leave_requests') {
+    error_reporting(0); header('Content-Type: application/json');
+    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    try {
+        $db = getDB();
+        ensureLeaveRequestsTable($db);
+        $s = $db->prepare("SELECT id, agent_ext, agent_name, request_type, reason, status,
+            to_char(requested_at, 'YYYY-MM-DD HH24:MI') as requested_at
+            FROM skykin_leave_requests
+            WHERE domain = :d AND status = 'pending'
+            ORDER BY requested_at ASC");
+        $s->execute([':d' => $domain_]);
+        echo json_encode(['ok' => true, 'requests' => $s->fetchAll(PDO::FETCH_ASSOC)]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'requests' => [], 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: resolve_leave (approve / deny) ──────────────────────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'resolve_leave' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0); header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $id      = (int)($body['id'] ?? $_GET['id'] ?? 0);
+    $decision = trim($body['decision'] ?? $_GET['decision'] ?? '');
+    $domain_ = trim($body['domain'] ?? $_GET['domain'] ?? 'client1.skykin.local');
+    if ($id < 1 || !in_array($decision, ['approved', 'denied'], true)) {
+        echo json_encode(['ok' => false, 'error' => 'id and decision (approved|denied) required']);
+        exit;
+    }
+    try {
+        $db = getDB();
+        ensureLeaveRequestsTable($db);
+        $s = $db->prepare("SELECT * FROM skykin_leave_requests WHERE id = :id AND domain = :d LIMIT 1");
+        $s->execute([':id' => $id, ':d' => $domain_]);
+        $row = $s->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            echo json_encode(['ok' => false, 'error' => 'Request not found']);
+            exit;
+        }
+        if ($row['status'] !== 'pending') {
+            echo json_encode(['ok' => false, 'error' => 'Request already ' . $row['status']]);
+            exit;
+        }
+        $resolver = $_SESSION['username'] ?? 'supervisor';
+        $esl_result = null;
+        if ($decision === 'approved') {
+            $esl_result = applyAgentCcStatus($db, $row['agent_ext'], $row['request_type'], $domain_);
+            if (empty($esl_result['ok'])) {
+                echo json_encode(['ok' => false, 'error' => $esl_result['error'] ?? 'Failed to apply status']);
+                exit;
+            }
+        }
+        $u = $db->prepare("UPDATE skykin_leave_requests
+            SET status = :st, resolved_at = NOW(), resolved_by = :by
+            WHERE id = :id AND status = 'pending'");
+        $u->execute([':st' => $decision, ':by' => $resolver, ':id' => $id]);
+        echo json_encode([
+            'ok' => true,
+            'decision' => $decision,
+            'request' => [
+                'id' => $id,
+                'agent_ext' => $row['agent_ext'],
+                'request_type' => $row['request_type'],
+            ],
+            'status_result' => $esl_result,
+        ]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
     exit;
 }
 
@@ -981,6 +1182,18 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
                     </div>
                 </div>
 
+                <!-- Leave requests awaiting supervisor approval -->
+                <div class="live-agents-panel" id="leaveRequestsPanel" style="margin-bottom:14px">
+                    <div class="live-agents-header">
+                        <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
+                            Leave Requests
+                            <span id="leaveReqCount" style="background:#f59e0b;color:#fff;font-size:11px;border-radius:10px;padding:1px 8px;display:none">0</span>
+                        </div>
+                        <span style="font-size:11px;color:#aaa">Agents stay Available until you approve</span>
+                    </div>
+                    <div id="leaveRequestsList" style="padding:12px 16px;color:#aaa;font-size:13px">No pending leave requests.</div>
+                </div>
+
                 <!-- Full-width live agent list -->
                 <div class="live-agents-panel">
                     <div class="live-agents-header">
@@ -1240,7 +1453,86 @@ function fetchAgents(){
             const maxPage = Math.max(0, Math.ceil(_allAgents.length / _agentsPerPage) - 1);
             if (_agentPage > maxPage) _agentPage = maxPage;
             renderAgentPage();
+            renderLeaveFromAgents(_allAgents);
         }).catch(()=>{});
+}
+
+function fetchLeaveRequests(){
+    fetch('supervisor.php?action=leave_requests&domain='+encodeURIComponent(domain), {credentials:'same-origin'})
+        .then(r=>r.json())
+        .then(d=>{
+            renderLeaveRequests(d.requests||[]);
+        }).catch(()=>{});
+}
+
+function renderLeaveFromAgents(agents){
+    const pending = (agents||[]).filter(a=>a.leave_pending).map(a=>({
+        id: a.leave_pending.id,
+        agent_ext: a.ext,
+        agent_name: a.name,
+        request_type: a.leave_pending.request_type,
+        reason: a.leave_pending.reason,
+        requested_at: a.leave_pending.requested_at
+    }));
+    // Prefer dedicated API list when available; this keeps badge in sync with agent poll
+    if (pending.length) renderLeaveRequests(pending);
+    else fetchLeaveRequests();
+}
+
+function renderLeaveRequests(requests){
+    const list = document.getElementById('leaveRequestsList');
+    const badge = document.getElementById('leaveReqCount');
+    if (!list) return;
+    const n = (requests||[]).length;
+    if (badge) {
+        badge.textContent = String(n);
+        badge.style.display = n ? 'inline-block' : 'none';
+    }
+    if (!n) {
+        list.innerHTML = '<div style="color:#aaa;font-size:13px">No pending leave requests.</div>';
+        return;
+    }
+    list.innerHTML = requests.map(r=>{
+        const typeLbl = r.request_type === 'Logged Out' ? 'Logout' : 'Break';
+        const reason = r.reason ? `<div style="font-size:12px;color:#666;margin-top:2px">${escHtml(r.reason)}</div>` : '';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #f0f0f0">
+            <div style="min-width:0">
+                <div style="font-weight:600;font-size:13px;color:#222">${escHtml(r.agent_name||('Ext '+r.agent_ext))} <span style="color:#888;font-weight:400">· Ext ${escHtml(r.agent_ext)}</span></div>
+                <div style="font-size:12px;color:#b45309;margin-top:2px">Requesting ${typeLbl}${r.requested_at?' · '+escHtml(r.requested_at):''}</div>
+                ${reason}
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0">
+                <button onclick="resolveLeave(${Number(r.id)},'approved')" style="background:#2e7d32;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:600">Approve</button>
+                <button onclick="resolveLeave(${Number(r.id)},'denied')" style="background:#c62828;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px;font-weight:600">Deny</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function escHtml(s){
+    return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function resolveLeave(id, decision){
+    const verb = decision === 'approved' ? 'approve' : 'deny';
+    if (!confirm(verb.charAt(0).toUpperCase()+verb.slice(1)+' this leave request?')) return;
+    fetch('supervisor.php?action=resolve_leave', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ id: id, decision: decision, domain: domain })
+    })
+    .then(r=>r.json())
+    .then(d=>{
+        if (d.ok) {
+            toast(decision==='approved'?'Leave approved — status applied':'Leave request denied', decision==='approved'?'#2e7d32':'#c62828');
+            fetchAgents();
+            fetchLeaveRequests();
+        } else {
+            toast('Failed: '+(d.error||'Unknown'),'#c62828');
+        }
+    })
+    .catch(e=>toast('Network error: '+e.message,'#c62828'));
 }
 
 let _allAgents = [], _agentPage = 0, _agentsPerPage = 12, _openAgentExt = null;
@@ -1282,13 +1574,16 @@ function renderAgents(agents){
         const rate      = a.total_calls>0 ? Math.round((a.answered/a.total_calls)*100) : 0;
         const rateLabel = a.total_calls===0?'—':rate+'%';
         const monDisabled = inCall ? '' : 'disabled title="Agent is not on a call"';
+        const leaveBadge = a.leave_pending
+            ? `<span style="display:inline-block;margin-left:6px;background:#fef3c7;color:#b45309;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px;vertical-align:middle">LEAVE</span>`
+            : '';
 
         return `<div class="agent-row ${a.status}${isOpen?' open':''}" id="row-${a.ext}">
             <div class="agent-row-main" onclick="toggleAgentRow('${a.ext}')">
                 <div class="agent-avatar avatar-${a.status}" style="background:${col}">${ini}</div>
                 <div>
-                    <div class="row-name">${a.name}</div>
-                    <div class="row-ext">Ext ${a.ext}</div>
+                    <div class="row-name">${a.name}${leaveBadge}</div>
+                    <div class="row-ext">Ext ${a.ext}${a.leave_pending?' · wants '+(a.leave_pending.request_type==='Logged Out'?'logout':'break'):''}</div>
                 </div>
                 <div><span class="status-badge badge-${a.status}">${lbl}</span></div>
                 <div class="row-oncall">${onCall}</div>
@@ -1482,6 +1777,7 @@ function showTabDirect(name){
 // ── Init & auto-refresh ────────────────────────────────────────────────────
 fetchQueue();
 fetchAgents();
+fetchLeaveRequests();
 
 // ── Recordings ─────────────────────────────────────────────────────────────
 function fetchRecordings(){
@@ -1528,7 +1824,7 @@ function playRec(path, file){
     player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });
 }
 
-setInterval(()=>{ fetchQueue(); fetchAgents(); }, 10000);
+setInterval(()=>{ fetchQueue(); fetchAgents(); fetchLeaveRequests(); }, 10000);
 
 // ── Voice Quality ──────────────────────────────────────────────────────────
 function fetchVoiceQuality() {

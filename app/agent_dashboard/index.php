@@ -855,6 +855,141 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
     exit;
 }
 
+// ── Leave requests helpers / APIs ─────────────────────────────────────────────
+function ensureLeaveRequestsTable($db) {
+    $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+    if ($isSQLite) {
+        $db->exec("CREATE TABLE IF NOT EXISTS skykin_leave_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT NOT NULL,
+            agent_ext TEXT NOT NULL,
+            agent_name TEXT,
+            request_type TEXT NOT NULL,
+            reason TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            requested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            resolved_at DATETIME,
+            resolved_by TEXT
+        )");
+    } else {
+        $db->exec("CREATE TABLE IF NOT EXISTS skykin_leave_requests (
+            id SERIAL PRIMARY KEY,
+            domain VARCHAR(255) NOT NULL,
+            agent_ext VARCHAR(50) NOT NULL,
+            agent_name VARCHAR(255),
+            request_type VARCHAR(50) NOT NULL,
+            reason TEXT,
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            requested_at TIMESTAMP DEFAULT NOW(),
+            resolved_at TIMESTAMP,
+            resolved_by VARCHAR(255)
+        )");
+    }
+}
+
+// Agent: request On Break / Logged Out (stays Available until supervisor approves)
+if (isset($_GET['action']) && $_GET['action'] === 'request_leave' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $agent_ext  = trim($body['agent_ext'] ?? '');
+    $agent_name = trim($body['agent_name'] ?? '');
+    $domain_    = trim($body['domain'] ?? 'client1.skykin.local');
+    $req_type   = trim($body['request_type'] ?? '');
+    $reason     = trim($body['reason'] ?? '');
+    $allowed_types = ['On Break', 'Logged Out'];
+    if (!$agent_ext || !in_array($req_type, $allowed_types, true)) {
+        echo json_encode(['ok' => false, 'error' => 'agent_ext and request_type (On Break|Logged Out) required']);
+        exit;
+    }
+    try {
+        $db = getSkykinDB();
+        ensureLeaveRequestsTable($db);
+        $chk = $db->prepare("SELECT id FROM skykin_leave_requests
+            WHERE domain = :d AND agent_ext = :e AND status = 'pending' LIMIT 1");
+        $chk->execute([':d' => $domain_, ':e' => $agent_ext]);
+        if ($chk->fetchColumn()) {
+            echo json_encode(['ok' => false, 'error' => 'You already have a pending leave request']);
+            exit;
+        }
+        $ins = $db->prepare("INSERT INTO skykin_leave_requests
+            (domain, agent_ext, agent_name, request_type, reason, status)
+            VALUES (:d, :e, :n, :t, :r, 'pending')");
+        $ins->execute([
+            ':d' => $domain_,
+            ':e' => $agent_ext,
+            ':n' => $agent_name ?: ('Ext ' . $agent_ext),
+            ':t' => $req_type,
+            ':r' => $reason !== '' ? $reason : null,
+        ]);
+        $id = $db->lastInsertId();
+        echo json_encode(['ok' => true, 'id' => $id, 'request_type' => $req_type, 'status' => 'pending']);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// Agent: poll own leave request (pending or latest resolved)
+if (isset($_GET['action']) && $_GET['action'] === 'my_leave_request') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $agent_ext = trim($_GET['agent_ext'] ?? '');
+    $domain_   = trim($_GET['domain'] ?? 'client1.skykin.local');
+    if (!$agent_ext) {
+        echo json_encode(['ok' => false, 'error' => 'agent_ext required']);
+        exit;
+    }
+    try {
+        $db = getSkykinDB();
+        ensureLeaveRequestsTable($db);
+        $s = $db->prepare("SELECT id, agent_ext, agent_name, request_type, reason, status,
+            requested_at, resolved_at, resolved_by
+            FROM skykin_leave_requests
+            WHERE domain = :d AND agent_ext = :e
+            ORDER BY id DESC LIMIT 1");
+        $s->execute([':d' => $domain_, ':e' => $agent_ext]);
+        $row = $s->fetch(PDO::FETCH_ASSOC);
+        echo json_encode(['ok' => true, 'request' => $row ?: null]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage(), 'request' => null]);
+    }
+    exit;
+}
+
+// Agent: cancel own pending leave request
+if (isset($_GET['action']) && $_GET['action'] === 'cancel_leave_request' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $agent_ext = trim($body['agent_ext'] ?? '');
+    $domain_   = trim($body['domain'] ?? 'client1.skykin.local');
+    $id        = (int)($body['id'] ?? 0);
+    if (!$agent_ext) {
+        echo json_encode(['ok' => false, 'error' => 'agent_ext required']);
+        exit;
+    }
+    try {
+        $db = getSkykinDB();
+        ensureLeaveRequestsTable($db);
+        if ($id > 0) {
+            $s = $db->prepare("UPDATE skykin_leave_requests
+                SET status = 'cancelled', resolved_at = CURRENT_TIMESTAMP, resolved_by = :by
+                WHERE id = :id AND domain = :d AND agent_ext = :e AND status = 'pending'");
+            $s->execute([':by' => $agent_ext, ':id' => $id, ':d' => $domain_, ':e' => $agent_ext]);
+        } else {
+            $s = $db->prepare("UPDATE skykin_leave_requests
+                SET status = 'cancelled', resolved_at = CURRENT_TIMESTAMP, resolved_by = :by
+                WHERE domain = :d AND agent_ext = :e AND status = 'pending'");
+            $s->execute([':by' => $agent_ext, ':d' => $domain_, ':e' => $agent_ext]);
+        }
+        echo json_encode(['ok' => true, 'updated' => $s->rowCount()]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // ── API: Get Available Agents (for call transfer target list) ────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
     error_reporting(0);
@@ -1865,14 +2000,17 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                 <div class="s-opt" onclick="setAgentStatus('idle')">
                     <span class="opt-dot" style="background:#64748b"></span> Idle
                 </div>
-                <div class="s-opt" onclick="setAgentStatus('break')">
+                <div class="s-opt" id="optBreak" onclick="setAgentStatus('break')">
                     <span class="opt-dot" style="background:#0ea5e9"></span> On Break
                 </div>
                 <div class="s-opt" onclick="setAgentStatus('acw')">
                     <span class="opt-dot" style="background:#6366f1"></span> Wrap-up (ACW)
                 </div>
-                <div class="s-opt logout" onclick="setAgentStatus('logout')">
+                <div class="s-opt logout" id="optLogout" onclick="setAgentStatus('logout')">
                     <span class="opt-dot" style="background:#ef4444"></span> Logout
+                </div>
+                <div class="s-opt" id="optCancelLeave" style="display:none;color:#b45309" onclick="cancelPendingLeave()">
+                    <span class="opt-dot" style="background:#f59e0b"></span> Cancel Leave Request
                 </div>
             </div>
         </div>
@@ -2413,6 +2551,25 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 </div>
 
+<!-- Leave request modal (Break / Logout need supervisor approval) -->
+<div class="modal-overlay" id="leaveRequestModal">
+    <div class="modal-box">
+        <div class="modal-title" id="leaveRequestTitle">Request Leave</div>
+        <p style="font-size:13px;color:#555;margin:0 0 14px;line-height:1.4">
+            Your status stays <strong>Available</strong> until a supervisor approves.
+        </p>
+        <input type="hidden" id="leaveRequestType" value="">
+        <div class="form-group">
+            <label>Reason (optional)</label>
+            <input type="text" id="leaveRequestReason" placeholder="e.g. lunch, end of shift" maxlength="200">
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px">
+            <button class="btn-save-settings" style="flex:1;background:#64748b" onclick="closeLeaveRequestModal()">Cancel</button>
+            <button class="btn-save-settings" style="flex:1" onclick="submitLeaveRequest()">Send Request</button>
+        </div>
+    </div>
+</div>
+
 <!-- ?? FLOATING PHONE BUTTON ?? -->
 <button class="phone-fab" id="phoneFab" onclick="togglePhonePopup()" title="Open Phone">
     &#128222;
@@ -2542,38 +2699,119 @@ function formatDurationHMS(seconds) {
     return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 
-// ?? Status Dropdown ????????????????????????????????
+// ?? Status Dropdown + leave-request approval ?????????
 let currentAgentStatus = 'ready';
+let pendingLeaveRequest = null;
+let leavePollTimer = null;
+let leaveHandledId = null;
+
 function toggleStatusMenu() {
     document.getElementById('statusDropMenu').classList.toggle('open');
 }
 
-// Maps our dashboard status keys → FusionPBX v_call_center_agents.agent_status values
-// These are the exact strings FreeSWITCH Call Center module reads
 const FPBX_STATUS_MAP = {
     ready:  'Available',
     idle:   'Available',
     break:  'On Break',
-    acw:    'On Break',   // Block new calls during After-Call Work
+    acw:    'On Break',
     logout: 'Logged Out',
-    incall: 'Available',  // Call center handles in-call state internally
+    incall: 'Available',
 };
 
-function setAgentStatus(status) {
-    currentAgentStatus = status;
-    const labels = { ready:'Available', idle:'Idle', break:'On Break', acw:'Wrap-up (ACW)', logout:'Logged Out', incall:'On Call' };
-    const colors  = { ready:'#10b981', idle:'#64748b', break:'#0ea5e9', acw:'#6366f1', logout:'#ef4444', incall:'#f59e0b' };
-    const key = status;
-    document.getElementById('statusLabel').textContent = labels[key] || status;
-    const dot = document.getElementById('statusDot');
-    dot.className = 'sdot ' + key;
-    dot.style.background = colors[key] || '#888';
-    document.getElementById('statusDropMenu').classList.remove('open');
-    if (status === 'logout') { window.location = '/logout.php'; return; }
+function agentDisplayName() {
+    return <?php echo json_encode($agent_name); ?>;
+}
 
-    // ── Sync to FusionPBX v_call_center_agents + ESL ──────────────────────
-    const agentExt   = localStorage.getItem('sip_ext') || serverExt || '';
-    const fpbxStatus = FPBX_STATUS_MAP[key] || 'Available';
+function applyStatusUi(status, labelOverride) {
+    const labels = { ready:'Available', idle:'Idle', break:'On Break', acw:'Wrap-up (ACW)', logout:'Logged Out', incall:'On Call', pending:'Pending Leave' };
+    const colors  = { ready:'#10b981', idle:'#64748b', break:'#0ea5e9', acw:'#6366f1', logout:'#ef4444', incall:'#f59e0b', pending:'#f59e0b' };
+    document.getElementById('statusLabel').textContent = labelOverride || labels[status] || status;
+    const dot = document.getElementById('statusDot');
+    dot.className = 'sdot ' + status;
+    dot.style.background = colors[status] || '#888';
+}
+
+function updateLeaveMenuState() {
+    const pending = pendingLeaveRequest && pendingLeaveRequest.status === 'pending';
+    const optBreak = document.getElementById('optBreak');
+    const optLogout = document.getElementById('optLogout');
+    const optCancel = document.getElementById('optCancelLeave');
+    if (optBreak) { optBreak.style.opacity = pending ? '0.4' : '1'; optBreak.style.pointerEvents = pending ? 'none' : ''; }
+    if (optLogout) { optLogout.style.opacity = pending ? '0.4' : '1'; optLogout.style.pointerEvents = pending ? 'none' : ''; }
+    if (optCancel) optCancel.style.display = pending ? 'block' : 'none';
+}
+
+function openLeaveRequestModal(requestType) {
+    document.getElementById('leaveRequestType').value = requestType;
+    document.getElementById('leaveRequestReason').value = '';
+    document.getElementById('leaveRequestTitle').textContent =
+        requestType === 'Logged Out' ? 'Request Logout' : 'Request Break';
+    document.getElementById('leaveRequestModal').classList.add('show');
+}
+
+function closeLeaveRequestModal() {
+    document.getElementById('leaveRequestModal').classList.remove('show');
+}
+
+function submitLeaveRequest() {
+    const requestType = document.getElementById('leaveRequestType').value;
+    const reason = document.getElementById('leaveRequestReason').value.trim();
+    const agentExt = localStorage.getItem('sip_ext') || serverExt || '';
+    if (!agentExt) {
+        showToast('No extension configured — open Phone Settings first.');
+        return;
+    }
+    fetch('index.php?action=request_leave', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            agent_ext: agentExt,
+            agent_name: agentDisplayName(),
+            domain: domain,
+            request_type: requestType,
+            reason: reason
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ok) {
+            showToast(data.error || 'Could not send leave request');
+            return;
+        }
+        closeLeaveRequestModal();
+        pendingLeaveRequest = { id: data.id, request_type: requestType, status: 'pending', reason: reason };
+        leaveHandledId = null;
+        applyStatusUi('pending', 'Pending Leave');
+        updateLeaveMenuState();
+        showToast('Leave request sent — waiting for supervisor approval');
+        startLeavePolling();
+    })
+    .catch(() => showToast('Could not send leave request'));
+}
+
+function cancelPendingLeave() {
+    document.getElementById('statusDropMenu').classList.remove('open');
+    const agentExt = localStorage.getItem('sip_ext') || serverExt || '';
+    if (!agentExt || !pendingLeaveRequest) return;
+    fetch('index.php?action=cancel_leave_request', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ agent_ext: agentExt, domain: domain, id: pendingLeaveRequest.id || 0 })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.ok) { showToast(data.error || 'Could not cancel request'); return; }
+        pendingLeaveRequest = null;
+        applyStatusUi('ready');
+        currentAgentStatus = 'ready';
+        updateLeaveMenuState();
+        showToast('Leave request cancelled');
+    })
+    .catch(() => showToast('Could not cancel request'));
+}
+
+function syncStatusToFpbx(fpbxStatus) {
+    const agentExt = localStorage.getItem('sip_ext') || serverExt || '';
     if (!agentExt) {
         console.warn('[Status] Cannot sync to FusionPBX: no extension configured.');
         return;
@@ -2581,43 +2819,125 @@ function setAgentStatus(status) {
     fetch('index.php?action=set_agent_status', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            agent_ext:  agentExt,
-            new_status: fpbxStatus,
-            domain:     domain
-        })
+        body: JSON.stringify({ agent_ext: agentExt, new_status: fpbxStatus, domain: domain })
     })
     .then(r => r.json())
     .then(data => {
         if (!data.ok) {
             showToast('\u26A0 FusionPBX status update failed: ' + (data.error || 'unknown error'));
-            console.error('[Status] Error:', data);
             return;
         }
-        // DB was updated successfully
-        console.log('[Status] DB updated \u2713 agent:', data.agent_name, '| uuid:', data.agent_uuid, '| status:', data.status);
-        if (data.esl_connected) {
-            // ESL command was sent — this is the real live FreeSWITCH update
-            console.log('[Status] ESL \u2713 response:', data.esl_response || '(ok)', '| state:', data.esl_state_resp || '(n/a)');
-            // Only show a toast if something looks wrong in the ESL response
-            if (data.esl_response && data.esl_response.toLowerCase().includes('err')) {
-                showToast('\u26A0 ESL command sent but FreeSWITCH returned: ' + data.esl_response);
-            }
+        if (data.esl_connected && data.esl_response && data.esl_response.toLowerCase().includes('err')) {
+            showToast('\u26A0 ESL command sent but FreeSWITCH returned: ' + data.esl_response);
         } else if (data.esl_error) {
-            // ESL unreachable — DB is updated but FreeSWITCH live state unchanged until next reload
-            console.warn('[Status] ESL not reached (expected in local dev):', data.esl_error);
-            showToast('\u26A0 DB updated to "' + fpbxStatus + '" but FreeSWITCH ESL unreachable. ' +
-                      'Add ESL_HOST to .env to enable live updates, or deploy to VM.');
+            showToast('\u26A0 DB updated to "' + fpbxStatus + '" but FreeSWITCH ESL unreachable.');
         }
     })
-    .catch(() => {
-        showToast('\u26A0 Could not reach local server to sync status to FusionPBX.');
-    });
+    .catch(() => showToast('\u26A0 Could not reach local server to sync status to FusionPBX.'));
+}
+
+function handleResolvedLeave(req) {
+    if (!req || !req.id) return;
+    if (leaveHandledId === String(req.id)) return;
+    leaveHandledId = String(req.id);
+    pendingLeaveRequest = null;
+    updateLeaveMenuState();
+    stopLeavePolling();
+    startLeavePolling(); // keep light polling for future requests
+
+    if (req.status === 'denied') {
+        applyStatusUi('ready');
+        currentAgentStatus = 'ready';
+        showToast('Leave request denied by supervisor — you remain Available');
+        return;
+    }
+    if (req.status === 'cancelled') {
+        applyStatusUi('ready');
+        currentAgentStatus = 'ready';
+        return;
+    }
+    if (req.status === 'approved') {
+        if (req.request_type === 'Logged Out') {
+            applyStatusUi('logout');
+            currentAgentStatus = 'logout';
+            showToast('Logout approved — signing out…');
+            setTimeout(function() { window.location = '/logout.php'; }, 800);
+            return;
+        }
+        applyStatusUi('break');
+        currentAgentStatus = 'break';
+        showToast('Break approved by supervisor');
+    }
+}
+
+function pollMyLeaveRequest() {
+    const agentExt = localStorage.getItem('sip_ext') || serverExt || '';
+    if (!agentExt) return;
+    fetch('index.php?action=my_leave_request&agent_ext=' + encodeURIComponent(agentExt) +
+          '&domain=' + encodeURIComponent(domain))
+        .then(r => r.json())
+        .then(data => {
+            if (!data.ok) return;
+            const req = data.request;
+            if (!req) {
+                if (pendingLeaveRequest) {
+                    pendingLeaveRequest = null;
+                    applyStatusUi('ready');
+                    currentAgentStatus = 'ready';
+                    updateLeaveMenuState();
+                }
+                return;
+            }
+            if (req.status === 'pending') {
+                pendingLeaveRequest = req;
+                applyStatusUi('pending', 'Pending Leave');
+                updateLeaveMenuState();
+                return;
+            }
+            const isFresh = req.resolved_at && (Date.now() - new Date(req.resolved_at.replace(' ', 'T')).getTime()) < 120000;
+            if (pendingLeaveRequest || (isFresh && leaveHandledId !== String(req.id))) {
+                handleResolvedLeave(req);
+            }
+        })
+        .catch(() => {});
+}
+
+function startLeavePolling() {
+    if (leavePollTimer) return;
+    leavePollTimer = setInterval(pollMyLeaveRequest, 5000);
+}
+
+function stopLeavePolling() {
+    if (leavePollTimer) { clearInterval(leavePollTimer); leavePollTimer = null; }
+}
+
+function setAgentStatus(status) {
+    document.getElementById('statusDropMenu').classList.remove('open');
+
+    // Break / Logout require supervisor approval — stay Available until then
+    if (status === 'break' || status === 'logout') {
+        if (pendingLeaveRequest && pendingLeaveRequest.status === 'pending') {
+            showToast('You already have a pending leave request');
+            return;
+        }
+        openLeaveRequestModal(status === 'logout' ? 'Logged Out' : 'On Break');
+        return;
+    }
+
+    currentAgentStatus = status;
+    applyStatusUi(status);
+    syncStatusToFpbx(FPBX_STATUS_MAP[status] || 'Available');
 }
 document.addEventListener('click', function(e) {
     if (!e.target.closest('.status-drop-wrap')) {
         document.getElementById('statusDropMenu').classList.remove('open');
     }
+});
+
+pollMyLeaveRequest();
+startLeavePolling();
+document.getElementById('leaveRequestModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeLeaveRequestModal();
 });
 
 // ?? Side menu ??????????????????????????????????????
