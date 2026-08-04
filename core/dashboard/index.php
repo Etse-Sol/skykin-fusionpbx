@@ -16,10 +16,6 @@ if (isset($_SESSION["groups"])) {
     }
 }
 
-
-
-
-
 /*
 	FusionPBX
 	Version: MPL 1.1
@@ -333,22 +329,6 @@ div.hud_chart {
 
 /* dashboard settings */
 <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 foreach ($widgets as $row) {
 	$widget_id = 'id_'.md5(preg_replace('/[^-A-Fa-f0-9]/', '', $row['dashboard_widget_uuid']));
 	if (!empty($row['widget_icon_color'])) {
@@ -516,22 +496,6 @@ foreach ($widgets as $row) {
 	.widgets { grid-template-columns: repeat(1, minmax(100px, 1fr)); }
 	.col-num { grid-column: span 1; }
 	<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 		foreach ($widgets as $row) {
 			$widget_id = 'id_'.md5(preg_replace('/[^-A-Fa-f0-9]/', '', $row['dashboard_widget_uuid']));
 			if (!empty($row['widget_column_span'])) {
@@ -554,22 +518,6 @@ if (isset($_SESSION["groups"])) {
 	.widgets { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
 	.col-num { grid-column: span 2; }
 	<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 		foreach ($widgets as $row) {
 			$widget_id = 'id_'.md5(preg_replace('/[^-A-Fa-f0-9]/', '', $row['dashboard_widget_uuid']));
 			if ($row['widget_column_span'] > 2) {
@@ -602,22 +550,6 @@ if (isset($_SESSION["groups"])) {
 	.widgets { grid-template-columns: repeat(3, minmax(100px, 1fr)); }
 	.col-num { grid-column: span 2; }
 	<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 		foreach ($widgets as $row) {
 			$widget_id = 'id_'.md5(preg_replace('/[^-A-Fa-f0-9]/', '', $row['dashboard_widget_uuid']));
 			if ($row['widget_column_span'] > 3) {
@@ -634,22 +566,6 @@ if (isset($_SESSION["groups"])) {
 	.widgets { grid-template-columns: repeat(4, minmax(100px, 1fr)); }
 	.col-num { grid-column: span 2; }
 	<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 		foreach ($widgets as $row) {
 			$widget_id = 'id_'.md5(preg_replace('/[^-A-Fa-f0-9]/', '', $row['dashboard_widget_uuid']));
 			if (!empty($row['widget_column_span'])) {
@@ -759,22 +675,6 @@ window.addEventListener('resize', update_parent_height);
 </script>
 
 <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 
 //include the dashboards
 	echo "<div class='widgets' id='widgets' style='padding: 0 5px;'>\n";
@@ -883,233 +783,23 @@ if (isset($_SESSION["groups"])) {
 		.ghost {
 			border: 2px dashed rgba(0,0,0,1);
 			<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  $br = format_border_radius($settings->get('theme', 'dashboard_border_radius') ?? null, '5px'); ?>
 			-webkit-border-radius: <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['tl']['n'].$br['tl']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['tr']['n'].$br['tr']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['br']['n'].$br['br']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['bl']['n'].$br['bl']['u']; ?>;
 			-moz-border-radius: <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['tl']['n'].$br['tl']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['tr']['n'].$br['tr']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['br']['n'].$br['br']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['bl']['n'].$br['bl']['u']; ?>;
 			border-radius: <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['tl']['n'].$br['tl']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['tr']['n'].$br['tr']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['br']['n'].$br['br']['u']; ?> <?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  echo $br['bl']['n'].$br['bl']['u']; ?>;
 			<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
  unset($br); ?>
 			opacity: 0.2;
 		}
@@ -1244,22 +934,6 @@ if (isset($_SESSION["groups"])) {
 		}
 		</script>
 		<?php
-// SkyKin: Redirect agents to custom dashboard
-if (isset($_SESSION["groups"])) {
-    foreach ($_SESSION["groups"] as $g) {
-        if (isset($g["group_name"]) && $g["group_name"] === "agent") {
-            $agent = $_SESSION["username"] ?? $_SESSION["user"]["username"] ?? "agent";
-            $domain = $_SESSION["user_context"] ?? "client1.skykin.local";
-            header("Location: /app/agent_dashboard/?agent={$agent}&domain={$domain}");
-            exit;
-        }
-    }
-}
-
-
-
-
-
 	} //end edit
 
 //show the footer
