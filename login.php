@@ -26,23 +26,28 @@
 //includes files
 	require_once __DIR__ . "/resources/require.php";
 
-// SkyKin: visiting /login.php must show the login form even if a session
-// is still active (otherwise admins/supervisors can never switch users —
-// check_auth skips the form and this file redirected straight to dashboard).
+// SkyKin: if already logged in, do NOT destroy the session (that logged people
+// out when a background /login.php tab refreshed). Send them to their home page.
+// To switch users, open /logout.php explicitly.
 	if (!empty($_SESSION['authorized'])) {
-		$_SESSION = [];
-		if (ini_get('session.use_cookies')) {
-			$params = session_get_cookie_params();
-			setcookie(session_name(), '', time() - 42000,
-				$params['path'] ?? '/',
-				$params['domain'] ?? '',
-				$params['secure'] ?? false,
-				$params['httponly'] ?? true
-			);
+		$skykin_domain = $_SESSION['user_context'] ?? ($_SESSION['domain_name'] ?? 'client1.skykin.local');
+		$skykin_user   = $_SESSION['username'] ?? ($_SESSION['user']['username'] ?? 'agent');
+		if (!empty($_SESSION['groups'])) {
+			foreach ($_SESSION['groups'] as $g) {
+				$name = strtolower((string)($g['group_name'] ?? ''));
+				if ($name === 'agent') {
+					header('Location: /app/agent_dashboard/index.php?agent=' . rawurlencode($skykin_user) . '&domain=' . rawurlencode($skykin_domain));
+					exit;
+				}
+				if ($name === 'supervisor') {
+					header('Location: /app/agent_dashboard/supervisor.php?domain=' . rawurlencode($skykin_domain));
+					exit;
+				}
+			}
 		}
-		session_destroy();
-		session_start();
-		$_SESSION['authorized'] = false;
+		$dest = $settings->get('login', 'destination', PROJECT_PATH.'/core/dashboard/');
+		header('Location: '.$dest);
+		exit;
 	}
 
 //additional includes — shows login form when not authorized; redirects after successful login

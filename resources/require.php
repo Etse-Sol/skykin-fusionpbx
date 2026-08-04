@@ -95,8 +95,16 @@
 //start the session if not using the command line
 	global $no_session;
 	if (!defined('STDIN') && empty($no_session) && session_status() === PHP_SESSION_NONE) {
+		// Keep sessions alive for 8 hours of inactivity (default PHP is only 24 minutes)
+		ini_set('session.gc_maxlifetime', '28800');
 		ini_set('session.cookie_httponly', !isset($conf['session.cookie_httponly']) ? 'true' : (!empty($config->get('session.cookie_httponly')) ? 'true' : 'false'));
-		ini_set('session.cookie_secure', !isset($conf['session.cookie_secure']) ? 'true' : (!empty($config->get('session.cookie_secure')) ? 'true' : 'false'));
+		// Only mark cookie Secure when the request is actually HTTPS — forcing Secure on
+		// plain HTTP (client1.skykin.local) makes browsers drop the session cookie.
+		$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+			|| (isset($_SERVER['SERVER_PORT']) && (string)$_SERVER['SERVER_PORT'] === '443')
+			|| (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+		$secure_default = $https ? 'true' : 'false';
+		ini_set('session.cookie_secure', !isset($conf['session.cookie_secure']) ? $secure_default : (!empty($config->get('session.cookie_secure')) ? 'true' : 'false'));
 		ini_set('session.cookie_samesite', $config->get('session.cookie_samesite', 'Lax'));
 		session_start();
 	}

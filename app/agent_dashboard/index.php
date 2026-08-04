@@ -4,6 +4,7 @@
 // Share FusionPBX session (same cookie / save path as the rest of the PBX)
 $fpbx_session_path = '/var/lib/php/sessions';
 if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
+ini_set('session.gc_maxlifetime', '28800');
 session_name('PHPSESSID');
 session_start();
 

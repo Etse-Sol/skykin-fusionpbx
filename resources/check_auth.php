@@ -43,7 +43,7 @@
 		}
 	}
 
-//regenerate sessions to avoid session ID attacks, such as session fixation
+	//regenerate sessions to avoid session ID attacks, such as session fixation
 	if (isset($_SESSION['authorized']) && $_SESSION['authorized']) {
 		//set the last activity time
 		$_SESSION['session']['last_activity'] = time();
@@ -53,8 +53,10 @@
 			$_SESSION['session']['created'] = time();
 		}
 
-		//check the elapsed time if it exceeds the limit, then rotate the session
-		if (time() - $_SESSION['session']['created'] > 900) {
+		// Rotate session id every 8 hours (was 15 minutes with delete-old, which
+		// logged users out when switching browser tabs). Keep old session briefly
+		// so other open tabs do not suddenly lose auth.
+		if (time() - $_SESSION['session']['created'] > 28800) {
 
 			//build the user log array
 			$log_array['domain_uuid'] = $_SESSION['user']['domain_uuid'];
@@ -63,8 +65,8 @@
 			$log_array['user_uuid'] = $_SESSION['user']['user_uuid'];
 			$log_array['authorized'] = true;
 
-			//session started more than 15 minutes ago
-			session_regenerate_id(true);
+			//session started more than 8 hours ago
+			session_regenerate_id(false);
 
 			// update creation time
 			$_SESSION['session']['created'] = time();
