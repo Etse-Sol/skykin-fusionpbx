@@ -9,8 +9,17 @@ session_name('PHPSESSID');
 session_start();
 
 // ── Auth check ────────────────────────────────────────────────────────────────
-// If not logged in / session expired, send to FusionPBX login (not /login/index.php — that 404s)
+// ── Auth check ────────────────────────────────────────────────────────────────
+// API endpoints must return JSON on expiry (not an HTML login redirect),
+// otherwise Live Agent Status polling silently dies.
+$is_api = isset($_GET['action']);
 if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
+    if ($is_api) {
+        header('Content-Type: application/json');
+        http_response_code(401);
+        echo json_encode(['ok'=>false,'error'=>'Session expired','login'=>'/']);
+        exit;
+    }
     $path = $_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/supervisor.php';
     header('Location: /?path=' . urlencode($path));
     exit;
@@ -163,30 +172,90 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
         $stats = [];
         foreach($s2->fetchAll(PDO::FETCH_ASSOC) as $r) $stats[$r['ext']] = $r;
 
-        // Call center agent status — fallback to SIP registrations if CC agents table is empty
+        // Call center agent status — key by agent_id AND by extension extracted from contact.
+        // BUGFIX: previously keyed only by agent_name ("Agent 1"), then looked up by
+        // extension ("101"), so status never matched and everyone looked Offline.
         $ccStatus = [];
         try {
-            $s3 = $db->prepare("SELECT agent_name, agent_status FROM v_call_center_agents ca
+            $s3 = $db->prepare("SELECT agent_name, agent_id, agent_status, agent_contact
+                FROM v_call_center_agents ca
                 JOIN v_domains d ON d.domain_uuid=ca.domain_uuid WHERE d.domain_name=:d");
             $s3->execute([':d'=>$domain]);
-            foreach($s3->fetchAll(PDO::FETCH_ASSOC) as $r) $ccStatus[$r['agent_name']] = $r;
+            foreach($s3->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $row = $r;
+                if (!empty($r['agent_id'])) $ccStatus[(string)$r['agent_id']] = $row;
+                if (!empty($r['agent_name'])) $ccStatus[$r['agent_name']] = $row;
+                if (preg_match('/(?:user\/)?(\d+)@/i', (string)($r['agent_contact'] ?? ''), $m)) {
+                    $ccStatus[$m[1]] = $row;
+                }
+            }
+        } catch(Exception $ignored){}
+
+        // Live FreeSWITCH call-center status (authoritative for queue state)
+        $fsCcStatus = [];
+        try {
+            $fs_agents = shell_exec("fs_cli -x 'callcenter_config agent list' 2>/dev/null");
+            if ($fs_agents) {
+                foreach (explode("\n", $fs_agents) as $line) {
+                    $line = trim($line);
+                    if (!$line || strpos($line, 'name|') === 0 || strpos($line, '+OK') === 0) continue;
+                    $parts = explode('|', $line);
+                    // contact column usually contains user/101@domain
+                    $contact = $parts[4] ?? '';
+                    $status  = $parts[5] ?? '';
+                    $state   = $parts[6] ?? '';
+                    if (preg_match('/(?:user\/)?(\d+)@/i', $contact, $m)) {
+                        $fsCcStatus[$m[1]] = ['status' => $status, 'state' => $state];
+                    }
+                }
+            }
         } catch(Exception $ignored){}
 
         // SIP registrations via FreeSWITCH CLI (not in PostgreSQL)
         $registered = [];
         try {
-            $fs_out = shell_exec("fs_cli -x 'show registrations' 2>/dev/null");
+            $fs_out = shell_exec("fs_cli -x 'show registrations as json' 2>/dev/null");
             if ($fs_out) {
-                // Each line like: ext|realm|... parse extension column
-                foreach (explode("\n", $fs_out) as $line) {
-                    $line = trim($line);
-                    if (!$line || strpos($line,'reg_user')!==false || strpos($line,'row')!==false) continue;
-                    $parts = explode('|', $line);
-                    if (count($parts) >= 2) {
-                        $reg_user = trim($parts[0]);
-                        $realm    = trim($parts[1]);
-                        if (stripos($realm, $domain) !== false || $domain === $realm) {
+                $reg_json = json_decode($fs_out, true);
+                $reg_rows = $reg_json['rows'] ?? null;
+                if (is_array($reg_rows)) {
+                    foreach ($reg_rows as $rr) {
+                        $reg_user = (string)($rr['reg_user'] ?? $rr['user'] ?? '');
+                        $realm    = (string)($rr['realm'] ?? '');
+                        if ($reg_user !== '' && ($realm === '' || stripos($realm, $domain) !== false || $domain === $realm)) {
                             $registered[$reg_user] = true;
+                        }
+                    }
+                } else {
+                    // Fallback plain-text table
+                    foreach (explode("\n", $fs_out) as $line) {
+                        $line = trim($line);
+                        if (!$line || strpos($line,'reg_user')!==false || strpos($line,'row')!==false) continue;
+                        $parts = explode('|', $line);
+                        if (count($parts) >= 2) {
+                            $reg_user = trim($parts[0]);
+                            $realm    = trim($parts[1]);
+                            if (stripos($realm, $domain) !== false || $domain === $realm || $realm === '') {
+                                $registered[$reg_user] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            // Plain command fallback if JSON unsupported
+            if (!$registered) {
+                $fs_out2 = shell_exec("fs_cli -x 'show registrations' 2>/dev/null");
+                if ($fs_out2) {
+                    foreach (explode("\n", $fs_out2) as $line) {
+                        $line = trim($line);
+                        if (!$line || strpos($line,'reg_user')!==false || strpos($line,'total')!==false) continue;
+                        $parts = explode('|', $line);
+                        if (count($parts) >= 2) {
+                            $reg_user = trim($parts[0]);
+                            $realm    = trim($parts[1]);
+                            if (stripos($realm, $domain) !== false || $domain === $realm) {
+                                $registered[$reg_user] = true;
+                            }
                         }
                     }
                 }
@@ -227,17 +296,39 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             $name = $e['effective_caller_id_name'] ?: 'Extension '.$ext;
             $st   = $stats[$ext] ?? [];
             $cc   = $ccStatus[$ext] ?? null;
+            $fsCc = $fsCcStatus[$ext] ?? null;
             $ac   = $activeCalls[$ext] ?? null;
 
-            // Determine status — use SIP registration as primary source
+            // Determine live status:
+            // 1) Active channel  → incall
+            // 2) FreeSWITCH CC  → status + state (authoritative while agent is in queue)
+            // 3) DB CC status   → Available / On Break / Logged Out
+            // 4) SIP registered → ready
+            // 5) else offline
             $status = 'offline';
-            if ($cc) {
-                $s_map = ['Available'=>'ready','On Break'=>'break','Logged Out'=>'offline',
-                          'In Queue Call'=>'incall','On Call'=>'incall'];
-                $status = $s_map[$cc['agent_status']] ?? strtolower(str_replace(' ','_',$cc['agent_status']));
+            $cc_label = $cc['agent_status'] ?? 'Unknown';
+            $s_map = [
+                'Available' => 'ready', 'Logged Out' => 'offline', 'On Break' => 'break',
+                'In Queue Call' => 'incall', 'On Call' => 'incall',
+                'Idle' => 'ready', 'Waiting' => 'ready', 'Receiving' => 'incall',
+                'In a queue call' => 'incall',
+            ];
+
+            if ($fsCc) {
+                $fs_status = trim((string)($fsCc['status'] ?? ''));
+                $fs_state  = trim((string)($fsCc['state'] ?? ''));
+                if ($fs_status !== '') $cc_label = $fs_status;
+                // FreeSWITCH state overrides status for in-call / receiving
+                if (stripos($fs_state, 'In a queue call') !== false || stripos($fs_state, 'Receiving') !== false) {
+                    $status = 'incall';
+                } elseif ($fs_status !== '') {
+                    $status = $s_map[$fs_status] ?? strtolower(str_replace(' ', '_', $fs_status));
+                }
+            } elseif ($cc) {
+                $status = $s_map[$cc['agent_status']] ?? strtolower(str_replace(' ', '_', $cc['agent_status']));
             } elseif (isset($registered[$ext])) {
-                // Registered via SIP = ready (no CC entry)
                 $status = 'ready';
+                $cc_label = 'Registered';
             }
             if ($ac) $status = 'incall';
 
@@ -250,7 +341,8 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 'ext'          => $ext,
                 'name'         => $name,
                 'status'       => $status,
-                'cc_status'    => $cc['agent_status'] ?? 'Unknown',
+                'cc_status'    => $cc_label,
+                'registered'   => isset($registered[$ext]),
                 'total_calls'  => (int)($st['total'] ?? 0),
                 'answered'     => (int)($st['answered'] ?? 0),
                 'missed'       => (int)($st['missed'] ?? 0),
@@ -1133,8 +1225,16 @@ function fetchQueue(){
 
 // ── Agent Cards ────────────────────────────────────────────────────────────
 function fetchAgents(){
-    fetch('supervisor.php?action=agents&domain='+encodeURIComponent(domain))
-        .then(r=>r.json()).then(d=>{
+    fetch('supervisor.php?action=agents&domain='+encodeURIComponent(domain), {credentials:'same-origin'})
+        .then(r=>{
+            if (r.status === 401) {
+                window.location.href = '/?path=' + encodeURIComponent(window.location.pathname + window.location.search);
+                return null;
+            }
+            return r.json();
+        })
+        .then(d=>{
+            if (!d) return;
             _allAgents = d.agents||[];
             // keep current page valid after refresh
             const maxPage = Math.max(0, Math.ceil(_allAgents.length / _agentsPerPage) - 1);
