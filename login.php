@@ -26,10 +26,29 @@
 //includes files
 	require_once __DIR__ . "/resources/require.php";
 
-//additional includes
+// SkyKin: visiting /login.php must show the login form even if a session
+// is still active (otherwise admins/supervisors can never switch users —
+// check_auth skips the form and this file redirected straight to dashboard).
+	if (!empty($_SESSION['authorized'])) {
+		$_SESSION = [];
+		if (ini_get('session.use_cookies')) {
+			$params = session_get_cookie_params();
+			setcookie(session_name(), '', time() - 42000,
+				$params['path'] ?? '/',
+				$params['domain'] ?? '',
+				$params['secure'] ?? false,
+				$params['httponly'] ?? true
+			);
+		}
+		session_destroy();
+		session_start();
+		$_SESSION['authorized'] = false;
+	}
+
+//additional includes — shows login form when not authorized; redirects after successful login
 	require_once "resources/check_auth.php";
 
-//redirect to the dashboard
+//redirect to the dashboard (reached only when already authorized after login)
 	header("Location: ".$settings->get('login', 'destination', PROJECT_PATH.'/core/dashboard/'));
 
 ?>

@@ -27,12 +27,23 @@
 //includes files
 	require_once __DIR__ . "/resources/require.php";
 
-//use custom logout destination if set otherwise redirect to the index page
-	$logout_destination = $settings->get('login', 'logout_destination', PROJECT_PATH.'/');
+//use custom logout destination if set otherwise redirect to the login page
+	$logout_destination = $settings->get('login', 'logout_destination', PROJECT_PATH.'/login.php');
 
 //destroy session
 	session_unset();
 	session_destroy();
+
+// clear session cookie so the next page cannot revive the old login
+	if (ini_get('session.use_cookies')) {
+		$params = session_get_cookie_params();
+		setcookie(session_name(), '', time() - 42000,
+			$params['path'] ?? '/',
+			$params['domain'] ?? '',
+			$params['secure'] ?? false,
+			$params['httponly'] ?? true
+		);
+	}
 
 //redirect the user to the logout page
 	header("Location: ".$logout_destination);
