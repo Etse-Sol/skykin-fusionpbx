@@ -1,41 +1,21 @@
 <?php
 // SkyKin Technologies – Department Tickets Dashboard
+require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 
-$fpbx_session_path = '/var/lib/php/sessions';
-if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
-session_name('PHPSESSID');
-session_start();
-
-// If not logged in / session expired, send to FusionPBX login
-if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
-    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/tickets.php'));
-    exit;
-}
+$is_api = isset($_GET['action']);
+skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 
 $logged_in_user = $_SESSION['username'] ?? 'User';
-$logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
-$domain = $_GET['domain'] ?? $logged_in_domain;
+$logged_in_domain = skykin_default_domain();
+$domain = skykin_domain_param($_GET['domain'] ?? null);
 $today = date('Y-m-d');
 
 function getDB() {
     static $db = null;
     if ($db) return $db;
-    $h='127.0.0.1';$p='5432';$n='fusionpbx';$u='fusionpbx';$pw='';
-    $conf='/etc/fusionpbx/config.conf';
-    if (file_exists($conf)) foreach(file($conf) as $ln) {
-        $ln=trim($ln);
-        if(strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
-    }
-    foreach (["pgsql:host={$h};port={$p};dbname={$n}", "pgsql:host=/var/run/postgresql;dbname={$n}"] as $dsn) {
-        try {
-            $db = new PDO($dsn, $u, $pw, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
-            return $db;
-        } catch(Exception $ignored) {}
-    }
+    $db = skykin_pdo_fusionpbx();
+    if ($db) return $db;
     // SQLite fallback for local development
     $sqliteFile = __DIR__ . '/skykin_local.db';
     $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);

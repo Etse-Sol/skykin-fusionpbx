@@ -1,12 +1,15 @@
 <?php
+require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 // SkyKin Technologies - Agent Dashboard Data API
 error_reporting(0);
 ini_set('display_errors', 0);
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
+
+skykin_require_login(true);
 
 $agent_name  = isset($_GET['agent'])  ? $_GET['agent']  : 'Agent1';
-$domain      = isset($_GET['domain']) ? $_GET['domain'] : 'client1.skykin.local';
+$domain      = skykin_domain_param($_GET['domain'] ?? null);
 $ext_override= isset($_GET['ext'])    ? $_GET['ext']    : null;
 
 // Date filter (default = today)

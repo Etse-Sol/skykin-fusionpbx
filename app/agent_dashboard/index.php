@@ -1,6 +1,7 @@
 <?php
 // SkyKin Technologies - Real-time Agent Dashboard
 require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 
 // Session expired / not logged in → login page (not a 404)
 // API calls get JSON 401 so the browser can redirect cleanly
@@ -26,28 +27,9 @@ session_write_close();
 function getSkykinDB() {
     static $db = null;
     if ($db) return $db;
-    $conf = '/etc/fusionpbx/config.conf';
-    $h = '127.0.0.1'; $p = '5432'; $n = 'fusionpbx'; $u = 'fusionpbx'; $pw = '';
-    if (file_exists($conf)) {
-        foreach (file($conf) as $ln) {
-            $ln = trim($ln);
-            if (strpos($ln, 'database.0.host')     !== false) $h  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.port')     !== false) $p  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.name')     !== false) $n  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.username') !== false) $u  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.password') !== false) $pw = trim(explode('=', $ln, 2)[1]);
-        }
-    }
-    // Try connection options: local config, remote DB, and default postgres user with correct password
-    foreach ([$h, '192.168.0.114'] as $_h) {
-        foreach ([[$u, $pw], ['fusionpbx', 'vtEWIukU24Lbr9Zi5NxchwVF2g'], ['postgres', 'vtEWIukU24Lbr9Zi5NxchwVF2g']] as [$_u, $_pw]) {
-            try {
-                $db = new PDO("pgsql:host={$_h};port={$p};dbname={$n};connect_timeout=2", $_u, $_pw, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-                return $db;
-            } catch (Exception $ignored) {}
-        }
-    }
-    // SQLite fallback for local development
+    $db = skykin_pdo_fusionpbx();
+    if ($db) return $db;
+    // SQLite fallback for local development only
     $sqliteFile = __DIR__ . '/skykin_local.db';
     $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $db->exec('PRAGMA journal_mode=WAL');
@@ -61,7 +43,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     header('Access-Control-Allow-Origin: *');
 
     $agent_name  = isset($_GET['agent'])  ? $_GET['agent']  : 'Agent1';
-    $domain      = isset($_GET['domain']) ? $_GET['domain'] : 'client1.skykin.local';
+    $domain      = skykin_domain_param($_GET['domain'] ?? null);
     $date_from   = isset($_GET['from'])   && $_GET['from']  ? $_GET['from'] : date('Y-m-d');
     $date_to     = isset($_GET['to'])     && $_GET['to']    ? $_GET['to']   : date('Y-m-d');
     $today_start = strtotime($date_from . ' 00:00:00');
@@ -460,9 +442,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_customer') {
                 )");
             }
             
-            // Seed skykin_deliveries if empty
+            // Optional demo seed (off by default — enable seed_demo_data in skykin_local_config)
             $cnt = $db->query("SELECT COUNT(*) FROM skykin_deliveries")->fetchColumn();
-            if ($cnt == 0) {
+            if (!empty(skykin_config()['seed_demo_data']) && $cnt == 0) {
                 $deliveries = [
                     ['ORD-987654', 'Abebe Girma', '+251911000001', 'Bole, Addis Ababa', date('Y-m-d', strtotime('-3 days')), 'Delivered'],
                     ['ORD-987655', 'Abebe Girma', '+251911000001', 'Bole, Addis Ababa', date('Y-m-d'), 'In Transit'],
@@ -717,7 +699,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
     $body       = json_decode(file_get_contents('php://input'), true) ?: [];
     $agent_ext  = trim($body['agent_ext']  ?? '');
     $new_status = trim($body['new_status'] ?? 'Available');
-    $domain_    = trim($body['domain']     ?? 'client1.skykin.local');
+    $domain_    = skykin_domain_param($body['domain'] ?? null);
 
     // Only allow valid FusionPBX agent_status values
     $allowed = ['Available', 'Available (On Demand)', 'On Break', 'Logged Out'];
@@ -735,8 +717,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
 
         // ── 1. Resolve domain_uuid (robust: exact match → first domain fallback) ──
         // v_call_center_agents uses domain_uuid FK; there is no domain_name column.
-        // The domain passed in the URL (e.g. client1.skykin.local) may differ from
-        // the v_domains name (e.g. 192.168.0.114). Fallback ensures we always match.
+        // The domain passed in the URL may differ from the v_domains name
+        // (hostname vs IP). Fallback ensures we always match.
         $s_dom = $db->prepare("SELECT domain_uuid FROM v_domains WHERE domain_name = :d LIMIT 1");
         $s_dom->execute([':d' => $domain_]);
         $domain_uuid = $s_dom->fetchColumn();
@@ -750,7 +732,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
         }
 
         // ── 2. Lookup the agent record (by agent_id or agent_contact pattern) ────
-        // FusionPBX stores agent_contact as e.g. "user/1003@192.168.0.114".
+        // FusionPBX stores agent_contact as e.g. "user/1003@domain".
         // Match by agent_id (the numeric ID) OR the SIP contact pattern.
         $pat = '%/' . $agent_ext . '@%';
         $s_agent = $db->prepare(
@@ -885,19 +867,20 @@ function ensureLeaveRequestsTable($db) {
     }
 }
 
-// Agent: request On Break / Logged Out (stays Available until supervisor approves)
+// Agent: request On Break (stays Available until supervisor approves).
+// Logout is immediate — no supervisor approval.
 if (isset($_GET['action']) && $_GET['action'] === 'request_leave' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     error_reporting(0);
     header('Content-Type: application/json');
     $body = json_decode(file_get_contents('php://input'), true) ?: [];
     $agent_ext  = trim($body['agent_ext'] ?? '');
     $agent_name = trim($body['agent_name'] ?? '');
-    $domain_    = trim($body['domain'] ?? 'client1.skykin.local');
+    $domain_    = skykin_domain_param($body['domain'] ?? null);
     $req_type   = trim($body['request_type'] ?? '');
     $reason     = trim($body['reason'] ?? '');
-    $allowed_types = ['On Break', 'Logged Out'];
+    $allowed_types = ['On Break'];
     if (!$agent_ext || !in_array($req_type, $allowed_types, true)) {
-        echo json_encode(['ok' => false, 'error' => 'agent_ext and request_type (On Break|Logged Out) required']);
+        echo json_encode(['ok' => false, 'error' => 'agent_ext and request_type (On Break) required']);
         exit;
     }
     try {
@@ -933,7 +916,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'my_leave_request') {
     error_reporting(0);
     header('Content-Type: application/json');
     $agent_ext = trim($_GET['agent_ext'] ?? '');
-    $domain_   = trim($_GET['domain'] ?? 'client1.skykin.local');
+    $domain_   = skykin_domain_param($_GET['domain'] ?? null);
     if (!$agent_ext) {
         echo json_encode(['ok' => false, 'error' => 'agent_ext required']);
         exit;
@@ -961,7 +944,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'cancel_leave_request' && $_SE
     header('Content-Type: application/json');
     $body = json_decode(file_get_contents('php://input'), true) ?: [];
     $agent_ext = trim($body['agent_ext'] ?? '');
-    $domain_   = trim($body['domain'] ?? 'client1.skykin.local');
+    $domain_   = skykin_domain_param($body['domain'] ?? null);
     $id        = (int)($body['id'] ?? 0);
     if (!$agent_ext) {
         echo json_encode(['ok' => false, 'error' => 'agent_ext required']);
@@ -992,7 +975,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'cancel_leave_request' && $_SE
 if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
     error_reporting(0);
     header('Content-Type: application/json');
-    $domain_ = trim($_GET['domain'] ?? 'client1.skykin.local');
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
     $my_ext  = trim($_GET['my_ext'] ?? '');
 
     try {
@@ -1194,7 +1177,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUES
 }
 
 $agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
-$domain = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : 'client1.skykin.local';
+$domain = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 
 // Detect if logged-in user is supervisor/admin
 $is_supervisor = false;
@@ -2535,7 +2518,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
         <div class="form-group">
             <label>SIP Server</label>
-            <input type="text" id="sipServer" placeholder="192.168.243.129" value="192.168.243.129">
+            <input type="text" id="sipServer" placeholder="same as this site" value="<?php echo htmlspecialchars(skykin_config()['sip_server']); ?>">
         </div>
         <div class="form-group">
             <label>WebSocket Port (default 5066)</label>
@@ -2543,13 +2526,13 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         </div>
         <div class="form-group">
             <label>Domain</label>
-            <input type="text" id="sipDomain" placeholder="client1.skykin.local" value="<?php echo $domain; ?>">
+            <input type="text" id="sipDomain" placeholder="SIP domain" value="<?php echo $domain; ?>">
         </div>
         <button class="btn-save-settings" onclick="saveSipSettings()">Connect</button>
     </div>
 </div>
 
-<!-- Leave request modal (Break / Logout need supervisor approval) -->
+<!-- Leave request modal (Break needs supervisor approval) -->
 <div class="modal-overlay" id="leaveRequestModal">
     <div class="modal-box">
         <div class="modal-title" id="leaveRequestTitle">Request Leave</div>
@@ -2644,6 +2627,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
+<?php echo skykin_js_bootstrap(); ?>
 const agentName  = '<?php echo $agent_name; ?>';
 const domain     = '<?php echo $domain; ?>';
 const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB
@@ -2653,7 +2637,8 @@ const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
 // Auto-configure SIP from server on every page load ? no manual setup needed
 if (serverExt)  localStorage.setItem('sip_ext',  serverExt);
 if (serverPass) localStorage.setItem('sip_pass', serverPass);
-localStorage.setItem('sip_server', location.hostname);
+localStorage.setItem('sip_server', (window.SKYKIN && SKYKIN.sipServer) || location.hostname);
+localStorage.setItem('sip_domain', domain || ((window.SKYKIN && SKYKIN.domain) || location.hostname));
 localStorage.removeItem('sip_port');
 let loginTime   = new Date();
 let refreshInterval = 10;
@@ -2748,18 +2733,16 @@ function applyStatusUi(status, labelOverride) {
 function updateLeaveMenuState() {
     const pending = pendingLeaveRequest && pendingLeaveRequest.status === 'pending';
     const optBreak = document.getElementById('optBreak');
-    const optLogout = document.getElementById('optLogout');
     const optCancel = document.getElementById('optCancelLeave');
     if (optBreak) { optBreak.style.opacity = pending ? '0.4' : '1'; optBreak.style.pointerEvents = pending ? 'none' : ''; }
-    if (optLogout) { optLogout.style.opacity = pending ? '0.4' : '1'; optLogout.style.pointerEvents = pending ? 'none' : ''; }
+    // Logout is never gated by leave approval
     if (optCancel) optCancel.style.display = pending ? 'block' : 'none';
 }
 
 function openLeaveRequestModal(requestType) {
-    document.getElementById('leaveRequestType').value = requestType;
+    document.getElementById('leaveRequestType').value = requestType || 'On Break';
     document.getElementById('leaveRequestReason').value = '';
-    document.getElementById('leaveRequestTitle').textContent =
-        requestType === 'Logged Out' ? 'Request Logout' : 'Request Break';
+    document.getElementById('leaveRequestTitle').textContent = 'Request Break';
     document.getElementById('leaveRequestModal').classList.add('show');
 }
 
@@ -2871,13 +2854,6 @@ function handleResolvedLeave(req) {
         return;
     }
     if (req.status === 'approved') {
-        if (req.request_type === 'Logged Out') {
-            applyStatusUi('logout');
-            currentAgentStatus = 'logout';
-            showToast('Logout approved — signing out…');
-            setTimeout(function() { window.location = '/logout.php'; }, 800);
-            return;
-        }
         applyStatusUi('break');
         currentAgentStatus = 'break';
         showToast('Break approved by supervisor');
@@ -2928,13 +2904,23 @@ function stopLeavePolling() {
 function setAgentStatus(status) {
     document.getElementById('statusDropMenu').classList.remove('open');
 
-    // Break / Logout require supervisor approval — stay Available until then
-    if (status === 'break' || status === 'logout') {
+    // Break requires supervisor approval — stay Available until then
+    if (status === 'break') {
         if (pendingLeaveRequest && pendingLeaveRequest.status === 'pending') {
             showToast('You already have a pending leave request');
             return;
         }
-        openLeaveRequestModal(status === 'logout' ? 'Logged Out' : 'On Break');
+        openLeaveRequestModal('On Break');
+        return;
+    }
+
+    // Logout is immediate — no supervisor approval
+    if (status === 'logout') {
+        currentAgentStatus = 'logout';
+        applyStatusUi('logout');
+        syncStatusToFpbx('Logged Out');
+        showToast('Signing out…');
+        setTimeout(function() { window.location = '/logout.php'; }, 600);
         return;
     }
 
@@ -2971,7 +2957,7 @@ function openCrmPanel(url) {
     const panel = document.getElementById('crmPanel');
     const frame = document.getElementById('crmFrame');
     if (!panel || !frame) return;
-    if (frame.src === 'about:blank') frame.src = url || 'https://ahununu.com/';
+    if (frame.src === 'about:blank') frame.src = url || (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
     panel.classList.add('open');
 }
 
@@ -2998,7 +2984,7 @@ function switchTab(tab) {
     if (tab === 'callbacks')  fetchCallbacks();
     if (tab === 'ahununu') {
         const f = document.getElementById('ahununuFrame');
-        if (f && f.src === 'about:blank') f.src = 'https://ahununu.com/';
+        if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
     }
 }
 
@@ -3149,13 +3135,6 @@ function updateRecordings(recs) {
     document.getElementById('recordingsBody').innerHTML = html;
 }
 
-function getDemoRecordings() {
-    return [
-        { datetime:'2026-07-21 10:45', remote_number:'+251911234567', duration:'3:42', direction:'inbound',  filename:'rec_1045_101.wav', filepath:'/recordings/rec_1045_101.wav' },
-        { datetime:'2026-07-21 09:32', remote_number:'+251922345678', duration:'2:15', direction:'outbound', filename:'rec_0932_101.wav', filepath:'/recordings/rec_0932_101.wav' },
-    ];
-}
-
 let recAudio = null;
 function playRecording(path) {
     if (recAudio) { recAudio.pause(); recAudio = null; }
@@ -3176,28 +3155,6 @@ function getEmptyData() {
         force_advisor_count:0, handle_on_behalf:0, ask_help_count:0, call_reason_count:0,
         queue_waiting:0, agents_online:0, avg_wait:0, sla_rate:0,
         recent_calls:[]
-    };
-}
-
-// ?? Demo data ?????????????????????????????????????
-function getDemoData() {
-    return {
-        total_calls:24, answered_calls:21, missed_calls:3,
-        avg_duration:187, total_talk:4488, total_duration:5200,
-        listening_duration:4488, internal_call_time:420, outbound_time:1820,
-        hook_on_times:24, hold_times:340, transfers:5, forwarding_times:3,
-        acw_duration:280, ivr_transfer:2, busy_duration:4488, rest_duration:1200,
-        over_rest:0, idle_duration:2800, interceptions:1, internal_help:2,
-        login_count:1, force_signout:0, listening_count:0, third_party_count:0,
-        force_advisor_count:0, handle_on_behalf:0, ask_help_count:0, call_reason_count:18,
-        queue_waiting:2, agents_online:3, avg_wait:18, sla_rate:92,
-        recent_calls:[
-            {time:'10:45 Jul 21', type:'Inbound',  number:'+251911234567', duration:'3:42', status:'Answered',    disposition:'Resolved'},
-            {time:'10:32 Jul 21', type:'Outbound', number:'+251922345678', duration:'2:15', status:'Answered',    disposition:'Callback'},
-            {time:'10:18 Jul 21', type:'Inbound',  number:'+251933456789', duration:'0:00', status:'Missed',      disposition:'Voicemail'},
-            {time:'10:05 Jul 21', type:'Transfer', number:'Ext 102',       duration:'1:30', status:'Transferred', disposition:'Internal'},
-            {time:'09:52 Jul 21', type:'Inbound',  number:'+251944567890', duration:'5:10', status:'Answered',    disposition:'Resolved'},
-        ]
     };
 }
 
@@ -3430,7 +3387,7 @@ let currentSession = null, lastDialedNumber = '', lastCallType = 'Outbound';
 let isMuted = false;
 let callStartTime = null, callTimerInterval = null, onHold = false;
 let isRecording = false;
-let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFilename = 'demo_recording.wav';
+let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFilename = '';
 
 // SIP.js module will populate window.sipBridge when loaded
 window.sipBridge = {}; var sipBridge = window.sipBridge;
@@ -3564,13 +3521,8 @@ function handleIncoming(callerNumber) {
 
 function answerCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
-    try {
-        referenceTab = window.open('about:blank', '_blank');
-    } catch(e) {
-        console.error("Popup blocked or failed to open:", e);
-    }
     if (sipBridge.answer) sipBridge.answer();
-    openCrmPanel(); // open ahununu.com inside dashboard
+    // Do not auto-open ahununu.com — agent opens it manually via the Ahununu tab
 }
 
 function declineCall() {
@@ -3712,7 +3664,7 @@ function endCall() {
 
     const callDur  = callStartTime ? Math.floor((new Date() - callStartTime) / 1000) : 0;
     const callerNum = lastDialedNumber || document.getElementById('dialInput').value || '';
-    const recFile   = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : 'demo_recording.wav';
+    const recFile   = (window.recordingCallId || '') ? window.recordingCallId + '.webm' : '';
 
     // ── Critical UI reset (must always run) ────────────────────────────────
     try {
@@ -3756,7 +3708,7 @@ function endCall() {
 function openAcwModal(callerId, duration, callType, recFilename) {
     acwCallerId = callerId; acwDuration = duration;
     acwCallType = callType || 'Outbound';
-    acwRecordingFilename = recFilename || 'demo_recording.wav';
+    acwRecordingFilename = recFilename || '';
     document.getElementById('acwCallerDisplay').textContent = callerId || '?';
     const m = Math.floor(duration/60), s = duration%60;
     document.getElementById('acwDurationDisplay').textContent = String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
@@ -3790,8 +3742,6 @@ function submitAcw() {
 }
 
 // ── Case Escalation Actions ────────────────────────────────────────────────
-let referenceTab = null;
-
 function autoAssignDepartment(issueType) {
     const mapping = {
         'Not delivered': 'Logistics',
@@ -3948,7 +3898,9 @@ function showToast(msg) {
 // ?? Socket.IO real-time events ????????????????????
 (function connectSocket() {
     if (typeof io === 'undefined') return;
-    const socket = io('http://192.168.243.129:8001', { transports: ['websocket','polling'] });
+    const url = (window.SKYKIN && SKYKIN.socketIoUrl) || '';
+    if (!url) return; // optional helper service — disabled unless configured
+    const socket = io(url, { transports: ['websocket','polling'] });
     socket.on('connect', () => showToast('Live events connected'));
     socket.on('call_bridged', function(data) {
         const callerNum = data.callerId || data.caller_id || '';
@@ -4523,7 +4475,7 @@ const {
 } = SIPjs;
 
 let ua = null, reg = null, session = null;
-const pbxDomain = () => localStorage.getItem('sip_domain') || 'client1.skykin.local';
+const pbxDomain = () => localStorage.getItem('sip_domain') || (window.SKYKIN && SKYKIN.domain) || location.hostname;
 
 function startRec(stream) {
     try {
@@ -4550,7 +4502,9 @@ function stopRec() {
         const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
         // Upload to FastAPI then link to FusionPBX CDR for Evaluation badge
         try {
-            const resp = await fetch('http://192.168.243.129:8001/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
+            const base = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
+            if (!base) return;
+            const resp = await fetch(base + '/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
             if (resp.ok) {
                 // Link recording filename to CDR so ?? badge shows in Evaluation
                 fetch('index.php?action=link_recording&filename=' + encodeURIComponent(id+'.webm') + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom));
@@ -4579,34 +4533,12 @@ function bindSession(s) {
             window.startCallUI && window.startCallUI(num);
             attachAudio(s);
             window.showToast && window.showToast('Call connected');
-            
-            // Auto-open reference site on answered incoming call
-            if (s instanceof Invitation) {
-                if (referenceTab && !referenceTab.closed) {
-                    referenceTab.location.href = 'https://ahununu.com/';
-                } else {
-                    try {
-                        window.open('https://ahununu.com/', '_blank');
-                    } catch(e) {
-                        console.error("Failed to open reference tab:", e);
-                    }
-                }
-                referenceTab = null;
-            }
-            
+
             // Pre-fill escalation form with the caller's details
             autofillEscalationForm(num);
         }
         if (state === SessionState.Terminated || state === SessionState.Terminating) {
             stopRec();
-            if (referenceTab) {
-                try {
-                    if (referenceTab.location.href === 'about:blank' || referenceTab.location.href === '') {
-                        referenceTab.close();
-                    }
-                } catch(e) {}
-                referenceTab = null;
-            }
             if (window.endCall) window.endCall();
         }
     });

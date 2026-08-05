@@ -1,27 +1,14 @@
 <?php
 // SkyKin Technologies – Call Evaluation / Quality Scoring
+require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 
-$fpbx_session_path = '/var/lib/php/sessions';
-if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
-session_name('PHPSESSID');
-session_start();
-
-if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
-    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/evaluation.php'));
-    exit;
-}
-
-$allowed = ['superadmin','admin','supervisor'];
-$raw     = isset($_SESSION['groups']) ? $_SESSION['groups'] : [];
-$groups  = [];
-array_walk_recursive($raw, function($v) use (&$groups) {
-    if (is_string($v)) foreach (array_map('trim', explode(',', $v)) as $g) if ($g !== '') $groups[] = strtolower($g);
-});
-if (empty(array_intersect($allowed, $groups))) { http_response_code(403); echo 'Access Denied'; exit; }
+$is_api = isset($_GET['api']);
+skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 
 $logged_in_user   = $_SESSION['username']    ?? '';
-$logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
-$domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : $logged_in_domain;
+$logged_in_domain = skykin_default_domain();
+$domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 $today   = date('Y-m-d');
 
 function getDB() {
@@ -74,7 +61,7 @@ try {
 if (isset($_GET['api'])) {
     error_reporting(0);
     header('Content-Type: application/json');
-    $dom  = $_GET['domain'] ?? 'client1.skykin.local';
+    $dom  = skykin_domain_param($_GET['domain'] ?? null);
     $from = $_GET['from']   ?? date('Y-m-d');
     $to   = $_GET['to']     ?? date('Y-m-d');
     $ts   = strtotime($from.' 00:00:00');
@@ -415,6 +402,8 @@ audio{width:100%;height:32px;border-radius:6px}
 </div>
 
 <script>
+<?php echo skykin_js_bootstrap(); ?>
+
 const DOMAIN = '<?php echo $domain; ?>';
 const EVALUATOR = '<?php echo htmlspecialchars($logged_in_user); ?>';
 const scores = { greeting:0, knowledge:0, resolution:0, tone:0, procedure:0, closing:0 };
@@ -506,8 +495,9 @@ function selectCall(r) {
     if (r.record_name) {
         // Serve .webm via FastAPI, .wav via FusionPBX recordings
         const fname = r.record_name;
-        const url = fname.endsWith('.webm')
-            ? 'http://192.168.243.129:8001/api/recordings/' + encodeURIComponent(fname)
+        const api = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
+        const url = (fname.endsWith('.webm') && api)
+            ? api + '/api/recordings/' + encodeURIComponent(fname)
             : '/app/recordings/index.php?filename='+encodeURIComponent(fname)+'&path='+encodeURIComponent(r.record_path||'');
         document.getElementById('evalAudio').src = url;
         aw.style.display = 'block';

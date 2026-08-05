@@ -10,3 +10,10 @@ secure/*.sqlite
 *.php~
 
 app/yealink/resources/firmware/*
+
+# SkyKin machine-specific / local
+app/agent_dashboard/skykin_local_config.php
+app/agent_dashboard/skykin_local.db
+.env
+.env.docker
+_tmp_*.py

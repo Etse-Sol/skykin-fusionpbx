@@ -1,65 +1,20 @@
 <?php
 // SkyKin Technologies – Supervisor Dashboard
 require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 
-// ── Auth check ────────────────────────────────────────────────────────────────
-// API endpoints must return JSON on expiry (not an HTML login redirect),
-// otherwise Live Agent Status polling silently dies.
+// API endpoints must return JSON on expiry/forbidden (not an HTML login redirect)
 $is_api = isset($_GET['action']);
-if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
-    if ($is_api) {
-        header('Content-Type: application/json');
-        http_response_code(401);
-        echo json_encode(['ok'=>false,'error'=>'Session expired','login'=>'/']);
-        exit;
-    }
-    $path = $_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/supervisor.php';
-    header('Location: /?path=' . urlencode($path));
-    exit;
-}
+skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 
 // Release session lock early so Live Status polls do not block other tabs
 session_write_close();
 
-// Allowed roles — superadmin, admin, or supervisor (custom group) can open this page
-$allowed_groups = ['superadmin', 'admin', 'supervisor'];
-$raw_groups     = isset($_SESSION['groups']) ? $_SESSION['groups'] : [];
-
-// FusionPBX stores groups in various formats — flatten everything to a simple string array
-$user_groups = [];
-array_walk_recursive($raw_groups, function($val) use (&$user_groups) {
-    if (is_string($val)) {
-        foreach (array_map('trim', explode(',', $val)) as $g) {
-            if ($g !== '') $user_groups[] = strtolower($g);
-        }
-    }
-});
-$allowed_lower = array_map('strtolower', $allowed_groups);
-$has_access = !empty(array_intersect($allowed_lower, $user_groups));
-
-if (!$has_access) {
-    http_response_code(403);
-    echo '<!DOCTYPE html><html><head><meta charset="UTF-8">
-    <title>Access Denied – SkyKin</title>
-    <style>body{font-family:Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}
-    .box{background:#fff;padding:40px 48px;border-radius:14px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.1)}
-    h2{color:#c62828;margin-bottom:10px} p{color:#666;font-size:14px} a{color:#0047AB;font-size:13px}
-    .badge{background:#ffebee;color:#c62828;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;display:inline-block;margin-bottom:16px}
-    </style></head><body><div class="box">
-    <div class="badge">ACCESS DENIED</div>
-    <h2>Supervisor Access Required</h2>
-    <p>Your account (<strong>'.htmlspecialchars($_SESSION['username'] ?? 'Unknown').'</strong>) does not have the <strong>supervisor</strong> or <strong>superadmin</strong> role.</p>
-    <p style="margin-top:8px;font-size:12px;color:#aaa">Ask your administrator to assign you the <strong>admin</strong> or <strong>supervisor</strong> group in FusionPBX &rarr; Accounts &rarr; Users.</p>
-    <br><a href="/app/agent_dashboard/index.php">Go to Agent Dashboard</a> &nbsp;|&nbsp; <a href="/logout.php">Login as different user</a>
-    </div></body></html>';
-    exit;
-}
-
 // ── Pull identity from session ────────────────────────────────────────────────
 $logged_in_user   = $_SESSION['username']    ?? '';
-$logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
+$logged_in_domain = skykin_default_domain();
 
-$domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain'])  : $logged_in_domain;
+$domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 $sup_ext = isset($_GET['ext'])    ? htmlspecialchars($_GET['ext'])     : '';
 
 // Auto-detect supervisor's own extension from their username
@@ -103,18 +58,10 @@ try {
 function getDB() {
     static $db = null;
     if ($db) return $db;
-    $h='127.0.0.1';$p='5432';$n='fusionpbx';$u='fusionpbx';$pw='';
-    $conf='/etc/fusionpbx/config.conf';
-    if (file_exists($conf)) foreach(file($conf) as $ln) {
-        $ln=trim($ln);
-        if(strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
+    $db = skykin_pdo_fusionpbx();
+    if (!$db) {
+        throw new Exception('Database unavailable');
     }
-    try { $db=new PDO("pgsql:host={$h};port={$p};dbname={$n}",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]); }
-    catch(Exception $e) { $db=new PDO("pgsql:host=/var/run/postgresql;dbname=fusionpbx",'fusionpbx','',[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]); }
     return $db;
 }
 
@@ -215,7 +162,7 @@ function applyAgentCcStatus($db, $agent_ext, $new_status, $domain_) {
 // ── API: agents ──────────────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='agents') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain = skykin_domain_param($_GET['domain'] ?? null);
     $today_start = strtotime(date('Y-m-d').' 00:00:00');
     $today_end   = strtotime(date('Y-m-d').' 23:59:59');
     try {
@@ -470,7 +417,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
 // ── API: queue ───────────────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='queue') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain = skykin_domain_param($_GET['domain'] ?? null);
     $today_start = strtotime(date('Y-m-d').' 00:00:00');
     $today_end   = strtotime(date('Y-m-d').' 23:59:59');
     try {
@@ -534,7 +481,7 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
 // ── API: leaderboard ─────────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='leaderboard') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain = skykin_domain_param($_GET['domain'] ?? null);
     $from = $_GET['from'] ?? date('Y-m-d');
     $to   = $_GET['to']   ?? date('Y-m-d');
     $ts = strtotime($from.' 00:00:00');
@@ -604,7 +551,7 @@ if (isset($_GET['action']) && $_GET['action']==='monitor') {
     $mode      = $_GET['mode']      ?? 'listen';
     $agent_ext = preg_replace('/[^0-9]/','',$_GET['agent_ext'] ?? '');
     $sup_ext_  = preg_replace('/[^0-9]/','',$_GET['sup_ext']   ?? '');
-    $domain_   = preg_replace('/[^a-zA-Z0-9.\-]/','',$_GET['domain'] ?? 'client1.skykin.local');
+    $domain_   = preg_replace('/[^a-zA-Z0-9.\-]/','',skykin_domain_param($_GET['domain'] ?? null));
 
     if (!$agent_ext || !$sup_ext_) { echo json_encode(['ok'=>false,'error'=>'Missing extension']); exit; }
 
@@ -630,7 +577,7 @@ if (isset($_GET['action']) && $_GET['action']==='force_status') {
     error_reporting(0); header('Content-Type: application/json');
     $agent_ext = $_GET['agent_ext'] ?? '';
     $new_status= $_GET['status']    ?? 'Available';
-    $domain_   = $_GET['domain']    ?? 'client1.skykin.local';
+    $domain_   = skykin_domain_param($_GET['domain'] ?? null);
     try {
         $db = getDB();
         $result = applyAgentCcStatus($db, $agent_ext, $new_status, $domain_);
@@ -656,7 +603,7 @@ if (isset($_GET['action']) && $_GET['action']==='force_status') {
 // ── API: leave_requests (pending list for supervisor) ────────────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'leave_requests') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
     try {
         $db = getDB();
         ensureLeaveRequestsTable($db);
@@ -679,7 +626,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'resolve_leave' && $_SERVER['R
     $body = json_decode(file_get_contents('php://input'), true) ?: [];
     $id      = (int)($body['id'] ?? $_GET['id'] ?? 0);
     $decision = trim($body['decision'] ?? $_GET['decision'] ?? '');
-    $domain_ = trim($body['domain'] ?? $_GET['domain'] ?? 'client1.skykin.local');
+    $domain_ = trim($body['domain'] ?? skykin_domain_param($_GET['domain'] ?? null));
     if ($id < 1 || !in_array($decision, ['approved', 'denied'], true)) {
         echo json_encode(['ok' => false, 'error' => 'id and decision (approved|denied) required']);
         exit;
@@ -730,7 +677,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'resolve_leave' && $_SERVER['R
 // ── API: call_history_all ────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
     $from = $_GET['from'] ?? date('Y-m-d');
     $to   = $_GET['to']   ?? date('Y-m-d');
     $search = $_GET['search'] ?? '';
@@ -782,7 +729,7 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
 // ── API: recordings_all ──────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
     $from    = $_GET['from']   ?? date('Y-m-d');
     $to      = $_GET['to']     ?? date('Y-m-d');
     $search  = $_GET['search'] ?? '';
@@ -831,7 +778,7 @@ if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
 // For real MOS you would need rtcp data; this gives a practical quality indication.
 if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
     error_reporting(0); header('Content-Type: application/json');
-    $domain_ = $_GET['domain'] ?? 'client1.skykin.local';
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
     $from    = $_GET['from']   ?? date('Y-m-d');
     $to      = $_GET['to']     ?? date('Y-m-d');
     $ts = strtotime($from.' 00:00:00');
@@ -1380,6 +1327,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 <div id="supToast"></div>
 
 <script>
+<?php echo skykin_js_bootstrap(); ?>
 const domain   = '<?php echo $domain; ?>';
 const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') || '';
 // Pre-fill localStorage with server-detected extension so monitor() doesn't prompt
@@ -1754,7 +1702,7 @@ function showTab(name){
     if(name==='skills') fetchSkillsAgents();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
-        if (f.src === 'about:blank') f.src = 'https://ahununu.com/';
+        if (f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
     }
 }
 
@@ -1773,7 +1721,7 @@ function showTabDirect(name){
     if(name==='skills') fetchSkillsAgents();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
-        if (f && f.src === 'about:blank') f.src = 'https://ahununu.com/';
+        if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
     }
 }
 
@@ -1819,10 +1767,16 @@ function fetchRecordings(){
 
 function playRec(path, file){
     const player=document.getElementById('recPlayer');
-    // .webm files served via FastAPI, .wav via FusionPBX built-in
-    const url = file.endsWith('.webm')
-        ? 'http://192.168.243.129:8001/api/recordings/'+encodeURIComponent(file)
-        : '/app/recordings/index.php?filename='+encodeURIComponent(file)+'&path='+encodeURIComponent(path);
+    const api = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
+    let url;
+    if (file.endsWith('.webm') && api) {
+        url = api + '/api/recordings/' + encodeURIComponent(file);
+    } else if (file.endsWith('.webm') && !api) {
+        toast('Browser recordings need recordings_api_base in skykin config','#c62828');
+        return;
+    } else {
+        url = '/app/recordings/index.php?filename='+encodeURIComponent(file)+'&path='+encodeURIComponent(path);
+    }
     player.src=url; player.style.display='block';
     player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });
 }

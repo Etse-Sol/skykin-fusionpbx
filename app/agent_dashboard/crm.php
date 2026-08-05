@@ -1,19 +1,15 @@
 <?php
 // SkyKin Technologies – CRM (Customer Relationship Manager)
+require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 
-$fpbx_session_path = '/var/lib/php/sessions';
-if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
-session_name('PHPSESSID');
-session_start();
-
-if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
-    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/crm.php'));
-    exit;
-}
+// Agents and supervisors both use CRM (caller lookup / contacts)
+$is_api = isset($_GET['api']);
+skykin_require_login($is_api);
 
 $logged_in_user   = $_SESSION['username']    ?? '';
-$logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
-$domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : $logged_in_domain;
+$logged_in_domain = skykin_default_domain();
+$domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 
 function getDB() {
     static $db = null;

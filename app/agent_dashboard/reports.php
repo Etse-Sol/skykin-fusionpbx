@@ -1,29 +1,14 @@
 <?php
 // SkyKin Technologies – Reports Dashboard
+require_once __DIR__ . '/session_bootstrap.php';
+require_once __DIR__ . '/skykin_config.php';
 
-$fpbx_session_path = '/var/lib/php/sessions';
-if (is_dir($fpbx_session_path)) session_save_path($fpbx_session_path);
-session_name('PHPSESSID');
-session_start();
-
-if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
-    header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/reports.php'));
-    exit;
-}
-
-$allowed_groups = ['superadmin','admin','supervisor'];
-$raw_groups     = isset($_SESSION['groups']) ? $_SESSION['groups'] : [];
-$user_groups    = [];
-array_walk_recursive($raw_groups, function($v) use (&$user_groups) {
-    if (is_string($v)) foreach (array_map('trim', explode(',', $v)) as $g) if ($g !== '') $user_groups[] = strtolower($g);
-});
-if (empty(array_intersect($allowed_groups, $user_groups))) {
-    http_response_code(403); echo 'Access Denied'; exit;
-}
+$is_api = isset($_GET['api']) || isset($_GET['action']);
+skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 
 $logged_in_user   = $_SESSION['username']    ?? '';
-$logged_in_domain = $_SESSION['domain_name'] ?? 'client1.skykin.local';
-$domain  = isset($_GET['domain']) ? htmlspecialchars($_GET['domain']) : $logged_in_domain;
+$logged_in_domain = skykin_default_domain();
+$domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 $today   = date('Y-m-d');
 
 // ── DB helper ──────────────────────────────────────────────────────────────
@@ -49,7 +34,7 @@ if (isset($_GET['api'])) {
     error_reporting(0);
     header('Content-Type: application/json');
     $api    = $_GET['api'];
-    $dom    = $_GET['domain']  ?? 'client1.skykin.local';
+    $dom    = skykin_domain_param($_GET['domain'] ?? null);
     $from   = $_GET['from']    ?? date('Y-m-d', strtotime('-7 days'));
     $to     = $_GET['to']      ?? date('Y-m-d');
     $ts     = strtotime($from.' 00:00:00');
