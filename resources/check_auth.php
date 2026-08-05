@@ -109,12 +109,22 @@
 
 //session validate: check to see if the session is valid
 	if ($_SESSION['authorized'] && $_SESSION["user_hash"] !== hash('sha256', implode($server_array))) {
+		require_once __DIR__ . "/skykin_session_log.php";
+		skykin_session_log('user_hash_mismatch', ['reason' => 'session.validate hash changed']);
 		session_destroy();
 		header("Location: ".PROJECT_PATH."/logout.php");
 	}
 
 //if the session is not authorized, then verify the identity
 	if (!$_SESSION['authorized']) {
+
+		//record every unauthorized page hit (temporary diagnostics)
+			require_once __DIR__ . "/skykin_session_log.php";
+			skykin_session_log('session_not_authorized', [
+				'cookie_sent' => isset($_COOKIE[session_name()]) ? '1' : '0',
+				'cookie_sid'  => $_COOKIE[session_name()] ?? '-',
+				'sess_keys'   => implode(',', array_slice(array_keys($_SESSION), 0, 10)),
+			]);
 
 		//clear the template only if the template has not been assigned by the superadmin
 			if (empty($settings->get('domain', 'template'))) {
@@ -125,8 +135,16 @@
 			$auth = new authentication(['settings' => $settings]);
 			$result = $auth->validate();
 
-		//if not authorized
+			//if not authorized
 			if (empty($_SESSION['authorized']) || !$_SESSION['authorized']) {
+				//record why the login page is being shown (temporary diagnostics)
+				require_once __DIR__ . "/skykin_session_log.php";
+				skykin_session_log('not_authorized', [
+					'cookie_sent' => isset($_COOKIE[session_name()]) ? '1' : '0',
+					'cookie_sid'  => $_COOKIE[session_name()] ?? '-',
+					'sess_keys'   => implode(',', array_slice(array_keys($_SESSION), 0, 8)),
+				]);
+
 				//log the failed auth attempt to the system to the syslog server
 				openlog('FusionPBX', LOG_NDELAY, LOG_AUTH);
 				syslog(LOG_WARNING, '['.$_SERVER['REMOTE_ADDR']."] authentication failed for ".$result["username"]);

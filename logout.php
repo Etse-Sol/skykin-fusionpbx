@@ -30,6 +30,10 @@
 //use custom logout destination if set otherwise redirect to the login page
 	$logout_destination = $settings->get('login', 'logout_destination', PROJECT_PATH.'/login.php');
 
+//record who logged out and from where (temporary diagnostics)
+	require_once __DIR__ . "/resources/skykin_session_log.php";
+	skykin_session_log('logout');
+
 //destroy session
 	session_unset();
 	session_destroy();

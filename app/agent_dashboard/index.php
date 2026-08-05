@@ -2659,8 +2659,9 @@ let loginTime   = new Date();
 let refreshInterval = 10;
 let countdown   = refreshInterval;
 
-// Background API 401 must NOT force logout — a single failed poll (tab sleep,
-// brief lock, race) was kicking agents to login when they switched tabs.
+// Background API failures must never end the session. Sending the browser to
+// login.php?switch=1 destroyed the session server-side, so one bad poll (tab
+// sleep, FPM saturation) logged the agent out for real.
 (function() {
     const _fetch = window.fetch.bind(window);
     let authFailCount = 0;
@@ -2672,14 +2673,17 @@ let countdown   = refreshInterval;
         }
         return _fetch.apply(this, args).then(function(res) {
             if (res.status === 401) {
-                authFailCount++;
-                if (authFailCount >= 3) {
-                    window.location = '/login.php?switch=1';
+                if (++authFailCount >= 4) {
+                    authFailCount = 0;
+                    window.location = '/login.php?expired=1';
                 }
-            } else if (res.ok) {
+            } else {
                 authFailCount = 0;
             }
             return res;
+        }).catch(function(err) {
+            // network/abort errors say nothing about auth
+            throw err;
         });
     };
 })();

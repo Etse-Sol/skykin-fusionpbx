@@ -98,6 +98,10 @@
 		// Keep sessions alive for 8 hours of inactivity (default PHP is only 24 minutes)
 		ini_set('session.gc_maxlifetime', '28800');
 
+		// Reject client-supplied session ids that were never issued by this server,
+		// so one browser can never adopt another browser's session id.
+		ini_set('session.use_strict_mode', '1');
+
 		$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
 			|| (isset($_SERVER['SERVER_PORT']) && (string)$_SERVER['SERVER_PORT'] === '443')
 			|| (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower((string)$_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');

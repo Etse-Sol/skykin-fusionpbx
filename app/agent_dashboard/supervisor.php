@@ -1436,11 +1436,13 @@ function fetchQueue(){
 function fetchAgents(){
     fetch('supervisor.php?action=agents&domain='+encodeURIComponent(domain), {credentials:'same-origin'})
         .then(r=>{
-            // Do not hard-logout on a single 401 (tab switch / brief session lock)
+            // Do not hard-logout on a single 401 (tab switch / brief session lock).
+            // Never use switch=1 here — that destroys the session server-side.
             if (r.status === 401) {
                 window._authFailCount = (window._authFailCount || 0) + 1;
-                if (window._authFailCount >= 3) {
-                    window.location.href = '/login.php?switch=1';
+                if (window._authFailCount >= 4) {
+                    window._authFailCount = 0;
+                    window.location.href = '/login.php?expired=1';
                 }
                 return null;
             }

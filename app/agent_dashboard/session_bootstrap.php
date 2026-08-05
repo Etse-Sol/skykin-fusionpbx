@@ -9,6 +9,7 @@ if (session_status() === PHP_SESSION_NONE) {
 		session_save_path($fpbx_session_path);
 	}
 	ini_set('session.gc_maxlifetime', '28800');
+	ini_set('session.use_strict_mode', '1');
 
 	$https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
 		|| (isset($_SERVER['SERVER_PORT']) && (string)$_SERVER['SERVER_PORT'] === '443')
