@@ -3,19 +3,20 @@
  * Example local overrides — copy to skykin_local_config.php on the server.
  * Do NOT commit skykin_local_config.php (machine-specific).
  *
- * On the current local VM (optional recorder on :8001):
- *   cp skykin_local_config.php.example skykin_local_config.php
- *
- * On cloud: leave recordings_api_base / socket_io_url empty unless you
- * deploy that helper service, and set ahununu_url if needed.
+ * Only set recordings_api_base / socket_io_url if that helper service is
+ * actually running. Otherwise leave them empty (default) to avoid console
+ * WebSocket errors like ws://…:8001/socket.io failed.
  */
 $host = preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
 
 return [
-	// Uncomment on the local VM only if the :8001 helper is running:
 	// 'recordings_api_base' => 'http://' . $host . ':8001',
 	// 'socket_io_url'       => 'http://' . $host . ':8001',
 
 	'ahununu_url'    => 'https://ahununu.com/',
 	'seed_demo_data' => false,
+
+	// Only needed when the server zone differs from the reporting zone.
+	// Defaults to the system zone (/etc/timezone or /etc/localtime).
+	// 'timezone' => 'Africa/Addis_Ababa',
 ];

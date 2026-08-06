@@ -48,6 +48,61 @@ function skykin_domain_param($from_request = null): string {
 	return skykin_default_domain();
 }
 
+/**
+ * Timezone used for every date/epoch boundary in the dashboards.
+ *
+ * PHP defaults to UTC when date.timezone is unset, while Postgres renders CDR
+ * timestamps in the server zone. That mismatch silently drops calls from
+ * "today" windows, so resolve the real server zone instead.
+ */
+function skykin_timezone(): string {
+	static $tz = null;
+	if ($tz !== null) {
+		return $tz;
+	}
+
+	$candidates = [];
+	$cfg_file_tz = null;
+	foreach ([
+		'/etc/skykin/config.php',
+		__DIR__ . '/skykin_local_config.php',
+	] as $override) {
+		if (is_file($override)) {
+			$extra = include $override;
+			if (is_array($extra) && !empty($extra['timezone'])) {
+				$cfg_file_tz = (string)$extra['timezone'];
+			}
+		}
+	}
+	$candidates[] = $cfg_file_tz;
+	$candidates[] = getenv('SKYKIN_TZ') ?: null;
+	if (is_file('/etc/timezone')) {
+		$candidates[] = trim((string)file_get_contents('/etc/timezone'));
+	}
+	if (is_link('/etc/localtime')) {
+		$link = (string)readlink('/etc/localtime');
+		if (preg_match('#zoneinfo/(.+)$#', $link, $m)) {
+			$candidates[] = $m[1];
+		}
+	}
+
+	foreach ($candidates as $candidate) {
+		if (!$candidate) {
+			continue;
+		}
+		try {
+			new DateTimeZone($candidate);
+		} catch (Exception $e) {
+			continue;
+		}
+		$tz = $candidate;
+		return $tz;
+	}
+
+	$tz = date_default_timezone_get() ?: 'UTC';
+	return $tz;
+}
+
 function skykin_config(): array {
 	static $cfg = null;
 	if ($cfg !== null) {
@@ -67,6 +122,7 @@ function skykin_config(): array {
 		'sms_enabled'         => true,
 		'wss_path'            => '/wss/',
 		'seed_demo_data'      => false,
+		'timezone'            => skykin_timezone(),
 	];
 
 	foreach ([
@@ -87,6 +143,7 @@ function skykin_config(): array {
 		'SKYKIN_SOCKET_IO_URL'   => 'socket_io_url',
 		'SKYKIN_SIP_SERVER'      => 'sip_server',
 		'SKYKIN_WSS_PATH'        => 'wss_path',
+		'SKYKIN_TZ'              => 'timezone',
 	];
 	foreach ($map as $env => $key) {
 		$val = getenv($env);
@@ -153,6 +210,121 @@ function skykin_pdo_fusionpbx(): ?PDO {
 	}
 	$db = null;
 	return null;
+}
+
+/**
+ * Event Socket settings.
+ *
+ * FreeSWITCH's own event_socket.conf.xml is authoritative when FreeSWITCH runs
+ * on this host, so a fresh install needs no hand-written config. .env and
+ * ESL_* environment variables override it for remote/dev setups.
+ *
+ * A stale ESL_HOST pointing at a dev LAN address silently breaks every agent
+ * status change, so an unreachable host falls back to the local socket.
+ */
+function skykin_esl_settings(): array {
+	static $s = null;
+	if ($s !== null) {
+		return $s;
+	}
+
+	$s = ['host' => '127.0.0.1', 'port' => 8021, 'password' => 'ClueCon'];
+
+	$conf = '/etc/freeswitch/autoload_configs/event_socket.conf.xml';
+	if (is_file($conf) && is_readable($conf)) {
+		$xml = (string)file_get_contents($conf);
+		if (preg_match('/name="listen-ip"\s+value="([^"]*)"/', $xml, $m) && $m[1] !== '') {
+			$s['host'] = ($m[1] === '::' || $m[1] === '0.0.0.0') ? '127.0.0.1' : $m[1];
+		}
+		if (preg_match('/name="listen-port"\s+value="([^"]*)"/', $xml, $m) && $m[1] !== '') {
+			$s['port'] = (int)$m[1];
+		}
+		if (preg_match('/name="password"\s+value="([^"]*)"/', $xml, $m) && $m[1] !== '') {
+			$s['password'] = $m[1];
+		}
+	}
+
+	foreach ([
+		__DIR__ . '/../../.env',
+		__DIR__ . '/../.env',
+		__DIR__ . '/.env',
+	] as $envPath) {
+		if (!is_file($envPath)) {
+			continue;
+		}
+		foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $ln) {
+			$ln = trim($ln);
+			if ($ln === '' || $ln[0] === '#' || strpos($ln, '=') === false) {
+				continue;
+			}
+			[$k, $v] = explode('=', $ln, 2);
+			$k = trim($k);
+			$v = trim($v, " \t\n\r\0\x0B\"'");
+			if ($v === '') {
+				continue;
+			}
+			if ($k === 'ESL_HOST') {
+				$s['host'] = $v;
+			} elseif ($k === 'ESL_PORT') {
+				$s['port'] = (int)$v;
+			} elseif ($k === 'ESL_PASSWORD') {
+				$s['password'] = $v;
+			}
+		}
+		break;
+	}
+
+	foreach (['ESL_HOST' => 'host', 'ESL_PORT' => 'port', 'ESL_PASSWORD' => 'password'] as $env => $key) {
+		$v = getenv($env);
+		if ($v !== false && $v !== '') {
+			$s[$key] = ($key === 'port') ? (int)$v : $v;
+		}
+	}
+
+	return $s;
+}
+
+/**
+ * Connected event_socket, or null. $error receives the reason on failure.
+ */
+function skykin_esl(?string &$error = null) {
+	$error = '';
+	if (!class_exists('config')) {
+		require_once __DIR__ . '/../../resources/classes/config.php';
+	}
+	if (!class_exists('event_socket')) {
+		require_once __DIR__ . '/../../resources/classes/event_socket.php';
+	}
+
+	$s = skykin_esl_settings();
+	$targets = [[$s['host'], $s['port']]];
+	if ($s['host'] !== '127.0.0.1') {
+		$targets[] = ['127.0.0.1', $s['port']];
+	}
+
+	foreach ($targets as [$host, $port]) {
+		try {
+			$esl = new event_socket();
+			if ($esl->connect($host, $port, $s['password'])) {
+				return $esl;
+			}
+			$error = 'ESL connect refused by ' . $host . ':' . $port;
+		} catch (Throwable $ex) {
+			$error = $ex->getMessage();
+		}
+	}
+	return null;
+}
+
+/**
+ * Where dashboard diagnostics are written.
+ */
+function skykin_log_path(string $name): string {
+	$dir = '/var/log/skykin';
+	if (is_dir($dir) && is_writable($dir)) {
+		return $dir . '/' . $name;
+	}
+	return sys_get_temp_dir() . '/skykin_' . $name;
 }
 
 /**
@@ -239,5 +411,7 @@ h2{color:#c62828;margin:0 0 10px}p{color:#666;font-size:14px}a{color:#0047AB}</s
 <p><a href="/app/agent_dashboard/index.php">Back to Agent Dashboard</a></p></div></body></html>';
 	exit;
 }
+
+date_default_timezone_set(skykin_timezone());
 
 } // function_exists guard

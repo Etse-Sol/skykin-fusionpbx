@@ -246,17 +246,89 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 /* Audio player */
 .audio-wrap{margin-bottom:14px}
 audio{width:100%;height:32px;border-radius:6px}
+
+/* SkyKin light workspace */
+:root{
+  --sk-blue:#2563eb;--sk-blue-soft:#eff6ff;--sk-green:#16a34a;
+  --sk-text:#172033;--sk-muted:#64748b;--sk-canvas:#f6f8fb;
+  --sk-surface:#fff;--sk-line:#e8edf3;--sk-shadow:0 8px 28px rgba(15,23,42,.06)
+}
+body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
+.topbar{height:60px;padding:0 24px;background:linear-gradient(135deg,#0047ab,#00b4d8);border:0;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.topbar-left{gap:28px}
+.brand{color:#fff;font-size:18px;font-weight:700;letter-spacing:1px;white-space:nowrap}
+.brand .brand-sky{color:#00e5ff}
+.brand .role-badge{margin-left:10px;padding:2px 10px;background:rgba(255,255,255,.2);border-radius:20px;color:#fff;font-size:11px;font-weight:600;letter-spacing:0}
+.nav-links{gap:6px}
+.nav-links a{color:rgba(255,255,255,.82);padding:8px 12px;border-radius:7px;font-size:12px;font-weight:600}
+.nav-links a:hover{background:rgba(255,255,255,.12);color:#fff}
+.nav-links a.active{background:rgba(255,255,255,.2);color:#fff}
+.topbar-right{color:rgba(255,255,255,.86)}
+.user-pill{background:rgba(255,255,255,.14);color:#fff;padding:7px 12px;border-radius:9px}
+.topbar-right a{color:#fff!important;font-weight:600;opacity:.85}
+.topbar-right a:hover{opacity:1}
+
+.filters{min-height:62px;padding:11px 28px;background:var(--sk-canvas);border:0;gap:10px}
+.filters label{color:var(--sk-muted);font-size:11px;font-weight:600}
+.filters input,.filters select{height:38px;background:#fff;border:1px solid #dbe3ec;color:var(--sk-text);padding:7px 11px;border-radius:9px}
+.filters input:focus,.filters select:focus{outline:0;border-color:#93b4f4;box-shadow:0 0 0 3px rgba(37,99,235,.09)}
+.btn-filter{height:38px;background:var(--sk-blue);padding:0 18px;border-radius:9px;font-weight:650;box-shadow:0 3px 8px rgba(37,99,235,.16)}
+.btn-filter:hover{background:#1d4ed8}
+
+.layout{grid-template-columns:minmax(0,1fr) 420px;gap:14px;height:calc(100vh - 126px);padding:0 20px 18px}
+.call-list,.eval-panel{background:var(--sk-surface);border:0;border-radius:14px;box-shadow:var(--sk-shadow)}
+.call-list{padding:8px;overflow-y:auto}
+.eval-panel{padding:20px 22px}
+.call-item{margin:3px 0;padding:13px 14px;border:0;border-radius:10px}
+.call-item:hover{background:#f8fafc}
+.call-item.selected{background:var(--sk-blue-soft);border:0;box-shadow:inset 3px 0 var(--sk-blue)}
+.call-item.evaluated:not(.selected){border:0;box-shadow:inset 3px 0 #22c55e}
+.ci-nums{color:var(--sk-text);font-size:13px}
+.ci-time,.ci-meta{color:var(--sk-muted)}
+.ci-badge.inbound{background:#eff6ff;color:#2563eb}
+.ci-badge.outbound{background:#fff7ed;color:#ea580c}
+.ci-badge.local{background:#f0fdf4;color:#16a34a}
+
+.tabs{gap:6px;border:0;margin-bottom:20px;background:#f1f5f9;padding:4px;border-radius:10px}
+.tab-btn{flex:1;padding:8px;border:0!important;border-radius:7px;color:var(--sk-muted);font-weight:600}
+.tab-btn.active{background:#fff;color:var(--sk-blue);box-shadow:0 1px 4px rgba(15,23,42,.08)}
+.eval-title{color:var(--sk-text);font-size:17px;margin-bottom:14px}
+.eval-meta{display:grid;grid-template-columns:1fr 1fr;gap:9px 16px;background:#f8fafc;padding:14px;border-radius:11px}
+.eval-meta div{margin:0;color:var(--sk-muted);font-size:11px}
+.eval-meta span{color:var(--sk-text)}
+.eval-meta input{height:30px!important;background:#fff!important;border:1px solid #dbe3ec!important;border-radius:7px!important}
+.criterion{margin-bottom:15px}
+.crit-label{color:var(--sk-muted);margin-bottom:7px}
+.crit-label strong{color:#334155;font-weight:650}
+.star{width:34px;height:34px;background:#f8fafc;border:0;border-radius:9px;color:#d7dee8}
+.star:hover,.star.active{background:#f59e0b;border:0;color:#fff;transform:translateY(-1px)}
+.score-display{background:#f8fafc;border-radius:11px;padding:12px}
+.score-bar-bg{background:#e5eaf1}
+.eval-notes{background:#fff;border:1px solid #dbe3ec;border-radius:10px}
+.btn-save{background:var(--sk-blue);border-radius:10px;box-shadow:0 3px 8px rgba(37,99,235,.16)}
+.btn-save:hover{background:#1d4ed8}
+.hist-row{margin-bottom:8px;padding:12px;background:#f8fafc;border:0;border-radius:10px}
+.empty-state{color:var(--sk-muted)}
+.audio-wrap{background:#f8fafc;padding:10px 12px;border-radius:11px}
+
+@media(max-width:850px){
+  .topbar{padding:0 14px}.brand span,.topbar-right .user-pill{display:none}
+  .nav-links{overflow-x:auto}.nav-links a{white-space:nowrap;padding:8px}
+  .filters{padding:10px 14px}.layout{grid-template-columns:1fr;height:auto;padding:0 10px 12px}
+  .call-list{max-height:42vh}.eval-panel{min-height:50vh}.eval-meta{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand">SkyKin<span> Technologies</span></div>
+    <div class="brand"><span class="brand-sky">SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php">Reports</a>
       <a href="/app/agent_dashboard/evaluation.php" class="active">Evaluation</a>
+      <a href="/app/agent_dashboard/crm.php">CRM</a>
       <a href="/app/agent_dashboard/index.php">Agent View</a>
     </nav>
   </div>
@@ -493,12 +565,11 @@ function selectCall(r) {
     // Recording
     const aw = document.getElementById('audioWrap');
     if (r.record_name) {
-        // Serve .webm via FastAPI, .wav via FusionPBX recordings
         const fname = r.record_name;
-        const api = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
-        const url = (fname.endsWith('.webm') && api)
-            ? api + '/api/recordings/' + encodeURIComponent(fname)
-            : '/app/recordings/index.php?filename='+encodeURIComponent(fname)+'&path='+encodeURIComponent(r.record_path||'');
+        const domain = (window.SKYKIN && SKYKIN.domain) || location.hostname;
+        let url = '/app/agent_dashboard/play_recording.php?f='+encodeURIComponent(fname)
+            +'&d='+encodeURIComponent(domain);
+        if (r.record_path) { url += '&path='+encodeURIComponent(r.record_path.replace(/\/+$/,'')); }
         document.getElementById('evalAudio').src = url;
         aw.style.display = 'block';
     } else { aw.style.display = 'none'; }

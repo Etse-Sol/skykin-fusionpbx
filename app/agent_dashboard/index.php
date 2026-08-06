@@ -289,6 +289,201 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_recording') {
     exit;
 }
 
+// ── Upload browser call recording (auto-started on every connected call) ────
+if (isset($_GET['action']) && $_GET['action'] === 'upload_recording' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
+    $call_id = preg_replace('/[^a-zA-Z0-9_\-]/', '', (string)($_GET['call_id'] ?? ('call-' . time())));
+    $ext     = preg_replace('/[^0-9]/', '', (string)($_GET['ext'] ?? ''));
+    $caller  = preg_replace('/[^0-9+\-]/', '', (string)($_GET['caller'] ?? ''));
+
+    if (empty($_FILES['file']) || !is_uploaded_file($_FILES['file']['tmp_name'])) {
+        echo json_encode(['ok' => false, 'error' => 'No recording uploaded']);
+        exit;
+    }
+
+    $base = '/var/lib/freeswitch/recordings/' . $domain_ . '/agent';
+    if (!is_dir($base)) {
+        @mkdir($base, 0775, true);
+    }
+    $filename = $call_id . '.webm';
+    $dest = $base . '/' . $filename;
+    if (!@move_uploaded_file($_FILES['file']['tmp_name'], $dest)) {
+        echo json_encode(['ok' => false, 'error' => 'Failed to save recording']);
+        exit;
+    }
+    @chmod($dest, 0644);
+
+    // Best-effort: attach filename to the newest matching CDR for this agent.
+    // CDR may not exist yet when the browser uploads, so also keep a sidecar
+    // and retry once after a short delay if needed.
+    $meta = [
+        'filename' => $filename,
+        'path' => $base,
+        'ext' => $ext,
+        'caller' => $caller,
+        'domain' => $domain_,
+        'uploaded_at' => date('c'),
+    ];
+    @file_put_contents($dest . '.json', json_encode($meta));
+
+    $linked = false;
+    try {
+        $db = skykin_pdo_fusionpbx();
+        if ($db && $ext !== '') {
+            // Prefer an unanswered recording slot on the newest matching call.
+            $s = $db->prepare(
+                "UPDATE v_xml_cdr
+                 SET record_path = :path, record_name = :name
+                 WHERE xml_cdr_uuid = (
+                    SELECT xml_cdr_uuid FROM v_xml_cdr
+                    WHERE domain_name = :d
+                      AND (caller_id_number = :ext OR destination_number = :ext
+                           OR caller_id_number = :caller OR destination_number = :caller)
+                      AND start_stamp > NOW() - INTERVAL '6 hours'
+                      AND (record_name IS NULL OR record_name = '')
+                    ORDER BY start_stamp DESC LIMIT 1
+                 )"
+            );
+            $s->execute([
+                ':path' => $base,
+                ':name' => $filename,
+                ':d' => $domain_,
+                ':ext' => $ext,
+                ':caller' => $caller !== '' ? $caller : $ext,
+            ]);
+            $linked = ($s->rowCount() > 0);
+            if (!$linked) {
+                // Fall back: overwrite the newest matching CDR even if already linked.
+                $s2 = $db->prepare(
+                    "UPDATE v_xml_cdr
+                     SET record_path = :path, record_name = :name
+                     WHERE xml_cdr_uuid = (
+                        SELECT xml_cdr_uuid FROM v_xml_cdr
+                        WHERE domain_name = :d
+                          AND (caller_id_number = :ext OR destination_number = :ext
+                               OR caller_id_number = :caller OR destination_number = :caller)
+                          AND start_stamp > NOW() - INTERVAL '6 hours'
+                        ORDER BY start_stamp DESC LIMIT 1
+                     )"
+                );
+                $s2->execute([
+                    ':path' => $base,
+                    ':name' => $filename,
+                    ':d' => $domain_,
+                    ':ext' => $ext,
+                    ':caller' => $caller !== '' ? $caller : $ext,
+                ]);
+                $linked = ($s2->rowCount() > 0);
+            }
+        }
+    } catch (Exception $ignored) {}
+
+    echo json_encode(['ok' => true, 'filename' => $filename, 'path' => $base, 'linked' => $linked]);
+    exit;
+}
+
+// ── List recordings for the agent dashboard Recordings tab ───────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $domain_ = skykin_domain_param($_GET['domain'] ?? null);
+    $ext     = preg_replace('/[^0-9]/', '', (string)($_GET['ext'] ?? ''));
+    $from    = $_GET['from'] ?? date('Y-m-d');
+    $to      = $_GET['to']   ?? date('Y-m-d');
+    $ts = strtotime($from . ' 00:00:00');
+    $te = strtotime($to   . ' 23:59:59');
+    $out = [];
+    $seen = [];
+
+    try {
+        $db = skykin_pdo_fusionpbx();
+        if ($db) {
+            $where = "domain_name = :d AND start_epoch >= :ts AND start_epoch <= :te
+                      AND ((record_name IS NOT NULL AND record_name <> '') OR (record_path IS NOT NULL AND record_path <> ''))";
+            $params = [':d' => $domain_, ':ts' => $ts, ':te' => $te];
+            if ($ext !== '') {
+                $where .= " AND (caller_id_number = :ext OR destination_number = :ext)";
+                $params[':ext'] = $ext;
+            }
+            $s = $db->prepare(
+                "SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as datetime,
+                        caller_id_number, destination_number, direction, billsec,
+                        record_path, record_name
+                 FROM v_xml_cdr WHERE {$where}
+                 ORDER BY start_epoch DESC LIMIT 200"
+            );
+            $s->execute($params);
+            foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $file = trim((string)($r['record_name'] ?? ''));
+                $path = rtrim(trim((string)($r['record_path'] ?? '')), '/');
+                if ($file === '') continue;
+                $remote = ($r['direction'] === 'inbound')
+                    ? ($r['caller_id_number'] ?? '')
+                    : ($r['destination_number'] ?? '');
+                $b = (int)$r['billsec'];
+                $filepath = '/app/agent_dashboard/play_recording.php?f=' . rawurlencode($file)
+                    . '&d=' . rawurlencode($domain_)
+                    . ($path !== '' ? '&path=' . rawurlencode($path) : '');
+                $seen[$file] = true;
+                $out[] = [
+                    'datetime' => $r['datetime'],
+                    'remote_number' => $remote,
+                    'duration' => floor($b / 60) . ':' . str_pad((string)($b % 60), 2, '0', STR_PAD_LEFT),
+                    'direction' => $r['direction'] ?: 'outbound',
+                    'filename' => $file,
+                    'filepath' => $filepath,
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        // Fall through to filesystem listing.
+    }
+
+    // Softphone auto-uploads land here even when CDR linking races the upload.
+    $agentDir = '/var/lib/freeswitch/recordings/' . $domain_ . '/agent';
+    if (is_dir($agentDir)) {
+        foreach (glob($agentDir . '/call-*.webm') ?: [] as $path) {
+            $mtime = filemtime($path);
+            if ($mtime < $ts || $mtime > $te) {
+                continue;
+            }
+            $file = basename($path);
+            if (isset($seen[$file])) {
+                continue;
+            }
+            $meta = [];
+            $metaFile = $path . '.json';
+            if (is_file($metaFile)) {
+                $meta = json_decode((string)@file_get_contents($metaFile), true) ?: [];
+            }
+            if ($ext !== '' && !empty($meta['ext']) && (string)$meta['ext'] !== $ext) {
+                continue;
+            }
+            $size = filesize($path) ?: 0;
+            // Rough duration estimate from webm size (~8KB/s Opus mono).
+            $secs = max(1, (int)round($size / 8000));
+            $out[] = [
+                'datetime' => date('Y-m-d H:i', $mtime),
+                'remote_number' => (string)($meta['caller'] ?? ''),
+                'duration' => floor($secs / 60) . ':' . str_pad((string)($secs % 60), 2, '0', STR_PAD_LEFT),
+                'direction' => 'outbound',
+                'filename' => $file,
+                'filepath' => '/app/agent_dashboard/play_recording.php?f=' . rawurlencode($file)
+                    . '&d=' . rawurlencode($domain_),
+            ];
+        }
+    }
+
+    usort($out, function ($a, $b) {
+        return strcmp($b['datetime'], $a['datetime']);
+    });
+
+    echo json_encode(['recordings' => $out]);
+    exit;
+}
+
 // ── Save Case (Escalation) to DB ───────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'save_case') {
     error_reporting(0);
@@ -689,7 +884,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'update_callback_status' && $_
 // FusionPBX's real mechanism: UPDATE v_call_center_agents AND send
 //   callcenter_config agent set status <uuid> '<status>'
 // through the FreeSWITCH Event Socket (port 8021).
-// ESL credentials are read from .env: ESL_HOST, ESL_PORT, ESL_PASSWORD.
+// ESL settings come from skykin_esl_settings(): FreeSWITCH's own
+// event_socket.conf.xml, overridable via .env / ESL_* env vars.
 // If ESL is unreachable (e.g. local dev with ACL blocking), the DB is still
 // updated and the response includes esl_error for debugging.
 if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -764,58 +960,21 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
         $s_upd->execute([':s' => $new_status, ':uuid' => $agent_uuid]);
 
         // ── 4. Send ESL command to FreeSWITCH ─────────────────────────────────────
-        // Load ESL credentials: env vars → .env file → defaults (127.0.0.1:8021/ClueCon)
-        // On production VM the ESL ACL allows 127.0.0.1 by default.
-        // For local dev: add ESL_HOST=<vm_ip> and ensure VM ACL allows your IP,
-        // or SSH-tunnel: ssh -L 8021:127.0.0.1:8021 user@<vm_ip>
-        $esl_host = '127.0.0.1';
-        $esl_port = 8021;
-        $esl_pass = 'ClueCon';
-        foreach ([__DIR__ . '/../../.env', __DIR__ . '/../.env', __DIR__ . '/.env'] as $envPath) {
-            if (file_exists($envPath)) {
-                foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $ln) {
-                    $ln = trim($ln);
-                    if (strpos($ln, '#') === 0 || strpos($ln, '=') === false) continue;
-                    [$k, $v] = explode('=', $ln, 2);
-                    $k = trim($k); $v = trim($v, " \t\n\r\0\x0B\"'");
-                    if ($k === 'ESL_HOST')     $esl_host = $v;
-                    if ($k === 'ESL_PORT')     $esl_port = intval($v);
-                    if ($k === 'ESL_PASSWORD') $esl_pass = $v;
-                }
-                break;
-            }
-        }
-        if (getenv('ESL_HOST'))     $esl_host = getenv('ESL_HOST');
-        if (getenv('ESL_PORT'))     $esl_port = intval(getenv('ESL_PORT'));
-        if (getenv('ESL_PASSWORD')) $esl_pass = getenv('ESL_PASSWORD');
-
-        // Load FusionPBX's own event_socket class (no require.php needed)
         $esl_connected   = false;
         $esl_response    = '';
         $esl_state_resp  = '';
         $esl_error       = '';
-        try {
-            if (!class_exists('config'))       require_once __DIR__ . '/../../resources/classes/config.php';
-            if (!class_exists('event_socket')) require_once __DIR__ . '/../../resources/classes/event_socket.php';
-            $esl = new event_socket();
-            if ($esl->connect($esl_host, $esl_port, $esl_pass)) {
-                $esl_connected = true;
-                // Set agent status (exact FusionPBX pattern from call_center_agent_status.php)
-                $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
-                $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
-                // Set agent state to Waiting when becoming Available or Logged Out
-                if ($new_status === 'Available' || $new_status === 'Logged Out') {
-                    $res2 = $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
-                    $esl_state_resp = is_array($res2) ? ($res2['$'] ?? implode(' | ', $res2)) : (string)$res2;
-                }
-            } else {
-                $esl_error = 'ESL connect failed — ACL rejected or wrong password. ' .
-                             'On production VM this works via 127.0.0.1. ' .
-                             'For local dev: add ESL_HOST=' . $esl_host . ' to .env and allow your IP in ' .
-                             'freeswitch/autoload_configs/event_socket.conf.xml, or SSH-tunnel port 8021.';
+        $esl = skykin_esl($esl_error);
+        if ($esl) {
+            $esl_connected = true;
+            // Set agent status (exact FusionPBX pattern from call_center_agent_status.php)
+            $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
+            $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
+            // Set agent state to Waiting when becoming Available or Logged Out
+            if ($new_status === 'Available' || $new_status === 'Logged Out') {
+                $res2 = $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
+                $esl_state_resp = is_array($res2) ? ($res2['$'] ?? implode(' | ', $res2)) : (string)$res2;
             }
-        } catch (Throwable $esl_ex) {
-            $esl_error = $esl_ex->getMessage();
         }
 
         echo json_encode([
@@ -1011,6 +1170,29 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
     } catch (Exception $e) {
         echo json_encode(['agents' => [], 'error' => $e->getMessage()]);
     }
+    exit;
+}
+
+// ── Softphone client diagnostics (temporary) ────────────────────────────────
+// The browser is the only place that knows why answering a call failed, so it
+// reports the error here for server-side troubleshooting.
+if (isset($_GET['action']) && $_GET['action'] === 'client_log' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $line = sprintf(
+        "%s user=%s ext=%s event=%s name=%s message=%s extra=%s ua=%s\n",
+        date('Y-m-d H:i:s'),
+        $_SESSION['username'] ?? '-',
+        substr((string)($body['ext'] ?? '-'), 0, 12),
+        substr((string)($body['event'] ?? '-'), 0, 40),
+        substr((string)($body['name'] ?? '-'), 0, 60),
+        substr(str_replace(["\n", "\r"], ' ', (string)($body['message'] ?? '-')), 0, 300),
+        substr(str_replace(["\n", "\r"], ' ', (string)($body['extra'] ?? '-')), 0, 300),
+        substr((string)($_SERVER['HTTP_USER_AGENT'] ?? '-'), 0, 60)
+    );
+    @error_log($line, 3, skykin_log_path('client.log'));
+    echo json_encode(['ok' => true]);
     exit;
 }
 
@@ -1551,9 +1733,9 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     transition: right 0.3s ease;
 }
 .phone-popup.open { right: 0; }
-.pp-body { flex-shrink: 0; }
+.pp-body { flex-shrink: 0; padding: 0; }
+.phone-popup.call-active .pp-body { padding: 12px 16px; }
 .dp-panel { flex-shrink: 0; }
-.pp-footer { flex-shrink: 0; border-top: 1px solid #f0f0f0; padding: 10px 16px; }
 /* Shift main content when panel is open */
 body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
 .pp-header {
@@ -1561,6 +1743,14 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     color: white; padding: 14px 16px;
     display: flex; align-items: center; justify-content: space-between;
 }
+.pp-header-actions { display: flex; align-items: center; gap: 6px; }
+.btn-settings-header {
+    width: 30px; height: 30px; border: 0; border-radius: 50%;
+    background: rgba(255,255,255,.16); color: #fff; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 15px; transition: background .15s ease;
+}
+.btn-settings-header:hover { background: rgba(255,255,255,.28); }
 .pp-status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .sip-dot { width: 10px; height: 10px; border-radius: 50%; background: #888; flex-shrink: 0; }
 .sip-dot.registered { background: #28a745; animation: pulse 2s infinite; }
@@ -1574,7 +1764,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 14px;
     display: flex; align-items: center; justify-content: center;
 }
-.pp-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.pp-body { display: flex; flex-direction: column; gap: 10px; }
 .dial-input-wrap { display: flex; gap: 6px; }
 .dial-input {
     flex: 1; border: 1px solid #ddd; border-radius: 8px;
@@ -1590,60 +1780,76 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 .btn-dialpad:hover { background: #e2e8f0; }
 .call-controls {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(12, 1fr);
     gap: 8px;
 }
 .btn-call {
-    grid-column: span 2;
-    background: #28a745; border: none; color: white;
-    padding: 12px 0; border-radius: 8px; cursor: pointer;
-    font-size: 14px; font-weight: bold;
+    grid-column: 3 / span 8;
+    background: #15803d; border: none; color: white;
+    padding: 11px 0; border-radius: 9px; cursor: pointer;
+    font-size: 13px; font-weight: 650;
 }
-.btn-call:hover { background: #218838; }
+#btnCall { display: none !important; }
+.btn-call:hover { background: #166534; }
 .btn-call:disabled { background: #ccc; cursor: not-allowed; }
 .btn-hangup {
-    grid-column: span 2;
-    background: #dc3545; border: none; color: white;
-    padding: 12px 0; border-radius: 8px; cursor: pointer;
-    font-size: 14px; font-weight: bold; display: none;
+    grid-column: 3 / span 8;
+    order: 4;
+    background: #c92a3d; border: 1px solid #c92a3d; color: white;
+    padding: 11px 0; border-radius: 9px; cursor: pointer;
+    font-size: 13px; font-weight: 650; display: none;
+    box-shadow: 0 2px 5px rgba(201,42,61,.18); transition: all .15s ease;
 }
-.btn-hangup:hover { background: #c82333; }
-.btn-hold {
-    background: #ffc107; border: none; color: #333;
-    padding: 12px 0; border-radius: 8px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none;
+.btn-hangup:hover { background: #a91f31; border-color: #a91f31; }
+.btn-hold, .btn-mute, .btn-record, .btn-keypad {
+    grid-column: span 3;
+    min-height: 54px; background: #fff; border: 1px solid #dfe5ec; color: #334155;
+    padding: 8px 4px; border-radius: 9px; cursor: pointer;
+    font-size: 11px; font-weight: 600; display: none;
+    align-items: center; justify-content: center; flex-direction: column; gap: 4px;
+    transition: all .15s ease;
 }
-.btn-mute {
-    background: #6c757d; border: none; color: white;
-    padding: 12px 0; border-radius: 8px; cursor: pointer;
-    font-size: 13px; font-weight: bold; display: none;
+.btn-hold:hover, .btn-mute:hover, .btn-record:hover, .btn-keypad:hover {
+    background: #f8fafc; border-color: #b9c5d2; color: #0f3f79;
 }
-.btn-mute.muted { background: #dc3545; }
+.btn-hold::before, .btn-mute::before, .btn-record::before, .btn-keypad::before {
+    color: #64748b; font-size: 15px; font-weight: 700; line-height: 1;
+}
+#btnHold::before { content: "Ⅱ"; letter-spacing: -2px; }
+#btnMute::before { content: "◉"; }
+#btnRecord::before { content: "●"; color: #c92a3d; font-size: 12px; }
+#btnKeypad::before { content: "⌨"; }
+.btn-hold.active, .btn-mute.muted, .btn-keypad.active {
+    background: #eef6ff; border-color: #8eb9e6; color: #0047ab;
+}
+.btn-mute.muted::before { color: #c92a3d; }
 .btn-record {
-    grid-column: span 2;
-    background: #fff0f0; border: 1px solid #f5c6cb; color: #dc3545;
-    padding: 11px 0; border-radius: 8px; cursor: pointer;
-    font-size: 12px; font-weight: bold; display: none; align-items: center;
-    justify-content: center; gap: 5px;
+    grid-column: span 3;
+    cursor: default;
+    pointer-events: none;
 }
-.btn-record.recording { background: #dc3545; color: white; border-color: #dc3545; }
+.btn-record.recording { background: #fff1f2; color: #9f1239; border-color: #fda4af; }
 .btn-record.visible   { display: flex; }
-.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
-.btn-record.recording .rec-dot { animation: pulse 1s infinite; }
+.rec-dot { display: none; }
+.btn-record.recording .rec-dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: #c92a3d; animation: pulse 1s infinite;
+}
 .call-timer {
     text-align: center; font-size: 22px; font-weight: bold;
     color: #0047AB; display: none; padding: 4px 0;
 }
-.pp-footer {
-    padding: 10px 16px; border-top: 1px solid #f0f0f0;
-    display: flex; justify-content: flex-end;
+.btn-phone-action, .btn-transfer {
+    min-height: 38px; background: #fff; border: 1px solid #dfe5ec; color: #334155;
+    border-radius: 9px; padding: 9px 8px; cursor: pointer; display: none;
+    font-size: 11px; font-weight: 600; transition: all .15s ease;
 }
-.btn-settings {
-    background: none; border: none; color: #aaa;
-    cursor: pointer; font-size: 12px; padding: 4px 8px;
-    border-radius: 6px;
+.btn-phone-action:hover, .btn-transfer:hover {
+    background: #f8fafc; border-color: #9fb0c2; color: #0047ab;
 }
-.btn-settings:hover { background: #f0f0f0; color: #555; }
+.btn-phone-action { grid-column: span 6; order: 2; }
+.btn-transfer { grid-column: span 12; margin-top: 0; order: 3; }
+.btn-transfer.visible { display: block; }
 
 /* ?? Incoming call overlay ?? */
 .incoming-overlay {
@@ -1671,35 +1877,57 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 /* ?? Dial Pad (inline inside popup) ?? */
 .dp-panel {
-    display: block; padding: 0 16px 16px;
+    display: block; padding: 14px 22px 22px;
+    background: #fff;
 }
 .dp-panel.open { display: block; }
 @keyframes fadeIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
-.dp-display {
-    background: #f0f4ff; border-radius: 8px; padding: 10px 14px;
-    font-size: 20px; font-weight: bold; color: #0047AB;
-    text-align: center; letter-spacing: 3px; min-height: 44px;
-    margin-bottom: 12px; display: flex; align-items: center; justify-content: center;
-    word-break: break-all;
+.dp-title {
+    margin: 0 0 10px; color: #64748b; font-size: 10px; font-weight: 700;
+    letter-spacing: 1.2px; text-align: center; text-transform: uppercase;
 }
-.dp-display.empty { color: #ccc; font-size: 12px; letter-spacing: 0; font-weight: normal; }
+.dp-display {
+    background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
+    padding: 10px 38px 10px 14px; font-size: 20px; font-weight: 650; color: #0f3f79;
+    text-align: center; letter-spacing: 2px; min-height: 46px; position: relative;
+    margin-bottom: 16px; display: flex; align-items: center; justify-content: center;
+    word-break: break-all; box-shadow: inset 0 1px 2px rgba(15,23,42,.03);
+}
+.dp-display.empty { color: #94a3b8; font-size: 12px; letter-spacing: 0; font-weight: 500; }
 .dp-grid {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px;
+    display: grid; grid-template-columns: repeat(3, 58px); gap: 10px 18px;
+    justify-content: center; margin-bottom: 16px;
 }
 .dp-key {
-    background: #f0f2f5; border: none; border-radius: 8px;
-    padding: 12px 0; font-size: 16px; font-weight: bold; color: #333;
-    cursor: pointer; text-align: center; transition: background 0.1s;
-    display: flex; flex-direction: column; align-items: center; line-height: 1.2;
+    width: 58px; height: 58px; background: #f8fafc; border: 1px solid #e2e8f0;
+    border-radius: 50%; padding: 0; font-size: 19px; font-weight: 650; color: #172b4d;
+    cursor: pointer; text-align: center; transition: all .14s ease;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    line-height: 1.05; box-shadow: 0 2px 5px rgba(15,23,42,.06);
 }
-.dp-key:hover  { background: #dce3f0; }
-.dp-key:active { background: #c8d4f0; transform: scale(0.95); }
-.dp-key .dp-sub { font-size: 8px; color: #999; font-weight: normal; margin-top: 1px; }
-.dp-row-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.dp-call { background: #28a745; color: white; border: none; border-radius: 8px; padding: 12px 0; font-size: 15px; font-weight: bold; cursor: pointer; }
-.dp-call:hover { background: #218838; }
-.dp-del  { background: #fff0f0; color: #dc3545; border: none; border-radius: 8px; padding: 12px 0; font-size: 18px; cursor: pointer; }
-.dp-del:hover  { background: #ffd5d5; }
+.dp-key:hover  { background: #eef6ff; border-color: #9dc5f0; color: #0047ab; transform: translateY(-1px); }
+.dp-key:active { background: #dbeafe; transform: scale(.94); box-shadow: none; }
+.dp-key .dp-sub {
+    min-height: 8px; margin-top: 3px; color: #8290a5; font-size: 7px;
+    font-weight: 700; letter-spacing: 1px;
+}
+.dp-row-actions {
+    display: grid; grid-template-columns: 44px 1fr 44px; gap: 10px;
+    align-items: center;
+}
+.dp-call {
+    grid-column: 2; background: linear-gradient(135deg, #16a34a, #22c55e);
+    color: white; border: none; border-radius: 24px; min-height: 44px;
+    padding: 10px 18px; font-size: 14px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 5px 12px rgba(34,197,94,.22); transition: all .15s ease;
+}
+.dp-call:hover { transform: translateY(-1px); box-shadow: 0 7px 16px rgba(34,197,94,.3); }
+.dp-del {
+    grid-column: 3; grid-row: 1; width: 44px; height: 44px; background: transparent;
+    color: #64748b; border: 1px solid #e2e8f0; border-radius: 50%;
+    padding: 0; font-size: 18px; cursor: pointer; transition: all .14s ease;
+}
+.dp-del:hover { background: #fff1f2; border-color: #fecdd3; color: #e11d48; }
 
 /* ?? Pagination ?? */
 .pagination-bar {
@@ -1938,13 +2166,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 }
 .transfer-loading { text-align: center; color: #888; font-size: 13px; padding: 20px; }
 .btn-transfer {
-    background: #6366f1; border: none; color: white;
-    padding: 10px 0; border-radius: 8px; cursor: pointer;
-    font-size: 13px; font-weight: bold;
-    grid-column: span 2; margin-top: 4px; display: none;
+    grid-column: span 12;
 }
-.btn-transfer:hover { background: #4f46e5; }
 .btn-transfer.visible { display: block; }
+
+
 </style>
 </head>
 <body>
@@ -1952,7 +2178,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <!-- ?? HEADER ?? -->
 <div class="header">
     <div style="display:flex;align-items:center;gap:12px">
-        <button onclick="toggleAgentSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
+        <button class="agent-sidebar-toggle" onclick="toggleAgentSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
         <div class="logo">SKY<span>KIN</span> Technologies</div>
     </div>
     <div class="agent-info">
@@ -2000,7 +2226,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 
 <!-- ── Agent Side Menu ─────────────────────────────────────── -->
 <div id="agentSideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
-    <div style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
+    <div class="agent-sidebar-brand" style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
         <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
         <div style="font-size:11px;opacity:.8;margin-top:3px">Agent Panel</div>
     </div>
@@ -2012,30 +2238,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <?php endif; ?>
 
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Menu</div>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('dashboard')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128187;</span> Dashboard
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('callHistory')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128222;</span> Call History
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('recordings')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#127908;</span> Recordings
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('acw')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128203;</span> ACW History
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('escalation')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#127915;</span> New Ticket
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('lookup')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128269;</span> Customer Lookup
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('callbacks')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128197;</span> Callbacks
-        </a>
-        <a href="#" onclick="toggleAgentSideMenu();switchTab('ahununu')" style="display:flex;align-items:center;gap:12px;padding:11px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#127760;</span> Ahununu.com
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Account</div>
+        <a href="#" onclick="toggleAgentSideMenu();document.getElementById('settingsModal').classList.add('show')" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:16px">&#9881;</span> Phone Settings
         </a>
 
         <div style="height:1px;background:#eee;margin:6px 0"></div>
@@ -2564,7 +2769,10 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="sip-dot" id="sipDot"></div>
             <span id="sipStatusText">Not Connected</span>
         </div>
-        <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
+        <div class="pp-header-actions">
+            <button class="btn-settings-header" onclick="document.getElementById('settingsModal').classList.add('show')" title="Phone settings" aria-label="Phone settings">&#9881;</button>
+            <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
+        </div>
     </div>
     <div class="pp-body">
         <!-- Incoming call screen (shown instead of dialpad when call arrives) -->
@@ -2582,25 +2790,22 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <input type="tel" class="dial-input" id="dialInput" placeholder="" maxlength="20" style="display:none">
         <div class="call-controls">
             <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled style="display:none">&#128222; Call</button>
-            <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">&#128222; Hang Up</button>
+            <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">End call</button>
             <button class="btn-hold"   id="btnHold"   onclick="toggleHold()">Hold</button>
             <button class="btn-mute"   id="btnMute"   onclick="toggleMute()">Mute</button>
-            <button class="btn-record" id="btnRecord" onclick="toggleRecord()">
-                <span class="rec-dot"></span> Record
+            <button class="btn-record" id="btnRecord" type="button" title="Calls are recorded automatically" disabled>
+                <span class="rec-dot"></span> REC
             </button>
-            <button class="btn-hold"   id="btnPhoneSms" onclick="openSmsModalFromPhone()" style="display:none; background:#0ea5e9; color:white; grid-column:span 2; margin-top:4px;">Send SMS</button>
-            <button class="btn-hold"   id="btnPhoneCallback" onclick="openCallbackModalFromPhone()" style="display:none; background:#ffc107; color:#333; grid-column:span 2; margin-top:4px;">Schedule Callback</button>
-            <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">&#x21AA; Transfer Call</button>
+            <button class="btn-keypad" id="btnKeypad" onclick="toggleCallKeypad()">Keypad</button>
+            <button class="btn-phone-action" id="btnPhoneSms" onclick="openSmsModalFromPhone()">Message</button>
+            <button class="btn-phone-action" id="btnPhoneCallback" onclick="openCallbackModalFromPhone()">Callback</button>
+            <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">Transfer call</button>
         </div>
-    </div>
-
-    <!-- Phone Settings above dial pad -->
-    <div class="pp-footer" style="border-top:none; border-bottom:1px solid #f0f0f0; padding: 8px 16px;">
-        <button class="btn-settings" onclick="document.getElementById('settingsModal').classList.add('show')">&#9881; Phone Settings</button>
     </div>
 
     <!-- Inline Dial Pad -->
     <div class="dp-panel" id="dpPanel">
+        <div class="dp-title">Dial a number</div>
         <div class="dp-display empty" id="dpDisplay">Enter number...</div>
         <div class="dp-grid">
             <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
@@ -2617,8 +2822,8 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="dp-key" onclick="dpKey('#')">#</button>
         </div>
         <div class="dp-row-actions">
-            <button class="dp-call" onclick="dpCall()">&#128222; Call</button>
-            <button class="dp-del"  onclick="dpDelete()">&#9003;</button>
+            <button class="dp-call" onclick="dpCall()" title="Start call">&#128222;&nbsp; Call</button>
+            <button class="dp-del" onclick="dpDelete()" title="Delete last digit" aria-label="Delete last digit">&#9003;</button>
         </div>
     </div>
 
@@ -2671,6 +2876,39 @@ let countdown   = refreshInterval;
             throw err;
         });
     };
+})();
+
+// A single uncaught error aborts the rest of the script and silently breaks the
+// softphone, so report crashes to the server instead of only the console.
+(function() {
+    function report(payload) {
+        try {
+            fetch('index.php?action=client_log', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).catch(function(){});
+        } catch (e) {}
+    }
+    window.addEventListener('error', function(e) {
+        report({
+            event: 'js_error',
+            name: (e.error && e.error.name) || 'Error',
+            message: e.message || '',
+            extra: (e.filename || '') + ':' + (e.lineno || 0) + ':' + (e.colno || 0),
+            ext: localStorage.getItem('sip_ext') || ''
+        });
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+        const r = e.reason || {};
+        report({
+            event: 'js_rejection',
+            name: r.name || '',
+            message: r.message || String(r),
+            extra: '',
+            ext: localStorage.getItem('sip_ext') || ''
+        });
+    });
 })();
 
 // ?? Clock ??????????????????????????????????????????
@@ -3032,10 +3270,13 @@ function fetchAcwHistory() {
         });
 }
 
-// Dial pad always open ? no toggle needed
+// Dial pad doubles as a DTMF keypad during an active call.
 let dpNumber = '';
 let padOpen  = true;
 function dpKey(k) {
+    if (callStartTime && sipBridge.sendDtmf) {
+        try { sipBridge.sendDtmf(k); } catch(e) {}
+    }
     dpNumber += k;
     updateDpDisplay();
     document.getElementById('dialInput').value = dpNumber;
@@ -3059,7 +3300,14 @@ function dpCall() {
     if (!dpNumber) return;
     makeCall(dpNumber);
 }
-// No outside-click close for dial pad (always visible)
+function toggleCallKeypad() {
+    const panel = document.getElementById('dpPanel');
+    const button = document.getElementById('btnKeypad');
+    const opening = panel.style.display === 'none';
+    panel.style.display = opening ? '' : 'none';
+    button.classList.toggle('active', opening);
+    padOpen = opening;
+}
 
 // ?? Fetch dashboard data ???????????????????????????
 function fetchData() {
@@ -3139,7 +3387,11 @@ let recAudio = null;
 function playRecording(path) {
     if (recAudio) { recAudio.pause(); recAudio = null; }
     recAudio = new Audio(path);
-    recAudio.play().catch(() => alert('Cannot play: ' + path));
+    recAudio.addEventListener('error', () => {
+        const code = recAudio.error ? recAudio.error.code : 0;
+        toast(code === 4 ? 'Recording file is missing or unreadable' : 'Playback failed (code ' + code + ')', '#c62828');
+    });
+    recAudio.play().catch(e => toast('Playback blocked: ' + (e.name || e.message), '#c62828'));
 }
 
 // ?? Empty data (no calls / API error) ?????????????
@@ -3484,6 +3736,8 @@ function setSipStatus(state, text) {
     const dot   = document.getElementById('sipDot');
     const badge = document.getElementById('fabBadge');
     const fab   = document.getElementById('phoneFab');
+    const popup = document.getElementById('phonePopup');
+    popup.classList.toggle('call-active', state === 'calling' || state === 'incall');
     dot.className = 'sip-dot'; badge.className = 'fab-badge'; fab.className = 'phone-fab';
     if (state === 'registered') {
         dot.classList.add('registered'); badge.classList.add('show');
@@ -3495,6 +3749,7 @@ function setSipStatus(state, text) {
         // Show hang-up button so caller can cancel before answer
         document.getElementById('btnCall').style.display   = 'none';
         document.getElementById('btnHangup').style.display = 'block';
+        document.getElementById('dpPanel').style.display = 'none';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
@@ -3576,14 +3831,22 @@ function startCallUI(number) {
     setSipStatus('incall', 'In Call: ' + number);
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
-    document.getElementById('btnHold').style.display   = 'block';
-    document.getElementById('btnMute').style.display   = 'block';
-    document.getElementById('btnRecord').classList.add('visible');
+    document.getElementById('btnHold').style.display   = 'flex';
+    document.getElementById('btnMute').style.display   = 'flex';
+    // Recording starts automatically on every connected call — no agent action.
+    isRecording = true;
+    const btnRec = document.getElementById('btnRecord');
+    btnRec.classList.add('visible', 'recording');
+    btnRec.innerHTML = '<span class="rec-dot"></span> REC';
+    document.getElementById('btnKeypad').style.display = 'flex';
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number;
     // Hide incoming screen if still showing (edge case)
     document.getElementById('incomingScreen').style.display = 'none';
-    document.getElementById('dpPanel').style.display = '';
+    document.getElementById('dpPanel').style.display = 'none';
+    document.getElementById('btnKeypad').classList.remove('active');
+    dpNumber = '';
+    updateDpDisplay();
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
     
@@ -3617,13 +3880,11 @@ function toggleHold() {
     if (onHold) {
         if (sipBridge.unhold) sipBridge.unhold(); onHold = false;
         document.getElementById('btnHold').textContent = 'Hold';
-        document.getElementById('btnHold').style.background = '#ffc107';
-        document.getElementById('btnHold').style.color = '#333';
+        document.getElementById('btnHold').classList.remove('active');
     } else {
         if (sipBridge.hold) sipBridge.hold(); onHold = true;
         document.getElementById('btnHold').textContent = 'Resume';
-        document.getElementById('btnHold').style.background = '#28a745';
-        document.getElementById('btnHold').style.color = 'white';
+        document.getElementById('btnHold').classList.add('active');
     }
 }
 
@@ -3640,18 +3901,17 @@ function toggleMute() {
 }
 
 function toggleRecord() {
-    isRecording = !isRecording;
-    const btn = document.getElementById('btnRecord');
-    if (isRecording) {
-        btn.classList.add('recording');
-        btn.innerHTML = '<span class="rec-dot"></span> Stop Rec';
-        if (sipBridge.sendDtmf) try { sipBridge.sendDtmf('*1'); } catch(e) {}
-    } else {
-        btn.classList.remove('recording');
-        btn.innerHTML = '<span class="rec-dot"></span> Record';
-        if (sipBridge.sendDtmf) try { sipBridge.sendDtmf('*1'); } catch(e) {}
-    }
+    // Recording is automatic. Kept as a no-op so old onclick handlers cannot break.
 }
+
+function markRecordingActive() {
+    isRecording = true;
+    const btn = document.getElementById('btnRecord');
+    if (!btn) return;
+    btn.classList.add('visible', 'recording');
+    btn.innerHTML = '<span class="rec-dot"></span> REC';
+}
+window.markRecordingActive = markRecordingActive;
 
 function endCall() {
     // Guard: prevent double-firing (hangupCall + SIP Terminated both call endCall)
@@ -3669,6 +3929,7 @@ function endCall() {
     // ── Critical UI reset (must always run) ────────────────────────────────
     try {
         currentSession = null; onHold = false; isRecording = false; isMuted = false;
+        document.getElementById('phonePopup').classList.remove('call-active');
         clearInterval(callTimerInterval); callStartTime = null;
         document.getElementById('btnCall').style.display   = 'block';
         document.getElementById('btnHangup').style.display = 'none';
@@ -3677,8 +3938,11 @@ function endCall() {
         document.getElementById('btnMute').textContent     = 'Mute';
         document.getElementById('btnMute').classList.remove('muted');
         document.getElementById('btnRecord').classList.remove('visible','recording');
-        document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> Record';
+        document.getElementById('btnKeypad').style.display = 'none';
+        document.getElementById('btnKeypad').classList.remove('active');
+        document.getElementById('btnRecord').innerHTML = '<span class="rec-dot"></span> REC';
         document.getElementById('btnHold').textContent = 'Hold';
+        document.getElementById('btnHold').classList.remove('active');
         document.getElementById('callTimer').style.display = 'none';
         document.getElementById('callTimer').textContent   = '00:00';
         document.getElementById('incomingScreen').style.display = 'none';
@@ -3912,18 +4176,26 @@ function showToast(msg) {
 })();
 
 // ?? Event wiring ??????????????????????????????????
-document.getElementById('btnAnswer').addEventListener('click', answerCall);
-document.getElementById('btnDecline').addEventListener('click', declineCall);
-document.getElementById('settingsModal').addEventListener('click', function(e) {
+// btnAnswer/btnDecline live in the legacy overlay and no longer exist. Wiring
+// them unguarded threw a TypeError that aborted the rest of this script, which
+// left the dialpad and softphone half-initialised.
+function bindEl(id, evt, fn) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(evt, fn);
+}
+
+bindEl('btnAnswer', 'click', answerCall);
+bindEl('btnDecline', 'click', declineCall);
+bindEl('settingsModal', 'click', function(e) {
     if (e.target === this) this.classList.remove('show');
 });
-document.getElementById('acwModal').addEventListener('click', function(e) {
+bindEl('acwModal', 'click', function(e) {
     if (e.target === this) closeAcwModal();
 });
-document.getElementById('dialInput').addEventListener('keypress', function(e) {
+bindEl('dialInput', 'keypress', function(e) {
     if (e.key === 'Enter') makeCall();
 });
-document.getElementById('dialInput').addEventListener('input', function() {
+bindEl('dialInput', 'input', function() {
     dpNumber = this.value;
 });
 
@@ -4479,13 +4751,19 @@ const pbxDomain = () => localStorage.getItem('sip_domain') || (window.SKYKIN && 
 
 function startRec(stream) {
     try {
-        const mr = new MediaRecorder(stream);
+        if (window.mediaRecorderRef && window.mediaRecorderRef.state !== 'inactive') {
+            try { window.mediaRecorderRef.stop(); } catch (e) {}
+        }
+        const mr = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm' });
         window.recordingChunks = [];
-        mr.ondataavailable = e => { if (e.data.size > 0) window.recordingChunks.push(e.data); };
+        mr.ondataavailable = e => { if (e.data && e.data.size > 0) window.recordingChunks.push(e.data); };
         mr.start(1000);
         window.mediaRecorderRef = mr;
         window.recordingCallId = 'call-' + Date.now();
-    } catch(e) {}
+        window.markRecordingActive && window.markRecordingActive();
+    } catch(e) {
+        window.sipReport && window.sipReport('record_start_failed', e, '');
+    }
 }
 
 function stopRec() {
@@ -4500,28 +4778,54 @@ function stopRec() {
         fd.append('file', blob, id + '.webm');
         const ext = localStorage.getItem('sip_ext') || '';
         const dom = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
-        // Upload to FastAPI then link to FusionPBX CDR for Evaluation badge
+        const caller = window.lastDialedNumber || '';
         try {
-            const base = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
-            if (!base) return;
-            const resp = await fetch(base + '/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
-            if (resp.ok) {
-                // Link recording filename to CDR so ?? badge shows in Evaluation
-                fetch('index.php?action=link_recording&filename=' + encodeURIComponent(id+'.webm') + '&ext=' + encodeURIComponent(ext) + '&domain=' + encodeURIComponent(dom));
+            // Prefer local dashboard upload so recordings work without the helper API.
+            const resp = await fetch(
+                'index.php?action=upload_recording'
+                    + '&call_id=' + encodeURIComponent(id)
+                    + '&ext=' + encodeURIComponent(ext)
+                    + '&domain=' + encodeURIComponent(dom)
+                    + '&caller=' + encodeURIComponent(caller),
+                { method: 'POST', body: fd, credentials: 'same-origin' }
+            );
+            if (!resp.ok) {
+                const base = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
+                if (base) {
+                    await fetch(base + '/api/recordings/upload?call_id=' + encodeURIComponent(id), { method:'POST', body:fd });
+                }
             }
-        } catch(e) {}
+        } catch(e) {
+            window.sipReport && window.sipReport('record_upload_failed', e, 'id=' + id);
+        }
     };
-    mr.stop(); window.mediaRecorderRef = null;
+    try { mr.stop(); } catch(e) {}
+    window.mediaRecorderRef = null;
 }
 
 function attachAudio(s) {
     const sdh = s.sessionDescriptionHandler;
     if (!sdh?.peerConnection) return;
-    const stream = new MediaStream();
-    sdh.peerConnection.getReceivers().forEach(r => { if (r.track) stream.addTrack(r.track); });
+    const pc = sdh.peerConnection;
+    const remote = new MediaStream();
+    pc.getReceivers().forEach(r => { if (r.track) remote.addTrack(r.track); });
     const el = document.getElementById('remoteAudio');
-    if (el) { el.srcObject = stream; el.play().catch(()=>{}); }
-    startRec(stream);
+    if (el) { el.srcObject = remote; el.play().catch(()=>{}); }
+
+    // Mix local mic + remote audio so the saved file contains both sides.
+    const mix = new MediaStream();
+    remote.getAudioTracks().forEach(t => mix.addTrack(t));
+    const addLocal = function(stream) {
+        if (stream) stream.getAudioTracks().forEach(t => mix.addTrack(t.clone()));
+        startRec(mix);
+    };
+    if (window._micStream) {
+        addLocal(window._micStream);
+    } else if (window.ensureMic) {
+        window.ensureMic().then(addLocal).catch(function() { startRec(remote); });
+    } else {
+        startRec(remote);
+    }
 }
 
 function bindSession(s) {
@@ -4563,19 +4867,26 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
             : wsUri + ':' + (port || '5066');
     }
 
+    // SIP.js defaults dump every SIP packet to the console; keep it to errors
+    // so the agent console stays readable in production.
     ua = new UserAgent({
         uri: UserAgent.makeURI('sip:' + ext + '@' + dom),
         transportOptions: {
-            server: wsUri
+            server: wsUri,
+            traceSip: false
         },
         authorizationUsername: ext,
-        authorizationPassword: pass
+        authorizationPassword: pass,
+        logLevel: 'error',
+        logConfiguration: false
     });
 
-    reg = new Registerer(ua);
+    reg = new Registerer(ua, { logConfiguration: false });
     reg.stateChange.addListener(state => {
         if (state === 'Registered') {
             window.setSipStatus('registered', 'Registered (' + ext + ')');
+            // Warm up the mic so answering never waits on a permission prompt
+            window.ensureMic && window.ensureMic().catch(function(){});
         } else if (state === 'Unregistered') {
             window.setSipStatus('unregistered', 'Not Registered');
         } else if (state === 'Terminated') {
@@ -4595,6 +4906,11 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
+
+            // Tell the PBX we are ringing. Without a 180 the caller only hears
+            // local ringback and the leg dies on the 30s originate timeout.
+            try { inv.progress(); } catch (e) { console.warn('progress failed', e); }
+
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }
@@ -4609,14 +4925,33 @@ window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
     if (!uri) return;
-    const inv = new Inviter(ua, uri, {
-        sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
-    });
-    session = inv;
-    window.setSipStatus && window.setSipStatus('calling', 'Calling ' + number);
-    bindSession(inv);
-    inv.invite().catch(err => {
-        window.setSipStatus && window.setSipStatus('failed', 'Call failed: ' + err.message);
+
+    // A previous failed attempt leaves a session whose peer connection is already
+    // closed. Reusing it makes the next offer fail with "Peer connection closed".
+    if (session) {
+        try { session.dispose && session.dispose(); } catch (e) {}
+        session = null;
+    }
+
+    // The SDP offer needs the microphone, so a denied device fails the call
+    // before any INVITE is sent — surface that instead of a generic failure.
+    window.ensureMic().then(function() {
+        const inv = new Inviter(ua, uri, {
+            sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
+        });
+        session = inv;
+        window.setSipStatus && window.setSipStatus('calling', 'Calling ' + number);
+        bindSession(inv);
+        return inv.invite().catch(function(err) {
+            window.sipReport('invite_failed', err, 'to=' + number + ' state=' + inv.state);
+            window.setSipStatus && window.setSipStatus('failed', 'Call failed: ' + err.message);
+            window.showToast && window.showToast('Call failed: ' + (err.message || err.name));
+            window.endCall && window.endCall();
+        });
+    }).catch(function(e) {
+        window.sipReport('call_mic_failed', e, 'to=' + number);
+        window.setSipStatus && window.setSipStatus('failed', 'Microphone unavailable');
+        window.showToast && window.showToast(micErrorMessage(e));
         window.endCall && window.endCall();
     });
 };
@@ -4632,11 +4967,80 @@ window.sipBridge.hangup = function() {
     session = null;
 };
 
-window.sipBridge.answer = function() {
-    if (session instanceof Invitation) {
-        session.accept({ sessionDescriptionHandlerOptions: { constraints: { audio:true, video:false } } })
-               .catch(e => window.showToast && window.showToast('Answer failed: ' + e.message));
+// Report softphone problems to the server so failures can be diagnosed without
+// asking the agent to read the browser console.
+window.sipReport = function(event, err, extra) {
+    try {
+        fetch('index.php?action=client_log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                event: event,
+                name: (err && err.name) || '',
+                message: (err && (err.message || String(err))) || '',
+                extra: extra || '',
+                ext: localStorage.getItem('sip_ext') || ''
+            })
+        }).catch(function(){});
+    } catch (e) {}
+};
+
+// Ask for the microphone once, up front. Requesting it only at answer time
+// meant the permission prompt appeared mid-ring and the call timed out.
+window.ensureMic = function() {
+    if (window._micStream) return Promise.resolve(window._micStream);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const e = new Error('getUserMedia unavailable — the page must be served over HTTPS');
+        e.name = 'InsecureContext';
+        window.sipReport('mic_unavailable', e, 'protocol=' + location.protocol);
+        return Promise.reject(e);
     }
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(function(stream) {
+            window._micStream = stream;
+            return stream;
+        })
+        .catch(function(err) {
+            window.sipReport('mic_denied', err, 'protocol=' + location.protocol);
+            throw err;
+        });
+};
+
+function micErrorMessage(e) {
+    const name = (e && e.name) || '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+        return 'Microphone blocked. Click the padlock in the address bar → Microphone → Allow, then reload.';
+    }
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        return 'No microphone found. Plug in a headset and reload.';
+    }
+    if (name === 'NotReadableError' || name === 'AbortError') {
+        return 'Microphone is in use by another app. Close it and try again.';
+    }
+    if (name === 'InsecureContext') {
+        return 'Microphone needs HTTPS. Open this dashboard over https://';
+    }
+    return 'Answer failed: ' + ((e && (e.message || e.name)) || 'unknown error');
+}
+
+window.sipBridge.answer = function() {
+    if (!(session instanceof Invitation)) {
+        window.showToast && window.showToast('No incoming call to answer.');
+        return;
+    }
+    const inv = session;
+    window.ensureMic()
+        .then(function() {
+            return inv.accept({
+                sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
+            });
+        })
+        .catch(function(e) {
+            console.error('answer failed', e);
+            window.sipReport('answer_failed', e, 'state=' + (inv && inv.state));
+            window.showToast && window.showToast(micErrorMessage(e));
+        });
 };
 
 window.sipBridge.hold = function() {

@@ -259,13 +259,79 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .ch-dir.outbound{background:#f0883e22;color:#f0883e}
 .empty-state{text-align:center;padding:40px;color:#888;font-size:13px}
 .count-badge{background:#f0f2f5;color:#888;padding:3px 10px;border-radius:10px;font-size:12px;margin-left:8px}
+
+/* SkyKin light workspace */
+:root{
+  --sk-blue:#2563eb;--sk-blue-soft:#eff6ff;--sk-text:#172033;
+  --sk-muted:#64748b;--sk-canvas:#f6f8fb;--sk-surface:#fff;
+  --sk-line:#e8edf3;--sk-shadow:0 8px 28px rgba(15,23,42,.06)
+}
+body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
+.topbar{height:60px;padding:0 24px;background:linear-gradient(135deg,#0047ab,#00b4d8);border:0;box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.topbar-left{gap:28px}
+.brand{color:#fff;font-size:18px;font-weight:700;letter-spacing:1px;white-space:nowrap}
+.brand .brand-sky{color:#00e5ff}
+.brand .role-badge{margin-left:10px;padding:2px 10px;background:rgba(255,255,255,.2);border-radius:20px;color:#fff;font-size:11px;font-weight:600;letter-spacing:0}
+.nav-links{gap:6px}
+.nav-links a{color:rgba(255,255,255,.82);padding:8px 12px;border-radius:7px;font-size:12px;font-weight:600}
+.nav-links a:hover{background:rgba(255,255,255,.12);color:#fff}
+.nav-links a.active{background:rgba(255,255,255,.2);color:#fff}
+.topbar-right{color:rgba(255,255,255,.86)}
+.user-pill{background:rgba(255,255,255,.14);color:#fff;padding:7px 12px;border-radius:9px}
+.topbar-right a{color:#fff!important;font-weight:600;opacity:.85}
+.topbar-right a:hover{opacity:1}
+
+.toolbar{min-height:62px;padding:11px 28px;background:var(--sk-canvas);border:0;gap:10px}
+.toolbar input{height:38px;width:min(360px,45vw);background:#fff;border:1px solid #dbe3ec;color:var(--sk-text);padding:7px 12px;border-radius:9px}
+.toolbar input:focus{outline:0;border-color:#93b4f4;box-shadow:0 0 0 3px rgba(37,99,235,.09)}
+.btn-primary{height:38px;background:var(--sk-blue);padding:0 18px;border-radius:9px;font-weight:650;box-shadow:0 3px 8px rgba(37,99,235,.16)}
+.btn-primary:hover{background:#1d4ed8}
+.count-badge{margin-left:2px;background:#e8eef7;color:#526277;padding:5px 10px;font-weight:650}
+
+.layout{grid-template-columns:minmax(0,1fr) 420px;gap:14px;height:calc(100vh - 126px);padding:0 20px 18px}
+.contact-list,.contact-panel{background:var(--sk-surface);border:0;border-radius:14px;box-shadow:var(--sk-shadow)}
+.contact-list{padding:8px;overflow-y:auto}
+.contact-panel{padding:22px}
+.contact-item{margin:3px 0;padding:13px 14px;border:0;border-radius:10px}
+.contact-item:hover{background:#f8fafc}
+.contact-item.selected{background:var(--sk-blue-soft);border:0;box-shadow:inset 3px 0 var(--sk-blue)}
+.ct-name{color:var(--sk-text);font-size:13px}
+.ct-meta{color:var(--sk-muted)}
+.ct-badge{padding:3px 8px}
+.ct-badge.VIP{background:#fff7ed;color:#c2410c}
+.ct-badge.Customer{background:#eff6ff;color:#2563eb}
+.ct-badge.Prospect{background:#f5f3ff;color:#7c3aed}
+.ct-badge.Partner{background:#f0fdf4;color:#15803d}
+
+.panel-title{font-size:17px;color:var(--sk-text);margin-bottom:20px}
+.form-field{margin-bottom:15px}
+.form-field label{color:var(--sk-muted);font-size:10px;font-weight:700}
+.form-field input,.form-field select,.form-field textarea{background:#fff;border:1px solid #dbe3ec;color:var(--sk-text);padding:9px 11px;border-radius:9px}
+.form-field input:focus,.form-field select:focus,.form-field textarea:focus{border-color:#93b4f4;box-shadow:0 0 0 3px rgba(37,99,235,.09)}
+.form-field textarea{min-height:82px}
+.form-row{gap:12px}
+.btn-save{background:var(--sk-blue);border-radius:10px;box-shadow:0 3px 8px rgba(37,99,235,.16)}
+.btn-save:hover{background:#1d4ed8}
+.btn-delete{background:#fff5f5;color:#dc2626;border:0;border-radius:10px}
+.btn-delete:hover{background:#fee2e2}
+.call-history{margin-top:24px;padding-top:0}
+.call-history h4{color:var(--sk-muted);font-size:10px;font-weight:700}
+.ch-row{background:#f8fafc;border-radius:9px;padding:9px 11px}
+.empty-state{color:var(--sk-muted)}
+
+@media(max-width:850px){
+  .topbar{padding:0 14px}.brand span,.topbar-right .user-pill{display:none}
+  .nav-links{overflow-x:auto}.nav-links a{white-space:nowrap;padding:8px}
+  .toolbar{padding:10px 14px}.layout{grid-template-columns:1fr;height:auto;padding:0 10px 12px}
+  .contact-list{max-height:42vh}.contact-panel{min-height:50vh}.form-row{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
 
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand">SkyKin<span> Technologies</span></div>
+    <div class="brand"><span class="brand-sky">SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php">Reports</a>

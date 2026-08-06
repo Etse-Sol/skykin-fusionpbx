@@ -299,8 +299,8 @@ if (isset($_GET['api'])) {
             foreach ($headers as $i => $header) {
                 $headerCells .= xlsxTextCell(xlsxColumn($i+1).'9', $header, 6);
             }
-            // Tall enough for the two-line wrapped headings plus filter buttons.
-            $rows[] = '<row r="9" ht="34" customHeight="1">'.$headerCells.'</row>';
+            // Compact two-line headings with room for Excel's filter buttons.
+            $rows[] = '<row r="9" ht="30" customHeight="1">'.$headerCells.'</row>';
 
             $rowNum = 10;
             foreach ($details as $detail) {
@@ -347,10 +347,11 @@ if (isset($_GET['api'])) {
 
             $stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                 .'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                .'<fonts count="3">'
+                .'<fonts count="4">'
                 .'<font><sz val="11"/><name val="Calibri"/></font>'
                 .'<font><b/><sz val="11"/><name val="Calibri"/></font>'
                 .'<font><b/><color rgb="FFFFFFFF"/><sz val="16"/><name val="Calibri"/></font>'
+                .'<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>'
                 .'</fonts>'
                 .'<fills count="7">'
                 .'<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
@@ -371,7 +372,7 @@ if (isset($_GET['api'])) {
                 .'<xf numFmtId="0" fontId="1" fillId="3" borderId="0" xfId="0"/>'
                 .'<xf numFmtId="0" fontId="1" fillId="6" borderId="1" xfId="0"/>'
                 .'<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center"/></xf>'
-                .'<xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'
+                .'<xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>'
                 .'<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"/>'
                 .'<xf numFmtId="0" fontId="0" fillId="6" borderId="1" xfId="0"/>'
                 .'<xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center"/></xf>'
@@ -626,7 +627,8 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
   <div class="queue-table-wrap">
     <div class="section-title">Detailed Call Reports</div>
     <div class="detail-tabs">
-      <button class="detail-tab active" data-type="answered" onclick="loadDetails('answered')">Answered</button>
+      <button class="detail-tab active" data-type="all" onclick="loadDetails('all')">All</button>
+      <button class="detail-tab" data-type="answered" onclick="loadDetails('answered')">Answered</button>
       <button class="detail-tab" data-type="missed" onclick="loadDetails('missed')">Missed</button>
       <button class="detail-tab" data-type="inbound" onclick="loadDetails('inbound')">Inbound</button>
       <button class="detail-tab" data-type="outbound" onclick="loadDetails('outbound')">Outbound</button>
@@ -646,7 +648,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 const DOMAIN = '<?php echo $domain; ?>';
 let charts = {};
 let activePreset = 'today';
-let activeDetail = 'answered';
+let activeDetail = 'all';
 
 function setRange(days, preset) {
     activePreset = preset;

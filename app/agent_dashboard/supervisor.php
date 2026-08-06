@@ -17,21 +17,33 @@ $logged_in_domain = skykin_default_domain();
 $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 $sup_ext = isset($_GET['ext'])    ? htmlspecialchars($_GET['ext'])     : '';
 
-// Auto-detect supervisor's own extension from their username
-if (!$sup_ext && $logged_in_user) {
-    try {
-        $db_se = getDB();
+// Auto-detect supervisor extension + SIP password for softphone registration
+$sup_password = '';
+try {
+    $db_se = getDB();
+    if ($logged_in_user) {
         $se = $db_se->prepare("
-            SELECT e.extension FROM v_extensions e
+            SELECT e.extension, e.password FROM v_extensions e
             JOIN v_extension_users eu ON eu.extension_uuid=e.extension_uuid
             JOIN v_users u ON u.user_uuid=eu.user_uuid
             JOIN v_domains d ON d.domain_uuid=e.domain_uuid
             WHERE u.username=:u AND d.domain_name=:d LIMIT 1");
         $se->execute([':u'=>$logged_in_user,':d'=>$domain]);
         $row = $se->fetch(PDO::FETCH_ASSOC);
-        if ($row) $sup_ext = $row['extension'];
-    } catch(Exception $ignored){}
-}
+        if ($row) {
+            if (!$sup_ext) $sup_ext = $row['extension'];
+            $sup_password = (string)($row['password'] ?? '');
+        }
+    }
+    if ($sup_ext && $sup_password === '') {
+        $sp = $db_se->prepare("
+            SELECT e.password FROM v_extensions e
+            JOIN v_domains d ON d.domain_uuid=e.domain_uuid
+            WHERE e.extension=:e AND d.domain_name=:d LIMIT 1");
+        $sp->execute([':e'=>$sup_ext, ':d'=>$domain]);
+        $sup_password = (string)($sp->fetchColumn() ?: '');
+    }
+} catch (Exception $ignored) {}
 $today   = date('Y-m-d');
 
 // Fetch agent list for Agent View dropdown
@@ -112,42 +124,17 @@ function applyAgentCcStatus($db, $agent_ext, $new_status, $domain_) {
     $s_upd = $db->prepare("UPDATE v_call_center_agents SET agent_status = :s WHERE call_center_agent_uuid = :uuid");
     $s_upd->execute([':s' => $new_status, ':uuid' => $agent_uuid]);
 
-    $esl_host = '127.0.0.1';
-    $esl_port = 8021;
-    $esl_pass = 'ClueCon';
-    foreach ([__DIR__ . '/../../.env', __DIR__ . '/../.env', __DIR__ . '/.env'] as $envPath) {
-        if (file_exists($envPath)) {
-            foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $ln) {
-                $ln = trim($ln);
-                if (strpos($ln, '#') === 0 || strpos($ln, '=') === false) continue;
-                [$k, $v] = explode('=', $ln, 2);
-                $k = trim($k); $v = trim($v, " \t\n\r\0\x0B\"'");
-                if ($k === 'ESL_HOST')     $esl_host = $v;
-                if ($k === 'ESL_PORT')     $esl_port = intval($v);
-                if ($k === 'ESL_PASSWORD') $esl_pass = $v;
-            }
-            break;
-        }
-    }
     $esl_connected = false;
     $esl_response = '';
     $esl_error = '';
-    try {
-        if (!class_exists('config'))       require_once __DIR__ . '/../../resources/classes/config.php';
-        if (!class_exists('event_socket')) require_once __DIR__ . '/../../resources/classes/event_socket.php';
-        $esl = new event_socket();
-        if ($esl->connect($esl_host, $esl_port, $esl_pass)) {
-            $esl_connected = true;
-            $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
-            $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
-            if ($new_status === 'Available' || $new_status === 'Logged Out') {
-                $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
-            }
-        } else {
-            $esl_error = 'ESL connect failed';
+    $esl = skykin_esl($esl_error);
+    if ($esl) {
+        $esl_connected = true;
+        $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
+        $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
+        if ($new_status === 'Available' || $new_status === 'Logged Out') {
+            $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
         }
-    } catch (Throwable $ex) {
-        $esl_error = $ex->getMessage();
     }
     return [
         'ok' => true,
@@ -750,10 +737,11 @@ if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
             $b = (int)$r['billsec'];
             $file = trim($r['record_name'] ?? '');
             $path = trim($r['record_path'] ?? '');
-            // Build playback URL using FusionPBX recordings path
             $play_url = '';
             if ($file) {
-                $play_url = '/app/recordings/index.php?filename='.urlencode($file).'&path='.urlencode($path);
+                $play_url = '/app/agent_dashboard/play_recording.php?f='.rawurlencode($file)
+                    .'&d='.rawurlencode($domain_)
+                    .($path !== '' ? '&path='.rawurlencode(rtrim($path,'/')) : '');
             }
             $rows[] = [
                 'time'        => $r['call_time'],
@@ -995,13 +983,82 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
     .queue-health-card{grid-column:span 2}
     .tab-bar{overflow-x:auto}
 }
+/* Supervisor softphone */
+.phone-fab{position:fixed;bottom:28px;right:28px;z-index:600;width:58px;height:58px;border-radius:50%;
+background:linear-gradient(135deg,#0047AB,#00B4D8);border:none;cursor:pointer;color:#fff;font-size:24px;
+box-shadow:0 4px 20px rgba(0,71,171,.45);display:flex;align-items:center;justify-content:center;
+transition:transform .2s,box-shadow .2s}
+.phone-fab:hover{transform:scale(1.08)}
+.phone-fab.ringing{background:linear-gradient(135deg,#28a745,#1e7e34);animation:fabPulse .6s infinite}
+@keyframes fabPulse{0%,100%{box-shadow:0 4px 20px rgba(0,71,171,.45)}50%{box-shadow:0 4px 32px rgba(0,71,171,.7),0 0 0 10px rgba(0,71,171,.1)}}
+.fab-badge{position:absolute;top:-2px;right:-2px;width:16px;height:16px;border-radius:50%;background:#28a745;border:2px solid #fff;display:none}
+.fab-badge.show{display:block}.fab-badge.unreg{background:#888}.fab-badge.calling{background:#ffc107}
+.phone-popup{position:fixed;top:60px;right:-320px;z-index:601;width:300px;max-height:calc(100vh - 60px);
+background:#fff;border-left:1px solid #e0e0e0;box-shadow:-4px 0 20px rgba(0,0,0,.12);display:flex;flex-direction:column;
+overflow-y:auto;transition:right .3s ease}
+.phone-popup.open{right:0}
+body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
+.pp-header{background:linear-gradient(135deg,#0047AB,#00B4D8);color:#fff;padding:14px 16px;display:flex;align-items:center;justify-content:space-between}
+.pp-header-actions{display:flex;align-items:center;gap:6px}
+.btn-settings-header{width:30px;height:30px;border:0;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;cursor:pointer;font-size:15px}
+.pp-status{display:flex;align-items:center;gap:8px;font-size:13px}
+.sip-dot{width:10px;height:10px;border-radius:50%;background:#888;flex-shrink:0}
+.sip-dot.registered{background:#28a745;animation:pulse 2s infinite}
+.sip-dot.calling{background:#ffc107;animation:pulse .5s infinite}
+.sip-dot.ringing{background:#fd7e14;animation:pulse .4s infinite}
+.sip-dot.failed{background:#dc3545}.sip-dot.connecting{background:#aaa;animation:pulse 1s infinite}
+.pp-close{background:rgba(255,255,255,.2);border:none;color:#fff;width:26px;height:26px;border-radius:50%;cursor:pointer}
+.pp-body{padding:0;display:flex;flex-direction:column;gap:10px}
+.phone-popup.call-active .pp-body{padding:12px 16px}
+.call-controls{display:grid;grid-template-columns:repeat(12,1fr);gap:8px}
+.btn-hangup{grid-column:3 / span 8;background:#c92a3d;border:1px solid #c92a3d;color:#fff;padding:11px 0;border-radius:9px;cursor:pointer;font-size:13px;font-weight:650;display:none}
+.btn-hold,.btn-mute,.btn-keypad{grid-column:span 4;min-height:54px;background:#fff;border:1px solid #dfe5ec;color:#334155;padding:8px 4px;border-radius:9px;cursor:pointer;font-size:11px;font-weight:600;display:none;align-items:center;justify-content:center;flex-direction:column;gap:4px}
+.btn-hold.active,.btn-mute.muted,.btn-keypad.active{background:#eef6ff;border-color:#8eb9e6;color:#0047ab}
+.call-timer{text-align:center;font-size:22px;font-weight:bold;color:#0047AB;display:none;padding:4px 0}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:700;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal-box{background:#fff;border-radius:12px;padding:28px;width:360px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+.modal-title{font-size:16px;font-weight:bold;color:#0047AB;margin-bottom:20px}
+.form-group{margin-bottom:14px}
+.form-group label{font-size:12px;color:#666;display:block;margin-bottom:4px}
+.form-group input{width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;box-sizing:border-box}
+.btn-save-settings{background:#0047AB;color:#fff;border:none;padding:10px 24px;border-radius:6px;cursor:pointer;font-size:14px;width:100%;margin-top:8px}
+.dp-panel{display:block;padding:14px 22px 22px;background:#fff}
+.dp-title{margin:0 0 10px;color:#64748b;font-size:10px;font-weight:700;letter-spacing:1.2px;text-align:center;text-transform:uppercase}
+.dp-display{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:20px;font-weight:650;color:#0f3f79;text-align:center;letter-spacing:2px;min-height:46px;margin-bottom:16px;display:flex;align-items:center;justify-content:center}
+.dp-display.empty{color:#94a3b8;font-size:12px;letter-spacing:0;font-weight:500}
+.dp-grid{display:grid;grid-template-columns:repeat(3,58px);gap:10px 18px;justify-content:center;margin-bottom:16px}
+.dp-key{width:58px;height:58px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:50%;font-size:19px;font-weight:650;color:#172b4d;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.dp-key .dp-sub{font-size:8px;color:#94a3b8;letter-spacing:.5px;margin-top:2px}
+.dp-row-actions{display:flex;gap:10px;justify-content:center}
+.dp-call{flex:1;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;border:none;border-radius:12px;padding:12px;font-size:14px;font-weight:700;cursor:pointer}
+.dp-del{width:52px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;cursor:pointer;font-size:18px;color:#64748b}
+
+
+
+/* Static management sidebar on desktop; operational sections remain top tabs. */
+@media (min-width:901px) {
+    #sideMenu {
+        top:60px !important; left:0 !important; height:calc(100vh - 60px) !important;
+        box-shadow:2px 0 10px rgba(15,23,42,.08) !important; z-index:250 !important;
+    }
+    #sideMenu .supervisor-sidebar-brand,
+    #sideMenuBackdrop,
+    .supervisor-sidebar-toggle { display:none !important; }
+    .main { margin-left:250px; margin-right:0; max-width:none; }
+}
+@media (max-width:900px) {
+    #sideMenu { top:60px !important; height:calc(100vh - 60px) !important; }
+    .main { margin-left:0; }
+}
+
 </style>
 </head>
 <body>
 
 <div class="header">
     <div style="display:flex;align-items:center;gap:12px">
-        <button onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1">&#9776;</button>
+        <button class="supervisor-sidebar-toggle" onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1">&#9776;</button>
         <div class="logo"><span>SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
     </div>
     <div class="header-right">
@@ -1032,23 +1089,12 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 
 <!-- Slide-out side menu -->
 <div id="sideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
-    <div style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
+    <div class="supervisor-sidebar-brand" style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
         <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
         <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
-        <a href="#" onclick="toggleSideMenu();showTabDirect('dashboard')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#0047AB;text-decoration:none;font-size:14px;font-weight:600;background:#f0f4ff;border-left:4px solid #0047AB">
-            <span style="font-size:18px">&#128187;</span> Dashboard
-        </a>
-        <a href="#" onclick="toggleSideMenu();showTabDirect('leaderboard')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#127942;</span> Leaderboard
-        </a>
-        <a href="#" onclick="toggleSideMenu();showTabDirect('callhistory')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128222;</span> Call History
-        </a>
-        <a href="#" onclick="toggleSideMenu();showTabDirect('recordings')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#127908;</span> Recordings
-        </a>
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Management</div>
         <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128202;</span> Reports
         </a>
@@ -1057,9 +1103,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
         </a>
         <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128100;</span> CRM
-        </a>
-        <a href="#" onclick="toggleSideMenu();showTabDirect('ahununu')" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#127760;</span> Ahununu.com
         </a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
@@ -1324,16 +1367,89 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 
 </div>
 
+<!-- Supervisor softphone -->
+<div class="modal-overlay" id="settingsModal">
+    <div class="modal-box">
+        <div class="modal-title">Supervisor Phone Settings</div>
+        <div class="form-group"><label>Extension Number</label><input type="text" id="sipExt" placeholder="e.g. 200"></div>
+        <div class="form-group"><label>SIP Password</label><input type="password" id="sipPass" placeholder="Extension password"></div>
+        <div class="form-group"><label>SIP Server</label><input type="text" id="sipServer" value="<?php echo htmlspecialchars(skykin_config()['sip_server']); ?>"></div>
+        <div class="form-group"><label>WebSocket Port</label><input type="text" id="sipPort" value="5066"></div>
+        <div class="form-group"><label>Domain</label><input type="text" id="sipDomain" value="<?php echo htmlspecialchars($domain); ?>"></div>
+        <button class="btn-save-settings" onclick="saveSipSettings()">Connect</button>
+    </div>
+</div>
+<button class="phone-fab" id="phoneFab" onclick="togglePhonePopup()" title="Supervisor Phone">
+    &#128222;<span class="fab-badge unreg" id="fabBadge"></span>
+</button>
+<div class="phone-popup" id="phonePopup">
+    <div class="pp-header">
+        <div class="pp-status"><div class="sip-dot" id="sipDot"></div><span id="sipStatusText">Not Connected</span></div>
+        <div class="pp-header-actions">
+            <button class="btn-settings-header" onclick="document.getElementById('settingsModal').classList.add('show')" title="Phone settings">&#9881;</button>
+            <button class="pp-close" onclick="togglePhonePopup()">&#x2715;</button>
+        </div>
+    </div>
+    <div class="pp-body">
+        <div id="incomingScreen" style="display:none;text-align:center;padding:24px 16px">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Incoming / Transfer</div>
+            <div id="incomingNumber" style="font-size:28px;font-weight:bold;color:#0047AB;margin-bottom:24px">Unknown</div>
+            <div style="display:flex;gap:12px;justify-content:center">
+                <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Answer</button>
+                <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Decline</button>
+            </div>
+        </div>
+        <div id="callTimer" class="call-timer">00:00</div>
+        <input type="tel" id="dialInput" maxlength="20" style="display:none">
+        <div class="call-controls">
+            <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">End call</button>
+            <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
+            <button class="btn-mute" id="btnMute" onclick="toggleMute()">Mute</button>
+            <button class="btn-keypad" id="btnKeypad" onclick="toggleCallKeypad()">Keypad</button>
+        </div>
+    </div>
+    <div class="dp-panel" id="dpPanel">
+        <div class="dp-title">Dial number</div>
+        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
+        <div class="dp-grid">
+            <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
+            <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
+            <button class="dp-key" onclick="dpKey('3')">3<span class="dp-sub">DEF</span></button>
+            <button class="dp-key" onclick="dpKey('4')">4<span class="dp-sub">GHI</span></button>
+            <button class="dp-key" onclick="dpKey('5')">5<span class="dp-sub">JKL</span></button>
+            <button class="dp-key" onclick="dpKey('6')">6<span class="dp-sub">MNO</span></button>
+            <button class="dp-key" onclick="dpKey('7')">7<span class="dp-sub">PQRS</span></button>
+            <button class="dp-key" onclick="dpKey('8')">8<span class="dp-sub">TUV</span></button>
+            <button class="dp-key" onclick="dpKey('9')">9<span class="dp-sub">WXYZ</span></button>
+            <button class="dp-key" onclick="dpKey('*')">*</button>
+            <button class="dp-key" onclick="dpKey('0')">0<span class="dp-sub">+</span></button>
+            <button class="dp-key" onclick="dpKey('#')">#</button>
+        </div>
+        <div class="dp-row-actions">
+            <button class="dp-call" onclick="dpCall()">&#128222;&nbsp; Call</button>
+            <button class="dp-del" onclick="dpDelete()" aria-label="Delete">&#9003;</button>
+        </div>
+    </div>
+</div>
+<audio id="remoteAudio" autoplay style="display:none"></audio>
+
 <div id="supToast"></div>
 
 <script>
 <?php echo skykin_js_bootstrap(); ?>
 const domain   = '<?php echo $domain; ?>';
 const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') || '';
-// Pre-fill localStorage with server-detected extension so monitor() doesn't prompt
-if ('<?php echo $sup_ext; ?>' && !localStorage.getItem('sup_ext')) localStorage.setItem('sup_ext','<?php echo $sup_ext; ?>');
+const serverExt  = <?php echo json_encode($sup_ext); ?>;
+const serverPass = <?php echo json_encode($sup_password); ?>;
+if (serverExt && !localStorage.getItem('sup_ext')) localStorage.setItem('sup_ext', serverExt);
+if (serverExt) localStorage.setItem('sup_sip_ext', serverExt);
+if (serverPass) localStorage.setItem('sup_sip_pass', serverPass);
+localStorage.setItem('sup_sip_server', (window.SKYKIN && SKYKIN.sipServer) || location.hostname);
+localStorage.setItem('sup_sip_domain', domain || ((window.SKYKIN && SKYKIN.domain) || location.hostname));
 const today    = '<?php echo $today; ?>';
 let agentTimers = {};
+window.sipBridge = {};
+var sipBridge = window.sipBridge;
 
 // ── Side menu toggle ───────────────────────────────────────────────────────
 function toggleSideMenu() {
@@ -1586,16 +1702,18 @@ function toggleAgentRow(ext){
 
 // ── Monitor / Barge ────────────────────────────────────────────────────────
 function monitor(agentExt, mode){
-    let myExt = supExt || localStorage.getItem('sup_ext') || '';
+    let myExt = localStorage.getItem('sup_sip_ext') || supExt || localStorage.getItem('sup_ext') || '';
     if(!myExt){
-        myExt = prompt('Enter YOUR supervisor extension (the phone that will ring):');
-        if(!myExt){toast('Cancelled — no supervisor extension set','#c62828');return;}
+        myExt = prompt('Enter YOUR supervisor extension (softphone that will ring):');
+        if(!myExt){toast('Cancelled - no supervisor extension set','#c62828');return;}
         localStorage.setItem('sup_ext', myExt);
+        localStorage.setItem('sup_sip_ext', myExt);
     }
-    toast('&#128266; Connecting '+mode+' — your phone (ext '+myExt+') will ring in 5-10 sec...');
+    openPhonePopup();
+    toast('Connecting '+mode+' - softphone (ext '+myExt+') will ring...');
     fetch('supervisor.php?action=monitor&mode='+mode+'&agent_ext='+encodeURIComponent(agentExt)+'&sup_ext='+encodeURIComponent(myExt)+'&domain='+encodeURIComponent(domain))
         .then(r=>r.json()).then(d=>{
-            if(d.ok) toast('&#128266; '+mode.charAt(0).toUpperCase()+mode.slice(1)+' started — pick up your phone (ext '+myExt+')','#2e7d32');
+            if(d.ok) toast(mode.charAt(0).toUpperCase()+mode.slice(1)+' started - answer on the softphone','#2e7d32');
             else toast('Monitor failed: '+(d.error||d.result||'Agent not on a call'),'#c62828');
         }).catch(e=>toast('Network error: '+e.message,'#c62828'));
 }
@@ -1767,16 +1885,10 @@ function fetchRecordings(){
 
 function playRec(path, file){
     const player=document.getElementById('recPlayer');
-    const api = (window.SKYKIN && SKYKIN.recordingsApiBase) || '';
-    let url;
-    if (file.endsWith('.webm') && api) {
-        url = api + '/api/recordings/' + encodeURIComponent(file);
-    } else if (file.endsWith('.webm') && !api) {
-        toast('Browser recordings need recordings_api_base in skykin config','#c62828');
-        return;
-    } else {
-        url = '/app/recordings/index.php?filename='+encodeURIComponent(file)+'&path='+encodeURIComponent(path);
-    }
+    const domain = (window.SKYKIN && SKYKIN.domain) || location.hostname;
+    let url = '/app/agent_dashboard/play_recording.php?f='+encodeURIComponent(file)
+        +'&d='+encodeURIComponent(domain);
+    if (path) { url += '&path='+encodeURIComponent(path.replace(/\/+$/,'')); }
     player.src=url; player.style.display='block';
     player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });
 }
@@ -1858,6 +1970,259 @@ function fetchSkillsAgents() {
         }).catch(()=>{ document.getElementById('skillsAgentList').innerHTML='<p style="color:#999">Could not load agents</p>'; });
 }
 
+// ── Supervisor softphone ───────────────────────────────────────────────────
+let phoneOpen = false, lastDialedNumber = '', isMuted = false, onHold = false;
+let callStartTime = null, callTimerInterval = null, dpNumber = '';
+let _ringCtx = null, _ringInterval = null;
+
+function showToast(msg, color){ toast(msg, color || '#333'); }
+
+function buildSipWsUrl(host, port) {
+    const cleanHost = String(host || location.hostname).replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
+    if (location.protocol === 'https:') {
+        return 'wss://' + cleanHost + (location.port ? ':' + location.port : '') + '/wss/';
+    }
+    return 'ws://' + cleanHost + ':' + (port || '5066');
+}
+
+function loadSipSettings() {
+    const ext  = localStorage.getItem('sup_sip_ext')  || serverExt  || '';
+    const pass = localStorage.getItem('sup_sip_pass') || serverPass || '';
+    const dom  = localStorage.getItem('sup_sip_domain') || domain;
+    const rawServer = localStorage.getItem('sup_sip_server') || location.hostname;
+    const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
+    const port = localStorage.getItem('sup_sip_port') || '5066';
+    const wsUrl = buildSipWsUrl(cleanHost, port);
+    const el = (id) => document.getElementById(id);
+    if (el('sipExt')) el('sipExt').value = ext;
+    if (el('sipPass')) el('sipPass').value = pass;
+    if (el('sipServer')) el('sipServer').value = cleanHost;
+    if (el('sipPort')) el('sipPort').value = location.protocol === 'https:' ? (location.port || '443') : port;
+    if (el('sipDomain')) el('sipDomain').value = dom;
+    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+    else setSipStatus('failed', 'Open phone settings to connect');
+}
+
+function waitForSipBridge(cb, tries) {
+    tries = tries || 0;
+    if (sipBridge.init) { cb(); return; }
+    if (tries < 50) setTimeout(() => waitForSipBridge(cb, tries + 1), 200);
+    else setSipStatus('failed', 'SIP module failed to load');
+}
+
+function saveSipSettings() {
+    const ext  = document.getElementById('sipExt').value.trim();
+    const pass = document.getElementById('sipPass').value.trim();
+    const dom  = document.getElementById('sipDomain').value.trim();
+    if (!ext || !pass) { alert('Enter extension and password'); return; }
+    const rawServer = document.getElementById('sipServer').value.trim() || location.hostname;
+    const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/:\d+$/,'');
+    const isHttps = location.protocol === 'https:';
+    const port = isHttps ? '' : (document.getElementById('sipPort').value.trim() || '5066');
+    const wsUrl = buildSipWsUrl(cleanHost, port);
+    localStorage.setItem('sup_sip_ext', ext);
+    localStorage.setItem('sup_sip_pass', pass);
+    localStorage.setItem('sup_sip_server', cleanHost);
+    localStorage.setItem('sup_sip_domain', dom);
+    localStorage.setItem('sup_ext', ext);
+    if (port) localStorage.setItem('sup_sip_port', port); else localStorage.removeItem('sup_sip_port');
+    document.getElementById('settingsModal').classList.remove('show');
+    waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
+}
+
+function initSIP(ext, pass, server, port, dom) {
+    setSipStatus('connecting', 'Connecting...');
+    if (sipBridge.init) sipBridge.init(ext, pass, server, port, dom);
+    else setSipStatus('failed', 'SIP library not loaded');
+}
+
+function togglePhonePopup() {
+    phoneOpen = !phoneOpen;
+    document.getElementById('phonePopup').classList.toggle('open', phoneOpen);
+    document.body.classList.toggle('phone-open', phoneOpen);
+    document.getElementById('phoneFab').innerHTML = phoneOpen
+        ? '&#x2715;<span class="fab-badge unreg" id="fabBadge"></span>'
+        : '&#128222;<span class="fab-badge unreg" id="fabBadge"></span>';
+}
+function openPhonePopup() {
+    phoneOpen = true;
+    document.getElementById('phonePopup').classList.add('open');
+    document.body.classList.add('phone-open');
+}
+
+function setSipStatus(state, text) {
+    const dot = document.getElementById('sipDot');
+    const badge = document.getElementById('fabBadge');
+    const fab = document.getElementById('phoneFab');
+    const popup = document.getElementById('phonePopup');
+    if (!dot || !badge || !fab || !popup) return;
+    popup.classList.toggle('call-active', state === 'calling' || state === 'incall');
+    dot.className = 'sip-dot'; badge.className = 'fab-badge'; fab.className = 'phone-fab';
+    if (state === 'registered') {
+        dot.classList.add('registered'); badge.classList.add('show');
+    } else if (state === 'calling') {
+        dot.classList.add('calling'); badge.classList.add('show','calling');
+        fab.classList.add('ringing'); openPhonePopup();
+        document.getElementById('btnHangup').style.display = 'block';
+        document.getElementById('dpPanel').style.display = 'none';
+    } else if (state === 'incall') {
+        dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
+    } else if (state === 'ringing') {
+        dot.classList.add('ringing'); badge.classList.add('show'); fab.classList.add('ringing');
+    } else if (state === 'connecting') {
+        dot.classList.add('connecting');
+    } else if (state === 'unregistered' || state === 'failed') {
+        dot.classList.add('failed'); badge.classList.add('show','unreg');
+    }
+    document.getElementById('sipStatusText').textContent = text;
+}
+
+function handleIncoming(callerNumber) {
+    lastDialedNumber = callerNumber || '';
+    document.getElementById('incomingNumber').textContent = callerNumber;
+    document.getElementById('incomingScreen').style.display = 'block';
+    document.getElementById('dpPanel').style.display = 'none';
+    openPhonePopup();
+    setSipStatus('ringing', 'Ringing: ' + callerNumber);
+    startRingtone();
+}
+function answerCall() { if (sipBridge.answer) sipBridge.answer(); }
+function declineCall() {
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display = '';
+    stopRingtone();
+    if (sipBridge.hangup) sipBridge.hangup();
+}
+function makeCall(number) {
+    number = number || document.getElementById('dialInput').value.trim() || dpNumber;
+    if (!number) return;
+    lastDialedNumber = number;
+    if (sipBridge.makeCall) sipBridge.makeCall(number);
+    else toast('SIP not ready - open phone settings', '#c62828');
+}
+function startRingtone() {
+    stopRingtone();
+    function _ring() {
+        try {
+            _ringCtx = new (window.AudioContext || window.webkitAudioContext)();
+            [0, 0.15].forEach(offset => {
+                const o = _ringCtx.createOscillator();
+                const g = _ringCtx.createGain();
+                o.connect(g); g.connect(_ringCtx.destination);
+                o.type = 'sine'; o.frequency.value = 440;
+                g.gain.setValueAtTime(0.4, _ringCtx.currentTime + offset);
+                g.gain.exponentialRampToValueAtTime(0.001, _ringCtx.currentTime + offset + 0.12);
+                o.start(_ringCtx.currentTime + offset);
+                o.stop(_ringCtx.currentTime + offset + 0.13);
+            });
+        } catch(e) {}
+    }
+    _ring();
+    _ringInterval = setInterval(_ring, 2500);
+}
+function stopRingtone() {
+    if (_ringInterval) { clearInterval(_ringInterval); _ringInterval = null; }
+    if (_ringCtx) { try { _ringCtx.close(); } catch(e) {} _ringCtx = null; }
+}
+function startCallUI(number) {
+    window._callEnded = false;
+    stopRingtone();
+    setSipStatus('incall', 'In Call: ' + number);
+    document.getElementById('btnHangup').style.display = 'block';
+    document.getElementById('btnHold').style.display = 'flex';
+    document.getElementById('btnMute').style.display = 'flex';
+    document.getElementById('btnKeypad').style.display = 'flex';
+    document.getElementById('callTimer').style.display = 'block';
+    document.getElementById('dialInput').value = number || '';
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display = 'none';
+    document.getElementById('btnKeypad').classList.remove('active');
+    callStartTime = new Date();
+    clearInterval(callTimerInterval);
+    callTimerInterval = setInterval(updateCallTimer, 1000);
+}
+function updateCallTimer() {
+    if (!callStartTime) return;
+    const elapsed = Math.floor((new Date() - callStartTime) / 1000);
+    document.getElementById('callTimer').textContent =
+        String(Math.floor(elapsed/60)).padStart(2,'0') + ':' + String(elapsed%60).padStart(2,'0');
+}
+function hangupCall() { if (sipBridge.hangup) sipBridge.hangup(); endCall(); }
+function toggleHold() {
+    if (onHold) {
+        if (sipBridge.unhold) sipBridge.unhold(); onHold = false;
+        document.getElementById('btnHold').textContent = 'Hold';
+        document.getElementById('btnHold').classList.remove('active');
+    } else {
+        if (sipBridge.hold) sipBridge.hold(); onHold = true;
+        document.getElementById('btnHold').textContent = 'Resume';
+        document.getElementById('btnHold').classList.add('active');
+    }
+}
+function toggleMute() {
+    if (isMuted) {
+        if (sipBridge.unmute) sipBridge.unmute(); isMuted = false;
+        document.getElementById('btnMute').textContent = 'Mute';
+        document.getElementById('btnMute').classList.remove('muted');
+    } else {
+        if (sipBridge.mute) sipBridge.mute(); isMuted = true;
+        document.getElementById('btnMute').textContent = 'Unmute';
+        document.getElementById('btnMute').classList.add('muted');
+    }
+}
+function endCall() {
+    if (window._callEnded) return;
+    window._callEnded = true;
+    stopRingtone();
+    onHold = false; isMuted = false;
+    document.getElementById('phonePopup').classList.remove('call-active');
+    clearInterval(callTimerInterval); callStartTime = null;
+    document.getElementById('btnHangup').style.display = 'none';
+    document.getElementById('btnHold').style.display = 'none';
+    document.getElementById('btnMute').style.display = 'none';
+    document.getElementById('btnMute').textContent = 'Mute';
+    document.getElementById('btnMute').classList.remove('muted');
+    document.getElementById('btnKeypad').style.display = 'none';
+    document.getElementById('btnKeypad').classList.remove('active');
+    document.getElementById('btnHold').textContent = 'Hold';
+    document.getElementById('btnHold').classList.remove('active');
+    document.getElementById('callTimer').style.display = 'none';
+    document.getElementById('callTimer').textContent = '00:00';
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display = '';
+    const ext = localStorage.getItem('sup_sip_ext') || serverExt || '';
+    if (ext) setSipStatus('registered', 'Registered (' + ext + ')');
+    setTimeout(() => { window._callEnded = false; }, 3000);
+}
+function updateDpDisplay() {
+    const d = document.getElementById('dpDisplay');
+    if (!d) return;
+    if (!dpNumber) { d.textContent = 'Enter number...'; d.classList.add('empty'); }
+    else { d.textContent = dpNumber; d.classList.remove('empty'); }
+    document.getElementById('dialInput').value = dpNumber;
+}
+function dpKey(k) {
+    if (document.getElementById('btnKeypad').classList.contains('active') && sipBridge.sendDtmf) {
+        sipBridge.sendDtmf(k); return;
+    }
+    if (dpNumber.length >= 20) return;
+    dpNumber += k; updateDpDisplay();
+}
+function dpDelete() { dpNumber = dpNumber.slice(0, -1); updateDpDisplay(); }
+function dpCall() { makeCall(dpNumber); }
+function toggleCallKeypad() {
+    const btn = document.getElementById('btnKeypad');
+    const panel = document.getElementById('dpPanel');
+    const active = btn.classList.toggle('active');
+    panel.style.display = active ? 'block' : 'none';
+}
+window.startCallUI = startCallUI;
+window.endCall = endCall;
+window.handleIncoming = handleIncoming;
+window.setSipStatus = setSipStatus;
+window.showToast = showToast;
+setTimeout(loadSipSettings, 400);
+
 // Close Agent View dropdown when clicking outside
 document.addEventListener('click', function(e) {
     const drop = document.getElementById('agentViewDrop');
@@ -1867,5 +2232,167 @@ document.addEventListener('click', function(e) {
     }
 });
 </script>
+<script src="/app/agent_dashboard/js/sipjs.bundle.js"></script>
+<script>
+(function() {
+'use strict';
+if (typeof SIPjs === 'undefined') {
+    console.error('SIPjs bundle missing');
+    return;
+}
+const { UserAgent, Registerer, Inviter, Invitation, SessionState, Web } = SIPjs;
+let ua = null, reg = null, session = null;
+const pbxDomain = () => localStorage.getItem('sup_sip_domain') || (window.SKYKIN && SKYKIN.domain) || location.hostname;
+
+function attachAudio(s) {
+    const sdh = s.sessionDescriptionHandler;
+    if (!sdh || !sdh.peerConnection) return;
+    const remote = new MediaStream();
+    sdh.peerConnection.getReceivers().forEach(r => { if (r.track) remote.addTrack(r.track); });
+    const el = document.getElementById('remoteAudio');
+    if (el) { el.srcObject = remote; el.play().catch(()=>{}); }
+}
+
+function bindSession(s) {
+    s.stateChange.addListener(state => {
+        if (state === SessionState.Established) {
+            const num = s instanceof Invitation
+                ? (s.remoteIdentity && s.remoteIdentity.uri && s.remoteIdentity.uri.user) || window.lastDialedNumber || ''
+                : (window.lastDialedNumber || '');
+            window.startCallUI && window.startCallUI(num);
+            attachAudio(s);
+            window.showToast && window.showToast('Call connected');
+        }
+        if (state === SessionState.Terminated || state === SessionState.Terminating) {
+            if (window.endCall) window.endCall();
+        }
+    });
+}
+
+window.sipBridge.init = function(ext, pass, server, port, dom) {
+    if (ua) { try { reg && reg.unregister(); ua.stop(); } catch(e) {} }
+    let wsUri = server;
+    if (!wsUri.startsWith('wss://') && !wsUri.startsWith('ws://')) {
+        wsUri = (location.protocol === 'https:' ? 'wss://' : 'ws://') + wsUri;
+    }
+    const hostPart = wsUri.replace(/^wss?:\/\//i, '');
+    if (!hostPart.includes('/') && !hostPart.includes(':')) {
+        wsUri = location.protocol === 'https:' ? wsUri + '/wss/' : wsUri + ':' + (port || '5066');
+    }
+    ua = new UserAgent({
+        uri: UserAgent.makeURI('sip:' + ext + '@' + dom),
+        transportOptions: { server: wsUri, traceSip: false },
+        authorizationUsername: ext,
+        authorizationPassword: pass,
+        logLevel: 'error',
+        logConfiguration: false
+    });
+    reg = new Registerer(ua, { logConfiguration: false });
+    reg.stateChange.addListener(state => {
+        if (state === 'Registered') {
+            window.setSipStatus('registered', 'Registered (' + ext + ')');
+            window.ensureMic && window.ensureMic().catch(function(){});
+        } else if (state === 'Unregistered') {
+            window.setSipStatus('unregistered', 'Not Registered');
+        } else if (state === 'Terminated') {
+            window.setSipStatus('failed', 'Registration Failed');
+        }
+    });
+    ua.delegate = {
+        onInvite(inv) {
+            session = inv;
+            const num = (inv.remoteIdentity && inv.remoteIdentity.uri && inv.remoteIdentity.uri.user)
+                || (inv.remoteIdentity && inv.remoteIdentity.displayName)
+                || 'Unknown';
+            window.lastDialedNumber = num;
+            try { inv.progress(); } catch (e) {}
+            window.handleIncoming && window.handleIncoming(num);
+            bindSession(inv);
+        }
+    };
+    ua.start().then(() => reg.register()).catch(err => {
+        window.setSipStatus('failed', 'Error: ' + err.message);
+    });
+};
+
+window.ensureMic = function() {
+    if (window._micStream) return Promise.resolve(window._micStream);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        return Promise.reject(new Error('Microphone needs HTTPS'));
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(function(stream) { window._micStream = stream; return stream; });
+};
+
+window.sipBridge.makeCall = function(number) {
+    if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
+    if (!uri) return;
+    if (session) { try { session.dispose && session.dispose(); } catch(e) {} session = null; }
+    window.ensureMic().then(function() {
+        const inv = new Inviter(ua, uri, {
+            sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
+        });
+        session = inv;
+        window.setSipStatus && window.setSipStatus('calling', 'Calling ' + number);
+        bindSession(inv);
+        return inv.invite().catch(function(err) {
+            window.setSipStatus && window.setSipStatus('failed', 'Call failed');
+            window.endCall && window.endCall();
+        });
+    }).catch(function() {
+        window.showToast && window.showToast('Microphone blocked - allow mic and reload');
+    });
+};
+
+window.sipBridge.hangup = function() {
+    if (!session) return;
+    const st = session.state;
+    try {
+        if (st === SessionState.Initial || st === SessionState.Establishing) {
+            session instanceof Invitation ? session.reject() : session.cancel && session.cancel();
+        } else { session.bye(); }
+    } catch(e) {}
+    session = null;
+};
+
+window.sipBridge.answer = function() {
+    if (!(session instanceof Invitation)) {
+        window.showToast && window.showToast('No incoming call');
+        return;
+    }
+    const inv = session;
+    window.ensureMic().then(function() {
+        return inv.accept({
+            sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
+        });
+    }).catch(function(e) {
+        window.showToast && window.showToast('Answer failed - check microphone permission');
+    });
+};
+
+window.sipBridge.hold = function() {
+    session && session.invite({ sessionDescriptionHandlerModifiers: [Web.holdModifier] }).catch(function(){});
+};
+window.sipBridge.unhold = function() {
+    session && session.invite({ sessionDescriptionHandlerModifiers: [] }).catch(function(){});
+};
+window.sipBridge.mute = function() {
+    if (!session) return;
+    const pc = session.sessionDescriptionHandler && session.sessionDescriptionHandler.peerConnection;
+    if (pc) pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio') s.track.enabled = false; });
+};
+window.sipBridge.unmute = function() {
+    if (!session) return;
+    const pc = session.sessionDescriptionHandler && session.sessionDescriptionHandler.peerConnection;
+    if (pc) pc.getSenders().forEach(s => { if (s.track && s.track.kind === 'audio') s.track.enabled = true; });
+};
+window.sipBridge.sendDtmf = function(tone) {
+    if (!session) return;
+    try { session.sendDTMF(tone, {duration:100, interToneGap:500}); } catch(e) {}
+};
+})();
+</script>
+
 </body>
 </html>
