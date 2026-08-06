@@ -1,307 +1,549 @@
-# SkyKin Call Center — Cloud Deployment Procedure
+# SkyKin Call Center — Smooth Cloud Deployment Runbook
 
-Use this when moving from the local VM to a cloud server.  
-**Source of truth:** GitHub branch `main`  
-**Repo:** https://github.com/Skykin-Technologies/call-center
+Follow this **in order**. Do not skip the ✅ checks at the end of each phase.  
+If a check fails, fix it before continuing.
 
-> Recommended architecture: **one cloud VM** with FusionPBX + FreeSWITCH + Nginx + PostgreSQL (same as local).  
-> The Docker compose setup in this repo is for **local/hybrid development only**, not production telephony.
-
----
-
-## 0. Prerequisites
-
-Before you start, have:
-
-| Item | Notes |
-|------|--------|
-| Cloud VM | Ubuntu 22.04/24.04, 4+ GB RAM, public IP |
-| Domain | e.g. `pbx.yourdomain.com` pointed to the VM |
-| SIP trunk | Provider credentials (DID, SIP username/password, IP allowlist) |
-| Access | SSH root/sudo to the new VM + old local VM |
-| GitHub access | Membership in `Skykin-Technologies` |
-
-Open / allow these ports on the cloud firewall:
-
-- `22` TCP — SSH  
-- `80` / `443` TCP — HTTP / HTTPS  
-- `5060` UDP/TCP — SIP (or provider’s ports)  
-- `5066` / `7443` TCP — WebSocket SIP (internal; prefer nginx `/wss/` on 443)  
-- `8021` TCP — ESL (localhost only; do **not** expose publicly)  
-- RTP range — typically `16384–32768` UDP (confirm FreeSWITCH `rtp-start-port` / `rtp-end-port`)
+| | |
+|---|---|
+| **GitHub repo** | https://github.com/Skykin-Technologies/call-center |
+| **Branch to deploy** | `main` only |
+| **Architecture** | One cloud VM: FusionPBX + FreeSWITCH + Nginx + PHP-FPM + PostgreSQL |
+| **Not for production** | `docker-compose` in this repo (local/hybrid only) |
 
 ---
 
-## 1. Backup the local VM (do this first)
+## Fill this in before you start
 
-On the **local** FusionPBX VM:
+Copy and keep these values handy:
+
+```text
+DOMAIN=pbx.yourcompany.com
+PUBLIC_IP=x.x.x.x
+TIMEZONE=Africa/Addis_Ababa
+FUSION_DOMAIN=client1.yourcompany.com     # FusionPBX tenant domain name
+GITHUB_REPO=https://github.com/Skykin-Technologies/call-center.git
+BRANCH=main
+```
+
+Replace every `pbx.yourcompany.com` / `TIMEZONE` below with your values.
+
+---
+
+## Phase A — Prepare (laptop + local VM)
+
+### A1. Lower DNS TTL (1 day before cutover)
+
+If the production hostname already exists, set DNS TTL to **300 seconds** now.
+
+### A2. Confirm local system is healthy
+
+On the **local VM**, verify once:
 
 ```bash
-# Database
-sudo -u postgres pg_dump -Fc fusionpbx > /root/fusionpbx_$(date +%Y%m%d).dump
+fs_cli -x 'status'
+fs_cli -x 'sofia status'
+timedatectl
+sudo -u postgres psql -d fusionpbx -c "SELECT NOW();"
+php -r 'echo date_default_timezone_get(), " ", date("c"), "\n";'
+ls /var/www/fusionpbx/app/agent_dashboard/js/sipjs.bundle.js
+```
 
-# Config + recordings (adjust paths if different)
-tar -czf /root/skykin_backup_$(date +%Y%m%d).tgz \
+✅ Local softphones register, calls work, Reports show today’s calls.
+
+### A3. Take a migration backup on the local VM
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M)
+mkdir -p /root/skykin_migrate_$STAMP
+cd /root/skykin_migrate_$STAMP
+
+# Database (custom format — best for restore)
+sudo -u postgres pg_dump -Fc fusionpbx -f fusionpbx.dump
+
+# Inventory for later checks
+sudo -u postgres psql -d fusionpbx -c \
+  "SELECT extension, effective_caller_id_name FROM v_extensions ORDER BY 1;" \
+  > extensions.txt
+sudo -u postgres psql -d fusionpbx -c \
+  "SELECT username FROM v_users ORDER BY 1;" > users.txt
+
+# Config + recordings + SkyKin overrides
+tar -czf skykin_files.tgz \
   /etc/fusionpbx \
   /etc/freeswitch \
   /var/lib/freeswitch/recordings \
+  /etc/skykin \
   /var/www/fusionpbx/app/agent_dashboard/skykin_local_config.php \
-  /etc/skykin 2>/dev/null
+  2>/dev/null || true
 
-# Optional: list extensions / agents for verification later
-sudo -u postgres psql -d fusionpbx -c \
-  "SELECT extension, effective_caller_id_name FROM v_extensions ORDER BY extension;"
+# Checksums / sizes
+ls -lh
+sha256sum fusionpbx.dump skykin_files.tgz > SHA256SUMS
 ```
 
-Copy backups to a safe place (laptop or object storage).
+Copy `/root/skykin_migrate_$STAMP` off the VM (scp to laptop or object storage).
+
+✅ You have `fusionpbx.dump`, `skykin_files.tgz`, and `SHA256SUMS` somewhere safe.
 
 ---
 
-## 2. Provision the cloud server
+## Phase B — Cloud VM base install
 
-1. Create the VM and attach a static public IP.  
-2. Point DNS `A` record for your domain to that IP.  
-3. Wait for DNS to resolve:
+### B1. Create VM + firewall
 
-```bash
-dig +short pbx.yourdomain.com
+**Suggested size:** 4 vCPU / 8 GB RAM / 80+ GB disk, Ubuntu 22.04 or 24.04.
+
+Open these ports on the cloud security group / firewall:
+
+| Port | Proto | Purpose |
+|------|-------|---------|
+| 22 | TCP | SSH |
+| 80 | TCP | HTTP (certbot + redirect) |
+| 443 | TCP | HTTPS + WSS softphone |
+| 5060 | UDP/TCP | SIP trunk / peers |
+| 16384–32768 | UDP | RTP media (confirm in FreeSWITCH if different) |
+
+**Do not expose publicly:** `8021` (ESL), `5432` (Postgres), `5066`/`7443` (WS — use nginx `/wss/` on 443 instead).
+
+Attach a **static public IP**. Write it into `PUBLIC_IP` above.
+
+### B2. Point DNS
+
+Create:
+
+```text
+A  pbx.yourcompany.com  ->  PUBLIC_IP
 ```
 
-4. Install FusionPBX using the official installer (or clone your hardened image), so you have:
+Wait until:
 
-- FreeSWITCH  
-- FusionPBX  
-- Nginx  
-- PHP-FPM 8.x  
-- PostgreSQL  
+```bash
+dig +short pbx.yourcompany.com
+# must print PUBLIC_IP
+```
 
-Official path is preferred so FreeSWITCH/FusionPBX wiring is correct.
+✅ DNS resolves to the cloud IP from your laptop.
+
+### B3. Install FusionPBX stack
+
+Use the **official FusionPBX installer** for your Ubuntu version so FreeSWITCH, Nginx, PHP, and Postgres are wired correctly.
+
+After install finishes:
+
+```bash
+systemctl is-active nginx php*-fpm postgresql freeswitch
+fs_cli -x 'status'
+curl -I http://127.0.0.1/
+```
+
+✅ All four services are `active`. FreeSWITCH answers `fs_cli`.
+
+> Tip: complete the FusionPBX web setup wizard once so `/etc/fusionpbx/config.conf` exists. You will overwrite DB contents later with the local dump.
 
 ---
 
-## 3. Deploy the SkyKin code (`main`)
+## Phase D — Deploy SkyKin code from `main`
 
-On the cloud VM:
+Use the **overlay method** (safest on top of an official install).
 
-```bash
-cd /var/www/fusionpbx
-
-# If FusionPBX was installed by the official installer, pull SkyKin on top:
-git remote add skykin https://github.com/Skykin-Technologies/call-center.git
-git fetch skykin
-git checkout -B main skykin/main
-
-# Or, if this directory is already a clone of call-center:
-# git pull origin main
-
-chown -R www-data:www-data /var/www/fusionpbx/app/agent_dashboard
-```
-
-Confirm softphone bundle exists:
+### D1. Fetch the repo beside the web root
 
 ```bash
-ls -la /var/www/fusionpbx/app/agent_dashboard/js/sipjs.bundle.js
+cd /opt
+git clone --branch main --depth 1 \
+  https://github.com/Skykin-Technologies/call-center.git \
+  skykin-call-center
+cd /opt/skykin-call-center
+git rev-parse --short HEAD
+git log -1 --oneline
 ```
+
+### D2. Overlay SkyKin files into FusionPBX
+
+```bash
+WEB=/var/www/fusionpbx
+SRC=/opt/skykin-call-center
+
+# Core SkyKin dashboard app
+rsync -a --delete \
+  "$SRC/app/agent_dashboard/" \
+  "$WEB/app/agent_dashboard/"
+
+# Auth / landing redirects used by SkyKin
+for f in \
+  login.php \
+  logout.php \
+  index.php \
+  core/dashboard/index.php \
+  resources/check_auth.php \
+  resources/require.php \
+  resources/skykin_session_log.php
+do
+  if [ -f "$SRC/$f" ]; then
+    mkdir -p "$(dirname "$WEB/$f")"
+    cp -a "$SRC/$f" "$WEB/$f"
+    echo "copied $f"
+  fi
+done
+
+chown -R www-data:www-data "$WEB/app/agent_dashboard"
+chown www-data:www-data \
+  "$WEB/login.php" "$WEB/logout.php" "$WEB/index.php" \
+  "$WEB/core/dashboard/index.php" \
+  "$WEB/resources/check_auth.php" "$WEB/resources/require.php" \
+  "$WEB/resources/skykin_session_log.php" 2>/dev/null || true
+```
+
+### D3. Verify critical files
+
+```bash
+test -f /var/www/fusionpbx/app/agent_dashboard/index.php
+test -f /var/www/fusionpbx/app/agent_dashboard/supervisor.php
+test -f /var/www/fusionpbx/app/agent_dashboard/play_recording.php
+test -f /var/www/fusionpbx/app/agent_dashboard/js/sipjs.bundle.js
+test -f /var/www/fusionpbx/app/agent_dashboard/skykin_config.php
+php -l /var/www/fusionpbx/app/agent_dashboard/index.php
+php -l /var/www/fusionpbx/app/agent_dashboard/supervisor.php
+php -l /var/www/fusionpbx/app/agent_dashboard/reports.php
+php -l /var/www/fusionpbx/app/agent_dashboard/play_recording.php
+```
+
+✅ All `test` commands succeed and `php -l` reports no syntax errors.
 
 ---
 
-## 4. Restore data from the local VM
+## Phase E — Restore local data onto cloud
+
+Upload `fusionpbx.dump` and `skykin_files.tgz` to the cloud (e.g. `/root/migrate/`).
+
+### E1. Restore PostgreSQL
 
 ```bash
-# Restore DB (example with custom format dump)
-sudo -u postgres pg_restore -d fusionpbx --clean --if-exists /root/fusionpbx_YYYYMMDD.dump
+systemctl stop nginx php*-fpm   # quiet writers during restore
 
-# Restore recordings
-tar -xzf /root/skykin_backup_YYYYMMDD.tgz -C /
+# Optional safety dump of empty/wizard DB
+sudo -u postgres pg_dump -Fc fusionpbx -f /root/fusionpbx_pre_restore.dump
+
+sudo -u postgres pg_restore \
+  --clean --if-exists \
+  -d fusionpbx \
+  /root/migrate/fusionpbx.dump
+
+systemctl start php*-fpm nginx
+```
+
+If `pg_restore` prints non-fatal “errors ignoring drops”, that is usually OK. Confirm data:
+
+```bash
+sudo -u postgres psql -d fusionpbx -c "SELECT COUNT(*) FROM v_extensions;"
+sudo -u postgres psql -d fusionpbx -c "SELECT COUNT(*) FROM v_users;"
+sudo -u postgres psql -d fusionpbx -c "SELECT domain_name FROM v_domains;"
+```
+
+✅ Extension/user counts look like the local inventory files.
+
+### E2. Restore recordings + config snippets
+
+```bash
+# Extract carefully — prefer recordings first
+mkdir -p /root/migrate/extract
+tar -tzf /root/migrate/skykin_files.tgz | head
+tar -xzf /root/migrate/skykin_files.tgz -C /
+
 chown -R www-data:www-data /var/lib/freeswitch/recordings
+# FreeSWITCH may need freeswitch ownership on some installs:
+chown -R freeswitch:freeswitch /var/lib/freeswitch/recordings 2>/dev/null || true
 ```
 
-After restore, in FusionPBX UI verify:
+> After restore, open FusionPBX **Advanced → Default Settings** / Domains and confirm the tenant domain matches what agents will use. Update gateway hostnames if they still point at the old LAN IP.
 
-- Domains  
-- Extensions (agents + supervisor)  
-- Call Center queues / agents / tiers  
-- Gateways (update for new SIP trunk)
+### E3. Reload FreeSWITCH config from FusionPBX
+
+In FusionPBX UI: **Status → SIP Status → Flush cache / Reload XML**  
+Or:
+
+```bash
+fs_cli -x 'reloadxml'
+fs_cli -x 'sofia profile internal restart'
+fs_cli -x 'sofia profile external restart'
+```
+
+✅ `sofia status` shows profiles running.
 
 ---
 
-## 5. Server config (SkyKin)
+## Phase F — SkyKin server settings (do exactly once)
 
-Create `/etc/skykin/config.php` (preferred over committing secrets):
-
-```php
-<?php
-return [
-    'timezone'     => 'Africa/Addis_Ababa',   // or your production zone
-    'ahununu_url'  => 'https://ahununu.com/',
-    'seed_demo_data' => false,
-    // Leave helper APIs empty unless that service is running:
-    // 'recordings_api_base' => '',
-    // 'socket_io_url' => '',
-];
-```
+### F1. `/etc/skykin/config.php`
 
 ```bash
 mkdir -p /etc/skykin
+cat >/etc/skykin/config.php <<'PHP'
+<?php
+return [
+    'timezone'       => 'Africa/Addis_Ababa',
+    'ahununu_url'    => 'https://ahununu.com/',
+    'seed_demo_data' => false,
+    // Leave empty unless you run the helper on :8001
+    'recordings_api_base' => '',
+    'socket_io_url'       => '',
+];
+PHP
 chmod 640 /etc/skykin/config.php
 chown root:www-data /etc/skykin/config.php
 ```
 
-Optional local file (not in git):
+Change `timezone` to your `TIMEZONE` value.
+
+### F2. OS + PHP + FreeSWITCH clocks (prevents “Today Calls = 00”)
 
 ```bash
-cp /var/www/fusionpbx/app/agent_dashboard/skykin_local_config.php.example \
-   /var/www/fusionpbx/app/agent_dashboard/skykin_local_config.php
+timedatectl set-timezone Africa/Addis_Ababa
+timedatectl set-ntp true
+timedatectl status
+
+# PHP timezone (FPM)
+PHP_INI=$(ls /etc/php/*/fpm/php.ini | head -1)
+sed -i 's#^;date.timezone =.*#date.timezone = Africa/Addis_Ababa#' "$PHP_INI"
+sed -i 's#^date.timezone =.*#date.timezone = Africa/Addis_Ababa#' "$PHP_INI"
+grep ^date.timezone "$PHP_INI"
+
+# Sessions: 8 hours + strict mode
+sed -i 's/^session.gc_maxlifetime.*/session.gc_maxlifetime = 28800/' "$PHP_INI"
+sed -i 's/^session.use_strict_mode.*/session.use_strict_mode = 1/' "$PHP_INI"
+grep -E 'session.gc_maxlifetime|session.use_strict_mode' "$PHP_INI"
 ```
 
-### Timezone / clock (critical for “Today Calls” and reports)
+**FreeSWITCH wall clock** (important on VMs):
 
 ```bash
-timedatectl set-timezone Africa/Addis_Ababa   # your zone
-timedatectl set-ntp true
-# Disable FreeSWITCH monotonic timing if the host can suspend / clock-jump
-# (same fix as local VM) in switch.conf.xml, then:
+# Prefer wall clock over monotonic timing
+CONF=/etc/freeswitch/autoload_configs/switch.conf.xml
+if grep -q 'enable-monotonic-timing' "$CONF"; then
+  sed -i 's/enable-monotonic-timing" value="true"/enable-monotonic-timing" value="false"/' "$CONF"
+fi
+grep monotonic "$CONF" || true
 systemctl restart freeswitch
 ```
 
-### PHP sessions
+### F3. PHP-FPM capacity (dashboards poll often)
 
 ```bash
-# 8-hour sessions (example)
-sed -i 's/^session.gc_maxlifetime.*/session.gc_maxlifetime = 28800/' /etc/php/*/fpm/php.ini
-# Ensure session.use_strict_mode = 1
+POOL=$(ls /etc/php/*/fpm/pool.d/www.conf | head -1)
+sed -i 's/^pm.max_children = .*/pm.max_children = 25/' "$POOL"
+grep ^pm.max_children "$POOL"
 systemctl restart php*-fpm
 ```
 
-Raise PHP-FPM children if two dashboards poll heavily (local used ~25).
+### F4. ESL must be localhost
 
-### ESL
+```bash
+# Remove stale LAN ESL_HOST if present
+if [ -f /var/www/fusionpbx/.env ]; then
+  sed -i 's/^ESL_HOST=.*/# ESL_HOST=127.0.0.1/' /var/www/fusionpbx/.env || true
+  grep ESL /var/www/fusionpbx/.env || true
+fi
+fs_cli -x 'status'   # proves ESL/local control works
+```
 
-Keep ESL on `127.0.0.1`. Do **not** put a stale LAN IP in `/var/www/fusionpbx/.env`.  
-SkyKin already falls back to localhost when ESL is misconfigured.
+✅ `timedatectl` NTP active, PHP timezone set, FreeSWITCH restarted, `pm.max_children = 25`.
 
 ---
 
-## 6. HTTPS + WSS (required for softphone mic)
+## Phase G — HTTPS + WSS (required for microphone)
 
-1. Issue Let’s Encrypt cert for the domain (certbot + nginx).  
-2. Serve FusionPBX only over HTTPS.  
-3. Proxy WebSocket SIP through nginx on the same cert:
+Softphones **will not** work reliably on HTTP or with a self-signed cert mismatch.
+
+### G1. Install certbot and get a certificate
+
+```bash
+apt-get update
+apt-get install -y certbot python3-certbot-nginx
+certbot --nginx -d pbx.yourcompany.com
+```
+
+Follow prompts. Choose redirect HTTP → HTTPS.
+
+### G2. Add `/wss/` proxy (same certificate as the site)
+
+Edit the nginx site for FusionPBX (often under `/etc/nginx/sites-enabled/`) and add **inside the HTTPS server block**:
 
 ```nginx
 location /wss/ {
-    proxy_pass http://127.0.0.1:5066;   # or FreeSWITCH WS listen address
+    proxy_pass http://127.0.0.1:5066;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_read_timeout 86400;
 }
 ```
 
-Softphones register to: `wss://pbx.yourdomain.com/wss/`  
-Do **not** rely on FreeSWITCH’s self-signed cert on port 7443 in browsers.
+Confirm FreeSWITCH WS port:
 
-Reload nginx after changes:
+```bash
+ss -lntp | grep -E '5066|7443' || true
+fs_cli -x 'sofia status'
+```
+
+If WS listens on another port/IP, change `proxy_pass` accordingly.
 
 ```bash
 nginx -t && systemctl reload nginx
+curl -Ik https://pbx.yourcompany.com/login.php | head
 ```
 
----
-
-## 7. SIP trunk (when it arrives)
-
-In FusionPBX:
-
-1. **Accounts → Gateways** — add provider SIP trunk.  
-2. Set outbound proxy / realm / username / password as provider documents.  
-3. **Dialplan → Outbound routes** — dial patterns to the gateway.  
-4. **Inbound destinations** — map DID → IVR / queue (e.g. 9000).  
-5. Ask provider to allowlist your **cloud public IP**.  
-6. Open RTP + SIP ports on the cloud firewall to match FreeSWITCH.
-
-Test:
-
-- Extension-to-extension softphone call  
-- Inbound DID → queue → agent  
-- Outbound via trunk  
-- Transfer to supervisor extension  
+✅ Browser opens login on **https://** with a trusted padlock.  
+✅ Certificate subject matches `DOMAIN`.
 
 ---
 
-## 8. Roles & users smoke check
+## Phase H — Pre-production smoke test (before SIP trunk)
 
-| Role | Login should land on |
-|------|----------------------|
-| Agent | `/app/agent_dashboard/index.php` |
-| Supervisor | `/app/agent_dashboard/supervisor.php` |
-| Admin | FusionPBX admin / redirected by groups |
+Use a real browser (Chrome). Allow microphone when prompted.
 
-Verify:
+| # | Test | Expected |
+|---|------|----------|
+| 1 | Login as agent | Lands on agent dashboard |
+| 2 | Login as supervisor (other browser/profile) | Lands on supervisor dashboard |
+| 3 | Agent softphone | Status **Registered (ext)** |
+| 4 | Supervisor softphone | Status **Registered (ext)** |
+| 5 | Agent A calls Agent B | Answer works; timer counts |
+| 6 | Transfer to supervisor | Supervisor phone rings; can answer |
+| 7 | Live Agent Status | Shows Available / On Call correctly |
+| 8 | Break request | Stays Available until supervisor approves |
+| 9 | Recording | REC shows; Play works after hangup |
+| 10 | Reports | Today KPIs non-zero after test calls; Excel exports |
+| 11 | Sidebar | Reports / Evaluation / CRM open; **Supervisor** returns home |
 
-- [ ] Agent softphone shows **Registered**  
-- [ ] Supervisor softphone shows **Registered** (for transfers)  
-- [ ] Live agent status updates  
-- [ ] Break request + supervisor approve  
-- [ ] Auto recording + Play works  
-- [ ] Reports KPIs + Excel export  
-- [ ] Evaluation / CRM open from management sidebar  
+If softphone fails with WSS/mic issues, see **Troubleshooting** below — do not proceed to cutover.
 
----
-
-## 9. Cutover checklist
-
-1. Lower DNS TTL a day before cutover (if reusing domain).  
-2. Final DB + recordings dump from local VM.  
-3. Restore on cloud, `git pull origin main`.  
-4. Switch SIP trunk IP allowlist / DID routing to cloud.  
-5. Point DNS to cloud IP.  
-6. Confirm HTTPS cert renews (`certbot renew --dry-run`).  
-7. Keep local VM powered for 48h as rollback.  
-
-Rollback: point DNS back to local IP; revert trunk allowlist.
+✅ All rows above pass with internal extensions.
 
 ---
 
-## 10. Day-2 operations
+## Phase I — SIP trunk (when delivered)
+
+Do this only after Phase H is green.
+
+1. Ask the provider to allowlist **`PUBLIC_IP`**.  
+2. In FusionPBX: **Accounts → Gateways** — create trunk with provider credentials.  
+3. **Dialplan → Outbound Routes** — patterns to that gateway.  
+4. **Inbound Destinations** — DID → IVR / queue.  
+5. Open SIP + RTP ports if not already open.  
+6. Test: inbound DID, outbound PSTN, transfer to supervisor.
 
 ```bash
-# Update dashboards from GitHub
-cd /var/www/fusionpbx
-git pull origin main
-chown -R www-data:www-data app/agent_dashboard
-systemctl reload php*-fpm   # if needed
-
-# Logs
-tail -f /var/log/nginx/error.log
+fs_cli -x 'sofia status gateway'
 fs_cli -x 'sofia status'
-journalctl -u freeswitch -f
 ```
 
-Backups (cron daily):
-
-- `pg_dump` of `fusionpbx`  
-- `/var/lib/freeswitch/recordings`  
-- `/etc/fusionpbx`, `/etc/freeswitch`, `/etc/skykin`
+✅ Inbound and outbound PSTN calls succeed.
 
 ---
 
-## Quick reference URLs
+## Phase J — Cutover day (shortest downtime)
 
-After DNS + HTTPS:
+Do this in one sitting:
 
-- Login: `https://pbx.yourdomain.com/login.php`  
-- Agent: `https://pbx.yourdomain.com/app/agent_dashboard/index.php`  
-- Supervisor: `https://pbx.yourdomain.com/app/agent_dashboard/supervisor.php`  
-- Reports: `https://pbx.yourdomain.com/app/agent_dashboard/reports.php`
+1. **Announce maintenance** (15–30 minutes).  
+2. On local VM: final dump (repeat Phase A3 with new stamp).  
+3. Copy final dump to cloud; restore DB (Phase E1).  
+4. Update code:
+
+```bash
+cd /opt/skykin-call-center
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+# re-run Phase D2 overlay commands
+systemctl reload php*-fpm
+```
+
+5. Provider: switch trunk / DID routing to cloud IP (if not already).  
+6. DNS: point `DOMAIN` A record to `PUBLIC_IP` (if not already).  
+7. Wait for DNS; re-run Phase H quick checks.  
+8. Keep local VM on for **48 hours** as rollback.
+
+**Rollback:** point DNS back to local IP; move trunk allowlist back; users log into old system.
 
 ---
 
-## Do not forget
+## Phase K — Day-2 (updates & backups)
 
-- Use **`main`** only for production deploys.  
-- Never commit `skykin_local_config.php`, `.env`, or PATs.  
-- Softphone **requires trusted HTTPS**.  
-- Keep ESL and FreeSWITCH WS internal; expose SIP/RTP carefully.  
-- Timezone + NTP must match between OS, PHP, Postgres, FreeSWITCH.
+### Update dashboards later
+
+```bash
+cd /opt/skykin-call-center
+git pull --ff-only origin main
+# re-run Phase D2 rsync/cp block
+systemctl reload php*-fpm
+```
+
+### Daily backup cron (example)
+
+```bash
+cat >/etc/cron.daily/skykin-backup <<'EOF'
+#!/bin/bash
+STAMP=$(date +%Y%m%d)
+DIR=/var/backups/skykin/$STAMP
+mkdir -p "$DIR"
+sudo -u postgres pg_dump -Fc fusionpbx -f "$DIR/fusionpbx.dump"
+tar -czf "$DIR/recordings.tgz" /var/lib/freeswitch/recordings
+tar -czf "$DIR/config.tgz" /etc/fusionpbx /etc/freeswitch /etc/skykin
+find /var/backups/skykin -mindepth 1 -maxdepth 1 -mtime +14 -exec rm -rf {} \;
+EOF
+chmod +x /etc/cron.daily/skykin-backup
+```
+
+---
+
+## Troubleshooting (fast)
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| Softphone never registers / WSS 1006 | Cert mismatch or no `/wss/` proxy | Use HTTPS domain cert; proxy `/wss/` → `5066` |
+| Answer failed / mic blocked | Browser distrusts cert | Let’s Encrypt on real domain; allow mic |
+| Today Calls = 00 | TZ drift / FreeSWITCH monotonic clock | Phase F2; restart FreeSWITCH |
+| All agents Offline on supervisor | ESL down / wrong ESL_HOST | ESL on `127.0.0.1`; remove stale `.env` ESL_HOST |
+| Session logout on tab switch | PHP-FPM starvation / short GC | `pm.max_children=25`, `gc_maxlifetime=28800` |
+| Play recording fails | Missing `play_recording.php` or file path | Confirm Phase D files; check recordings dir permissions |
+| Reports empty after restore | Wrong domain filter / empty CDR | Confirm `v_domains` name matches login domain |
+
+Useful commands:
+
+```bash
+tail -f /var/log/nginx/error.log
+journalctl -u freeswitch -f
+fs_cli -x 'sofia status'
+fs_cli -x 'callcenter_config agent list'
+php -i | grep -E 'date.timezone|session.gc_maxlifetime'
+```
+
+---
+
+## Final sign-off checklist
+
+Print / tick before calling the migration “done”:
+
+- [ ] DNS + HTTPS padlock OK  
+- [ ] `main` code overlaid; `sipjs.bundle.js` present  
+- [ ] DB restored; extensions/users match inventory  
+- [ ] Timezone aligned (OS / PHP / FreeSWITCH)  
+- [ ] Agent + supervisor softphones **Registered**  
+- [ ] Internal call + transfer to supervisor OK  
+- [ ] Recordings play  
+- [ ] Reports KPIs + Excel OK  
+- [ ] SIP trunk inbound/outbound OK (when available)  
+- [ ] Daily backup cron installed  
+- [ ] Local VM kept 48h for rollback  
+
+---
+
+## Quick URLs (production)
+
+- Login: `https://DOMAIN/login.php`  
+- Agent: `https://DOMAIN/app/agent_dashboard/index.php`  
+- Supervisor: `https://DOMAIN/app/agent_dashboard/supervisor.php`  
+- Reports: `https://DOMAIN/app/agent_dashboard/reports.php`
