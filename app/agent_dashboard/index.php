@@ -1959,6 +1959,8 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 .rec-play     { background: #0047AB; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .rec-play:hover { background: #003a8c; }
 .rec-download { background: #e9ecef; color: #555; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 4px; }
+.rec-stop     { background: #c62828; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.rec-stop:hover { background: #a51f1f; }
 
 /* ?? Footer ?? */
 .footer { text-align: center; font-size: 11px; color: #aaa; padding: 16px; }
@@ -2457,6 +2459,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                     <tr><td colspan="6" class="rec-empty">No recordings found for today.</td></tr>
                 </tbody>
             </table>
+            <div id="recPlayerWrap" style="display:none;align-items:center;gap:8px;margin-top:12px;">
+                <button class="rec-stop" onclick="stopRecording()">&#9632; Stop</button>
+                <span id="recPlayingName" style="font-size:11px;color:#888;flex:1;"></span>
+            </div>
+            <audio id="recPlayer" controls style="width:100%;margin-top:8px;display:none"></audio>
         </div>
 
         <!-- ACW History Tab -->
@@ -3373,7 +3380,8 @@ function updateRecordings(recs) {
             <td><span class="badge ${badge}">${dir}</span></td>
             <td style="font-size:11px;color:#888;">${r.filename}</td>
             <td>
-                <button class="rec-play" onclick="playRecording('${r.filepath}')">&#9654; Play</button>
+                <button class="rec-play" onclick="playRecording('${r.filepath}', '${r.filename}')">&#9654; Play</button>
+                <button class="rec-stop" onclick="stopRecording()">&#9632; Stop</button>
                 <a href="${r.filepath}" download>
                     <button class="rec-download">&#8595; Save</button>
                 </a>
@@ -3383,15 +3391,38 @@ function updateRecordings(recs) {
     document.getElementById('recordingsBody').innerHTML = html;
 }
 
-let recAudio = null;
-function playRecording(path) {
-    if (recAudio) { recAudio.pause(); recAudio = null; }
-    recAudio = new Audio(path);
-    recAudio.addEventListener('error', () => {
-        const code = recAudio.error ? recAudio.error.code : 0;
+function playRecording(path, filename) {
+    const player = document.getElementById('recPlayer');
+    const wrap   = document.getElementById('recPlayerWrap');
+    const label  = document.getElementById('recPlayingName');
+    if (!player) return;
+
+    player.onerror = () => {
+        const code = player.error ? player.error.code : 0;
         toast(code === 4 ? 'Recording file is missing or unreadable' : 'Playback failed (code ' + code + ')', '#c62828');
-    });
-    recAudio.play().catch(e => toast('Playback blocked: ' + (e.name || e.message), '#c62828'));
+    };
+    player.onended = () => stopRecording();
+
+    player.src = path;
+    player.style.display = 'block';
+    if (wrap)  wrap.style.display = 'flex';
+    if (label) label.textContent = filename ? 'Playing: ' + filename : '';
+    player.play().catch(e => toast('Playback blocked: ' + (e.name || e.message), '#c62828'));
+}
+
+function stopRecording() {
+    const player = document.getElementById('recPlayer');
+    const wrap   = document.getElementById('recPlayerWrap');
+    const label  = document.getElementById('recPlayingName');
+    if (player) {
+        player.pause();
+        player.currentTime = 0;
+        player.removeAttribute('src');
+        player.load();
+        player.style.display = 'none';
+    }
+    if (wrap)  wrap.style.display = 'none';
+    if (label) label.textContent = '';
 }
 
 // ?? Empty data (no calls / API error) ?????????????

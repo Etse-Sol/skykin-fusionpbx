@@ -411,13 +411,53 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $db = getDB();
         $queues = [];
         try {
-            $s = $db->prepare("SELECT q.call_queue_name as name,
-                COUNT(c.uuid) as waiting
-                FROM v_call_queues q
-                LEFT JOIN v_call_center_calls c ON c.queue_name=q.call_queue_name AND c.state='Waiting'
-                WHERE q.domain_name=:d GROUP BY q.call_queue_name");
-            $s->execute([':d'=>$domain]);
-            $queues = $s->fetchAll(PDO::FETCH_ASSOC);
+            // FusionPBX uses v_call_center_queues (not v_call_queues). Waiting
+            // callers live in FreeSWITCH mod_callcenter, not a Postgres table.
+            $s = $db->prepare(
+                "SELECT q.queue_name AS name, q.queue_extension AS extension
+                 FROM v_call_center_queues q
+                 JOIN v_domains d ON d.domain_uuid = q.domain_uuid
+                 WHERE d.domain_name = :d
+                 ORDER BY q.queue_extension, q.queue_name"
+            );
+            $s->execute([':d' => $domain]);
+            $queue_rows = $s->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $esl_err = '';
+            $esl = skykin_esl($esl_err);
+            foreach ($queue_rows as $qr) {
+                $waiting = 0;
+                $qkey = trim((string)($qr['extension'] ?? ''));
+                if ($qkey !== '') {
+                    $qkey .= '@' . $domain;
+                    $members = '';
+                    if ($esl) {
+                        $res = $esl->request('api callcenter_config queue list members ' . $qkey);
+                        $members = is_array($res) ? (string)($res['$'] ?? '') : (string)$res;
+                    } else {
+                        $members = (string)shell_exec(
+                            "fs_cli -x " . escapeshellarg('callcenter_config queue list members ' . $qkey) . " 2>/dev/null"
+                        );
+                    }
+                    foreach (preg_split("/\r\n|\n|\r/", $members) as $line) {
+                        $line = trim($line);
+                        if ($line === '' || stripos($line, '+OK') === 0) {
+                            continue;
+                        }
+                        if (stripos($line, 'queue|') === 0 || stripos($line, 'name|') === 0) {
+                            continue; // header
+                        }
+                        if (strpos($line, '|') !== false) {
+                            $waiting++;
+                        }
+                    }
+                }
+                $queues[] = [
+                    'name' => (string)($qr['name'] ?? ''),
+                    'extension' => (string)($qr['extension'] ?? ''),
+                    'waiting' => $waiting,
+                ];
+            }
         } catch(Exception $ignored){}
 
         // Today totals
@@ -1288,7 +1328,13 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                 </tr></thead>
                 <tbody id="recBody"><tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
             </table>
-            <audio id="recPlayer" controls style="width:100%;margin-top:12px;display:none"></audio>
+            <div id="recPlayerWrap" style="display:none;align-items:center;gap:8px;margin-top:12px;">
+                <button onclick="stopRec()"
+                    style="background:#c62828;color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:700">
+                    &#9632; Stop</button>
+                <span id="recPlayingName" style="font-size:11px;color:#888;flex:1"></span>
+            </div>
+            <audio id="recPlayer" controls style="width:100%;margin-top:8px;display:none"></audio>
         </div>
 
         <!-- Voice Quality Tab -->
@@ -1885,12 +1931,32 @@ function fetchRecordings(){
 
 function playRec(path, file){
     const player=document.getElementById('recPlayer');
+    const wrap=document.getElementById('recPlayerWrap');
+    const label=document.getElementById('recPlayingName');
     const domain = (window.SKYKIN && SKYKIN.domain) || location.hostname;
     let url = '/app/agent_dashboard/play_recording.php?f='+encodeURIComponent(file)
         +'&d='+encodeURIComponent(domain);
     if (path) { url += '&path='+encodeURIComponent(path.replace(/\/+$/,'')); }
+    player.onended = () => stopRec();
     player.src=url; player.style.display='block';
+    if (wrap) wrap.style.display='flex';
+    if (label) label.textContent = 'Playing: ' + decodeURIComponent(file);
     player.play().catch(()=>{ toast('Could not play recording. File may have moved.','#c62828'); });
+}
+
+function stopRec(){
+    const player=document.getElementById('recPlayer');
+    const wrap=document.getElementById('recPlayerWrap');
+    const label=document.getElementById('recPlayingName');
+    if (player) {
+        player.pause();
+        player.currentTime = 0;
+        player.removeAttribute('src');
+        player.load();
+        player.style.display='none';
+    }
+    if (wrap) wrap.style.display='none';
+    if (label) label.textContent='';
 }
 
 setInterval(()=>{ fetchQueue(); fetchAgents(); fetchLeaveRequests(); }, 10000);

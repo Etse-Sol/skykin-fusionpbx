@@ -382,7 +382,12 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 
         <!-- Recording playback if available -->
         <div class="audio-wrap" id="audioWrap" style="display:none">
-          <div style="font-size:11px;color:#888;margin-bottom:6px">Recording</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:11px;color:#888">Recording</span>
+            <button onclick="stopEvalAudio()"
+              style="background:#c62828;color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:700">
+              &#9632; Stop</button>
+          </div>
           <audio id="evalAudio" controls></audio>
         </div>
 
@@ -564,6 +569,7 @@ function selectCall(r) {
 
     // Recording
     const aw = document.getElementById('audioWrap');
+    stopEvalAudio();
     if (r.record_name) {
         const fname = r.record_name;
         const domain = (window.SKYKIN && SKYKIN.domain) || location.hostname;
@@ -574,6 +580,7 @@ function selectCall(r) {
         aw.style.display = 'block';
     } else { aw.style.display = 'none'; }
 
+
     // Reset scores
     Object.keys(scores).forEach(k => setStar(k,0));
     document.getElementById('evalNotes').value = '';
@@ -581,6 +588,13 @@ function selectCall(r) {
     document.getElementById('btnSave').textContent = 'Save Evaluation';
 
     switchTab('score');
+}
+
+function stopEvalAudio() {
+    const a = document.getElementById('evalAudio');
+    if (!a) return;
+    a.pause();
+    a.currentTime = 0;
 }
 
 async function saveEval() {
