@@ -1,15 +1,35 @@
-#!/bin/bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 ESL_PASSWORD="${ESL_PASSWORD:-ClueCon}"
 ESL_LISTEN_IP="${ESL_LISTEN_IP:-0.0.0.0}"
-WS_BIND="${WS_BIND:-0.0.0.0}"
 RTP_START="${RTP_START_PORT:-16384}"
 RTP_END="${RTP_END_PORT:-16584}"
 
-mkdir -p /etc/freeswitch/autoload_configs /etc/freeswitch/sip_profiles /var/lib/freeswitch/recordings
+# Bootstrap vanilla config (same as safarov/freeswitch docker-entrypoint.sh).
+# Our ENTRYPOINT replaces theirs, so we must do this ourselves.
+if [ ! -f /etc/freeswitch/freeswitch.xml ]; then
+  echo "Bootstrapping FreeSWITCH config from vanilla templates"
+  mkdir -p /etc/freeswitch
+  cp -a /usr/share/freeswitch/conf/vanilla/. /etc/freeswitch/
+fi
 
-# Event Socket — must accept connections from the web container
+mkdir -p \
+  /etc/freeswitch/autoload_configs \
+  /etc/freeswitch/sip_profiles \
+  /var/lib/freeswitch/recordings \
+  /var/log/freeswitch \
+  /var/run/freeswitch \
+  /usr/share/freeswitch/scripts
+
+# Default ESL ACL is loopback.auto (blocks Docker bridge peers).
+# rfc1918.auto allows Docker nets but NOT 127.0.0.1 (breaks fs_cli/healthcheck).
+# Custom "skykin" list allows loopback + private ranges.
+ACL_FILE=/etc/freeswitch/autoload_configs/acl.conf.xml
+if [ -f "$ACL_FILE" ] && ! grep -q 'list name="skykin"' "$ACL_FILE"; then
+  sed -i 's#</network-lists>#    <list name="skykin" default="deny">\n      <node type="allow" cidr="127.0.0.1/32"/>\n      <node type="allow" cidr="10.0.0.0/8"/>\n      <node type="allow" cidr="172.16.0.0/12"/>\n      <node type="allow" cidr="192.168.0.0/16"/>\n    </list>\n  </network-lists>#' "$ACL_FILE" || true
+fi
+
 cat > /etc/freeswitch/autoload_configs/event_socket.conf.xml <<EOF
 <configuration name="event_socket.conf" description="Socket Client">
   <settings>
@@ -17,31 +37,22 @@ cat > /etc/freeswitch/autoload_configs/event_socket.conf.xml <<EOF
     <param name="listen-ip" value="${ESL_LISTEN_IP}"/>
     <param name="listen-port" value="8021"/>
     <param name="password" value="${ESL_PASSWORD}"/>
+    <param name="apply-inbound-acl" value="skykin"/>
   </settings>
 </configuration>
 EOF
 
-# Prefer wall clock (same fix as the bare-metal VM)
 if [ -f /etc/freeswitch/autoload_configs/switch.conf.xml ]; then
   sed -i 's/enable-monotonic-timing" value="true"/enable-monotonic-timing" value="false"/g' \
     /etc/freeswitch/autoload_configs/switch.conf.xml || true
+  sed -i "s/rtp-start-port\" value=\"[0-9]*\"/rtp-start-port\" value=\"${RTP_START}\"/" \
+    /etc/freeswitch/autoload_configs/switch.conf.xml || true
+  sed -i "s/rtp-end-port\" value=\"[0-9]*\"/rtp-end-port\" value=\"${RTP_END}\"/" \
+    /etc/freeswitch/autoload_configs/switch.conf.xml || true
 fi
 
-# Narrow RTP range so docker port maps stay manageable in lab/full-compose mode.
-# For production SIP trunks, prefer network_mode: host and a full RTP range.
-if [ -f /etc/freeswitch/autoload_configs/switch.conf.xml ]; then
-  if grep -q 'rtp-start-port' /etc/freeswitch/autoload_configs/switch.conf.xml; then
-    sed -i "s/rtp-start-port\" value=\"[0-9]*\"/rtp-start-port\" value=\"${RTP_START}\"/" \
-      /etc/freeswitch/autoload_configs/switch.conf.xml || true
-    sed -i "s/rtp-end-port\" value=\"[0-9]*\"/rtp-end-port\" value=\"${RTP_END}\"/" \
-      /etc/freeswitch/autoload_configs/switch.conf.xml || true
-  fi
-fi
-
-# Ensure internal profile exposes WebSocket for the softphone (/wss/ proxy)
 INTERNAL=/etc/freeswitch/sip_profiles/internal.xml
 if [ -f "$INTERNAL" ]; then
-  # ws-binding: plain WS on 5066 (nginx terminates TLS on the web container)
   if grep -q 'ws-binding' "$INTERNAL"; then
     sed -i "s#<param name=\"ws-binding\".*#<param name=\"ws-binding\" value=\":5066\"/>#" "$INTERNAL" || true
   else
@@ -50,11 +61,10 @@ if [ -f "$INTERNAL" ]; then
 fi
 
 echo "SkyKin FreeSWITCH starting"
-echo "  ESL: ${ESL_LISTEN_IP}:8021 (password from ESL_PASSWORD)"
-echo "  WS:  ${WS_BIND}:5066"
+echo "  ESL: ${ESL_LISTEN_IP}:8021"
+echo "  WS:  :5066"
 echo "  RTP: ${RTP_START}-${RTP_END}/udp"
 
-# Run FreeSWITCH in foreground (image paths vary slightly by tag)
 FS_BIN="$(command -v freeswitch || true)"
 if [ -z "$FS_BIN" ]; then
   for c in /usr/bin/freeswitch /usr/local/bin/freeswitch /usr/local/freeswitch/bin/freeswitch; do
@@ -63,7 +73,10 @@ if [ -z "$FS_BIN" ]; then
 fi
 if [ -z "$FS_BIN" ]; then
   echo "ERROR: freeswitch binary not found in image" >&2
+  ls -la /usr/bin/freeswitch /usr/local/bin/freeswitch 2>&1 || true
   exit 1
 fi
 
+# -nc = no console, -nf = no fork, -nonat = skip auto-NAT (Docker).
+# SCHED_FIFO / nice warnings in Docker are expected and non-fatal.
 exec "$FS_BIN" -nonat -nf -nc -nosql

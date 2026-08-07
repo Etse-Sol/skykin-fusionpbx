@@ -8,10 +8,16 @@ If a check fails, fix it before continuing.
 | **GitHub repo** | https://github.com/Skykin-Technologies/call-center |
 | **Branch to deploy** | `main` only |
 | **Preferred architecture** | One cloud VM: FusionPBX + FreeSWITCH + Nginx + PHP-FPM + PostgreSQL |
-| **Full Docker** | Supported: web + DB + FreeSWITCH via `docker compose` (see `docker/README.md`) |
+| **Full Docker** | Supported: web + DB + FreeSWITCH via `docker compose` (follow `DOCKER_DEPLOYMENT.md`) |
 | **Safer Docker** | Hybrid: web/DB in Docker, FreeSWITCH on the VM (`docker-compose.hybrid.yml`) |
 
 > Full Docker is doable when leadership requires containers. For live SIP trunks, prefer classic VM or hybrid until RTP/host-network is hardened.
+>
+> For the new `skykin-fusionpbx-web` and
+> `skykin-fusionpbx-freeswitch` images, use the dedicated
+> **`DOCKER_DEPLOYMENT.md`** manual. It covers cloud build and prebuilt-image
+> TAR deployment, database restore, HTTPS/WSS, SIP/RTP, verification, backup
+> and rollback.
 
 ---
 
