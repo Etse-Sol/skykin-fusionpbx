@@ -1,30 +1,34 @@
 # SkyKin Docker
 
-Hybrid setup: **web + Postgres in Docker**, **FreeSWITCH on your Debian VM**.
+Full stack by default: **web + Postgres + FreeSWITCH** in Docker.
 
-## Why not FreeSWITCH in Docker?
+Hybrid mode (FreeSWITCH on a host/VM) is still available for safer production SIP.
 
-FreeSWITCH needs many UDP/RTP ports, low-latency media, and SIP/WSS networking that is hard to get right in containers. Keep FreeSWITCH on the VM you already run (`fusionbpx`).
+## Services
 
-## What this runs
-
-| Service | Container | Port |
-|---------|-----------|------|
-| Agent dashboard + FusionPBX PHP | `skykin-web` | http://localhost:8080 |
+| Service | Container | Ports |
+|---------|-----------|-------|
+| FusionPBX + SkyKin dashboards | `skykin-web` | http://localhost:8080 |
 | PostgreSQL | `skykin-db` | localhost:5433 |
+| FreeSWITCH | `skykin-freeswitch` | SIP 5060, WS 5066, ESL 127.0.0.1:8021, RTP 16384–16584/udp |
 
-## Quick start
+## Quick start (full Docker)
 
 ```bash
 # from repo root
 cp .env.docker.example .env
+# edit DB_PASSWORD / ESL_PASSWORD
+
 docker compose up --build -d
+docker compose ps
 ```
 
 Open:
 
-- Agent dashboard: http://localhost:8080/app/agent_dashboard/index.php
-- Supervisor: http://localhost:8080/app/agent_dashboard/supervisor.php
+- Agent: http://localhost:8080/app/agent_dashboard/index.php  
+- Supervisor: http://localhost:8080/app/agent_dashboard/supervisor.php  
+
+Softphone WS path inside Docker: `ws://localhost:8080/wss/` (nginx → `freeswitch:5066`).
 
 Stop:
 
@@ -32,34 +36,68 @@ Stop:
 docker compose down
 ```
 
-## Connect to FreeSWITCH (VM)
+## Hybrid mode (recommended for live SIP trunks)
 
-1. Start your FusionPBX VM so FreeSWITCH is listening on `5066` (ws) and `8021` (ESL).
-2. In `.env` set the VM IP if `host.docker.internal` cannot reach it:
+Keep FreeSWITCH on the Debian/Ubuntu VM; only web + DB in Docker:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.hybrid.yml up --build -d
+```
+
+Set in `.env`:
 
 ```env
-ESL_HOST=192.168.243.129
-FREESWITCH_WS_UPSTREAM=192.168.243.129:5066
+ESL_HOST=host.docker.internal
+FREESWITCH_WS_UPSTREAM=host.docker.internal:5066
 ```
 
-3. Allow the Docker host IP in FreeSWITCH ESL ACL if needed (`event_socket.conf.xml`).
+On Linux, allow Docker → host ESL/WS, or set the VM IP explicitly.
 
-4. Softphone WSS path inside Docker is `ws://localhost:8080/wss/` (proxied to FreeSWITCH). For HTTPS on the VM you already use nginx `/wss/` there — that path is unchanged.
+## Production notes (important)
 
-## Notes
+1. **Fresh Postgres is empty** — import a FusionPBX dump from your working VM for agents/queues/CDRs.  
+2. **RTP in compose uses a narrow range** (`16384–16584`) so port publishing stays workable. Real trunks often need `16384–32768` and **`network_mode: host`** for the FreeSWITCH service on Linux.  
+3. **HTTPS** — browsers need a trusted cert for mic/WSS. Put nginx/Caddy or a cloud LB in front with Let’s Encrypt; keep `/wss/` proxied to the web container (or directly to FreeSWITCH WS).  
+4. **Full Docker ≠ zero FreeSWITCH ops** — dialplan, gateways, NAT, and codecs still need FusionPBX/FreeSWITCH tuning after DB restore.  
+5. Do **not** expose ESL (`8021`) on a public interface.
 
-- Fresh Postgres is empty — full FusionPBX schema is **not** auto-imported. Tickets/ACW can still use SQLite (`skykin_local.db`). Call-center agent status needs FusionPBX tables / a DB dump from the VM if you want full parity.
-- To import a dump from the VM later:
+### Linux host-network FreeSWITCH (best call quality)
 
-```bash
-docker compose exec -T db psql -U fusionpbx fusionpbx < fusionpbx_dump.sql
+In `docker-compose.yml`, for the `freeswitch` service:
+
+```yaml
+network_mode: host
+# remove the ports: block when using host networking
 ```
 
-- Agent dashboard files are bind-mounted so UI edits apply without rebuild.
-- SQLite DB permissions are fixed on container start (writable by `www-data`).
+Then set web env to reach FreeSWITCH on the host bridge IP / `172.17.0.1`, or run web also with appropriate wiring. Prefer hybrid mode if this gets messy.
 
-## Rebuild
+## Update code
 
 ```bash
+git pull origin main
 docker compose up --build -d
+```
+
+Agent dashboard files are bind-mounted (`./app/agent_dashboard`), so many UI edits apply without rebuild. Core PHP/nginx image changes need `--build`.
+
+## Import a DB dump
+
+```bash
+docker compose exec -T db pg_restore -U fusionpbx -d fusionpbx --clean --if-exists < fusionpbx.dump
+```
+
+## Troubleshooting
+
+| Symptom | Check |
+|---------|--------|
+| Web up, phone never registers | `docker compose logs freeswitch` and `web`; confirm `/wss/` → `freeswitch:5066` |
+| ESL / agent status stuck | `ESL_HOST=freeswitch`, password matches, `docker compose exec freeswitch fs_cli -x status` |
+| One-way audio | RTP ports not published / NAT; use host networking or hybrid |
+| Empty dashboards | DB not restored / wrong domain |
+
+```bash
+docker compose logs -f web freeswitch
+docker compose exec freeswitch fs_cli -x 'sofia status'
+docker compose exec freeswitch fs_cli -x 'status'
 ```

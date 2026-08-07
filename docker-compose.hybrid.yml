@@ -1,0 +1,21 @@
+# Optional hybrid mode: FreeSWITCH stays on the host/VM.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.hybrid.yml up --build -d
+#
+# This disables the in-compose FreeSWITCH service and points ESL/WSS at the host.
+
+services:
+  freeswitch:
+    profiles: ["disabled-in-hybrid"]
+
+  web:
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ESL_HOST: ${ESL_HOST:-host.docker.internal}
+      ESL_PORT: ${ESL_PORT:-8021}
+      ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

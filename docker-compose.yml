@@ -1,9 +1,12 @@
-# SkyKin FusionPBX — Docker (web + Postgres)
-# FreeSWITCH stays on your Debian VM / host. Point ESL + WS at it.
+# SkyKin Call Center — full Docker stack
+# web (FusionPBX + SkyKin) + Postgres + FreeSWITCH
 #
-# Start:  docker compose up --build -d
+# Start:  cp .env.docker.example .env && docker compose up --build -d
 # App:    http://localhost:8080/app/agent_dashboard/index.php
 # Stop:   docker compose down
+#
+# Hybrid (FreeSWITCH on host/VM) — use:
+#   docker compose -f docker-compose.yml -f docker-compose.hybrid.yml up --build -d
 
 services:
   db:
@@ -22,6 +25,38 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - skykin
+
+  freeswitch:
+    build:
+      context: ./docker/freeswitch
+    container_name: skykin-freeswitch
+    environment:
+      ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
+      ESL_LISTEN_IP: "0.0.0.0"
+      RTP_START_PORT: ${RTP_START_PORT:-16384}
+      RTP_END_PORT: ${RTP_END_PORT:-16584}
+    volumes:
+      # Recordings shared with the web container for playback uploads.
+      # Do not mount an empty volume over /etc/freeswitch — that wipes image config.
+      - skykin_recordings:/var/lib/freeswitch/recordings
+    ports:
+      # SIP
+      - "${SIP_PORT:-5060}:5060/tcp"
+      - "${SIP_PORT:-5060}:5060/udp"
+      # Softphone WebSocket (proxied via web /wss/ — also published for debug)
+      - "${FS_WS_PORT:-5066}:5066/tcp"
+      # ESL — keep bound to localhost on the host for safety
+      - "127.0.0.1:${ESL_PUBLISH_PORT:-8021}:8021"
+      # Lab RTP window (widen + prefer host network for real trunks)
+      - "${RTP_START_PORT:-16384}-${RTP_END_PORT:-16584}:${RTP_START_PORT:-16384}-${RTP_END_PORT:-16584}/udp"
+    networks:
+      - skykin
+    restart: unless-stopped
+    # Linux production tip: uncomment the next line and remove the ports: block
+    # so FreeSWITCH owns the host network stack (best for SIP/RTP).
+    # network_mode: host
 
   web:
     build: .
@@ -29,24 +64,31 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      freeswitch:
+        condition: service_started
     environment:
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: ${DB_NAME:-fusionpbx}
       DB_USER: ${DB_USER:-fusionpbx}
       DB_PASSWORD: ${DB_PASSWORD:-fusionpbx}
-      # FreeSWITCH on the host/VM (Windows Docker Desktop uses host.docker.internal)
-      ESL_HOST: ${ESL_HOST:-host.docker.internal}
+      ESL_HOST: ${ESL_HOST:-freeswitch}
       ESL_PORT: ${ESL_PORT:-8021}
       ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
-      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}
     ports:
       - "${WEB_PORT:-8080}:80"
     volumes:
-      # Live-edit agent dashboard without rebuild; SQLite DB lives here on the host
       - ./app/agent_dashboard:/var/www/fusionpbx/app/agent_dashboard
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - skykin_recordings:/var/lib/freeswitch/recordings
+    networks:
+      - skykin
+    restart: unless-stopped
+
+networks:
+  skykin:
+    driver: bridge
 
 volumes:
   skykin_pgdata:
+  skykin_recordings:

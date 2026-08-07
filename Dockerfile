@@ -1,5 +1,6 @@
 # SkyKin FusionPBX / Agent Dashboard — web image
-# FreeSWITCH stays outside Docker (VM/host) and is reached via ESL_HOST.
+# Default compose runs FreeSWITCH as a sibling container (ESL_HOST=freeswitch).
+# Hybrid mode can still point ESL/WS at the host/VM.
 
 FROM php:8.2-fpm-bookworm
 

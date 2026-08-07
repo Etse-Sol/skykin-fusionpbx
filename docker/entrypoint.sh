@@ -6,10 +6,10 @@ DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-fusionpbx}"
 DB_USER="${DB_USER:-fusionpbx}"
 DB_PASSWORD="${DB_PASSWORD:-fusionpbx}"
-ESL_HOST="${ESL_HOST:-host.docker.internal}"
+ESL_HOST="${ESL_HOST:-freeswitch}"
 ESL_PORT="${ESL_PORT:-8021}"
 ESL_PASSWORD="${ESL_PASSWORD:-ClueCon}"
-FREESWITCH_WS_UPSTREAM="${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}"
+FREESWITCH_WS_UPSTREAM="${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}"
 
 mkdir -p /etc/fusionpbx
 cat > /etc/fusionpbx/config.conf <<EOF

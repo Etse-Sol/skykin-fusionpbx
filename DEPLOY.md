@@ -7,8 +7,11 @@ If a check fails, fix it before continuing.
 |---|---|
 | **GitHub repo** | https://github.com/Skykin-Technologies/call-center |
 | **Branch to deploy** | `main` only |
-| **Architecture** | One cloud VM: FusionPBX + FreeSWITCH + Nginx + PHP-FPM + PostgreSQL |
-| **Not for production** | `docker-compose` in this repo (local/hybrid only) |
+| **Preferred architecture** | One cloud VM: FusionPBX + FreeSWITCH + Nginx + PHP-FPM + PostgreSQL |
+| **Full Docker** | Supported: web + DB + FreeSWITCH via `docker compose` (see `docker/README.md`) |
+| **Safer Docker** | Hybrid: web/DB in Docker, FreeSWITCH on the VM (`docker-compose.hybrid.yml`) |
+
+> Full Docker is doable when leadership requires containers. For live SIP trunks, prefer classic VM or hybrid until RTP/host-network is hardened.
 
 ---
 
