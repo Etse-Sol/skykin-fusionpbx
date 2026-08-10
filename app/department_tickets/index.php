@@ -2,32 +2,44 @@
 // SkyKin Technologies – Department Tickets Portal (Standalone)
 // No authentication required for internal team use.
 
+/**
+ * getDB() — single-attempt PostgreSQL connection.
+ *
+ * FIX (2026-08-07): The original version tried 127.0.0.1 three times with no
+ * connect_timeout, burning ~2 s per attempt (6+ s total) before ever reaching
+ * the real host. Queries themselves were fast (~14 ms for 8 rows). This version
+ * reads host/port/creds from resources/config.php (the canonical FusionPBX
+ * config already set up for this install) in a single direct attempt.
+ * SQLite fallback is preserved for fully-offline dev.
+ */
 function getDB() {
     static $db = null;
     if ($db) return $db;
-    $h = '127.0.0.1'; $p = '5432'; $n = 'fusionpbx'; $u = 'fusionpbx'; $pw = '';
-    $conf = '/etc/fusionpbx/config.conf';
-    if (file_exists($conf)) {
-        foreach (file($conf) as $ln) {
-            $ln = trim($ln);
-            if (strpos($ln, 'database.0.host')     !== false) $h  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.port')     !== false) $p  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.name')     !== false) $n  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.username') !== false) $u  = trim(explode('=', $ln, 2)[1]);
-            if (strpos($ln, 'database.0.password') !== false) $pw = trim(explode('=', $ln, 2)[1]);
-        }
+
+    // ── Read credentials from FusionPBX resources/config.php (single source of truth) ──
+    $h = '192.168.1.7'; $p = '5432'; $n = 'fusionpbx'; $u = 'fusionpbx'; $pw = '';
+    $fpbxConfig = dirname(__DIR__, 2) . '/resources/config.php';
+    if (is_file($fpbxConfig)) {
+        // config.php sets $db_host, $db_port, $db_name, $db_username, $db_password
+        @include $fpbxConfig;
+        if (!empty($db_host))     $h  = $db_host;
+        if (!empty($db_port))     $p  = $db_port;
+        if (!empty($db_name))     $n  = $db_name;
+        if (!empty($db_username)) $u  = $db_username;
+        if (isset($db_password))  $pw = $db_password;
     }
-    // Try local config first, then remote FusionPBX server, with multiple credential sets
-    foreach ([$h, '192.168.0.114'] as $_h) {
-        foreach ([[$u, $pw], ['fusionpbx', 'vtEWIukU24Lbr9Zi5NxchwVF2g'], ['postgres', 'vtEWIukU24Lbr9Zi5NxchwVF2g']] as [$_u, $_pw]) {
-            try {
-                $db = new PDO("pgsql:host={$_h};port={$p};dbname={$n}", $_u, $_pw, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-                return $db;
-            } catch (Exception $ignored) {}
-        }
-    }
-    // SQLite fallback for local development
-    // Shared with agent_dashboard so tickets are visible in both portals
+
+    // ── Single direct attempt (no retry loop) ──
+    try {
+        $db = new PDO(
+            "pgsql:host={$h};port={$p};dbname={$n};connect_timeout=5",
+            $u, $pw,
+            [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+        );
+        return $db;
+    } catch (Exception $ignored) {}
+
+    // ── SQLite fallback for fully-offline local development ──
     $sqliteFile = __DIR__ . '/../agent_dashboard/skykin_local.db';
     $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $db->exec('PRAGMA journal_mode=WAL');
@@ -36,6 +48,7 @@ function getDB() {
 
 // ── API: Get Tickets ─────────────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'get_tickets') {
+    $t_start = microtime(true);
     error_reporting(0);
     header('Content-Type: application/json');
     
@@ -95,17 +108,32 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_tickets') {
                 FROM skykin_cases
                 $whereSql
                 ORDER BY created_at DESC LIMIT 300";
-                
+
+        $t_query = microtime(true);
         $s = $db->prepare($sql);
         $s->execute($params);
         $records = $s->fetchAll(PDO::FETCH_ASSOC);
+        $t_query_ms = round((microtime(true) - $t_query) * 1000, 1);
         
+        // ── Ensure indexes exist for filtering/sorting (idempotent, fast on repeat calls) ──
+        if ($isSQLite) {
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_skykin_cases_dept   ON skykin_cases(department)");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_skykin_cases_status ON skykin_cases(status)");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_skykin_cases_ctime  ON skykin_cases(created_at)");
+        } else {
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_skykin_cases_dept   ON skykin_cases(department)");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_skykin_cases_status ON skykin_cases(status)");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_skykin_cases_ctime  ON skykin_cases(created_at DESC)");
+        }
+
         // Count stats globally or filtered by dept
         $statWhere = ($dept !== 'All') ? 'WHERE department = :dept' : '';
+        $t_stats = microtime(true);
         $statStmt = $db->prepare("SELECT status, COUNT(*) as cnt FROM skykin_cases {$statWhere} GROUP BY status");
         $statParams = ($dept !== 'All') ? [':dept' => $dept] : [];
         $statStmt->execute($statParams);
         $statsRaw = $statStmt->fetchAll(PDO::FETCH_ASSOC);
+        $t_stats_ms = round((microtime(true) - $t_stats) * 1000, 1);
         
         $stats = ['Received' => 0, 'In Progress' => 0, 'Resolved' => 0, 'Total' => 0];
         foreach ($statsRaw as $row) {
@@ -120,10 +148,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_tickets') {
             $stats['Total'] += (int)$row['cnt'];
         }
         
+        $t_total_ms = round((microtime(true) - $t_start) * 1000, 1);
+        header("X-Ticket-Timing: total={$t_total_ms}ms query={$t_query_ms}ms stats={$t_stats_ms}ms rows=" . count($records));
         echo json_encode([
-            'ok' => true,
+            'ok'      => true,
             'records' => $records,
-            'stats' => $stats
+            'stats'   => $stats
         ]);
     } catch (Exception $e) {
         echo json_encode([
@@ -776,6 +806,9 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
                     </div>
                 </div>
                 
+                <a href="/app/billing_portal/index.php" style="color: white; text-decoration: none; font-size: 13px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.3); transition: all 0.2s; margin-right: 8px;">
+                    Billing Portal
+                </a>
                 <a href="/app/agent_dashboard/index.php" style="color: white; text-decoration: none; font-size: 13px; font-weight: 600; background: rgba(255,255,255,0.15); padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.3); transition: all 0.2s;">
                     Agent Dashboard
                 </a>

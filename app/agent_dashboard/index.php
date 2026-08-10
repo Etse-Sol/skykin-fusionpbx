@@ -23,16 +23,14 @@ if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
 // Release session lock so background polls / other tabs are not blocked
 session_write_close();
 
-// ── Shared Skykin DB: tries PostgreSQL, falls back to local SQLite ──────────
-function getSkykinDB() {
+// ── Shared Skykin DB: connects to PostgreSQL via skykin_pdo_fusionpbx() ─────
+// FIX (2026-08-07): Removed silent SQLite fallback. If PostgreSQL is
+// unreachable, skykin_pdo_fusionpbx() throws a RuntimeException so the
+// problem is immediately visible instead of tickets going to the wrong DB.
+function getSkykinDB(): PDO {
     static $db = null;
-    if ($db) return $db;
-    $db = skykin_pdo_fusionpbx();
-    if ($db) return $db;
-    // SQLite fallback for local development only
-    $sqliteFile = __DIR__ . '/skykin_local.db';
-    $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-    $db->exec('PRAGMA journal_mode=WAL');
+    if ($db !== null) return $db;
+    $db = skykin_pdo_fusionpbx(); // throws RuntimeException on failure
     return $db;
 }
 
@@ -1547,7 +1545,11 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ?? Layout ?? */
-.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; transition: margin-right 0.3s ease; }
+.main { margin-top: 64px; margin-left: 240px; padding: 20px; margin-bottom: 20px; transition: margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+.main.sidebar-collapsed { margin-left: 0; }
+@media (max-width: 768px) {
+    .main { margin-left: 0 !important; }
+}
 
 /* CRM slide-in panel */
 .crm-panel {
@@ -1959,8 +1961,6 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 .rec-play     { background: #0047AB; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .rec-play:hover { background: #003a8c; }
 .rec-download { background: #e9ecef; color: #555; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 4px; }
-.rec-stop     { background: #c62828; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.rec-stop:hover { background: #a51f1f; }
 
 /* ?? Footer ?? */
 .footer { text-align: center; font-size: 11px; color: #aaa; padding: 16px; }
@@ -2172,6 +2172,90 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 }
 .btn-transfer.visible { display: block; }
 
+/* ── Hide old horizontal tab bar ─────────────────── */
+.tab-bar { display: none !important; }
+
+/* ── Left Sidebar ────────────────────────────────── */
+#sidebarMenu {
+    position: fixed;
+    top: 64px;
+    left: 0;
+    width: 240px;
+    height: calc(100vh - 64px);
+    background: #ffffff;
+    border-right: 1px solid #e2e8f0;
+    box-shadow: 2px 0 12px rgba(0,71,171,0.07);
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    transition: width 0.28s cubic-bezier(0.4,0,0.2,1), transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    overflow: hidden;
+}
+#sidebarMenu.collapsed { width: 0; }
+@media (max-width: 768px) {
+    #sidebarMenu {
+        transform: translateX(-100%);
+        width: 240px !important;
+        z-index: 1001;
+        box-shadow: 6px 0 24px rgba(0,0,0,0.18);
+    }
+    #sidebarMenu.mobile-open { transform: translateX(0); }
+}
+
+/* Sidebar section header */
+.sb-section-label {
+    font-size: 10px; font-weight: 700; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: 1px;
+    padding: 16px 20px 6px;
+    white-space: nowrap;
+}
+
+/* Nav scroll area */
+.sb-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 0; }
+.sb-nav::-webkit-scrollbar { width: 3px; }
+.sb-nav::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+
+/* Nav items */
+.sb-item {
+    display: flex; align-items: center;
+    padding: 10px 20px;
+    color: #475569; font-size: 13.5px; font-weight: 500;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    background: none; border-top: none; border-right: none; border-bottom: none;
+    width: 100%; text-align: left; text-decoration: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+    border-radius: 0;
+    gap: 0;
+    letter-spacing: 0.1px;
+}
+.sb-item:hover {
+    background: #f0f5ff;
+    border-left-color: #0047AB;
+    color: #0047AB;
+}
+.sb-item.active {
+    background: linear-gradient(90deg, #eef3ff 0%, #f8faff 100%);
+    border-left-color: #0047AB;
+    color: #0047AB;
+    font-weight: 700;
+}
+
+/* Divider */
+.sb-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
+
+/* Footer */
+.sb-footer { flex-shrink: 0; border-top: 1px solid #f1f5f9; padding: 8px 0; }
+.sb-footer .sb-item { font-size: 13px; }
+.sb-item.signout { color: #dc3545; }
+.sb-item.signout:hover { background: #fff5f5; border-left-color: #dc3545; color: #dc3545; }
+
+/* Mobile backdrop */
+#sidebarBackdrop {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4); z-index: 1000;
+}
 
 </style>
 </head>
@@ -2181,7 +2265,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <div class="header">
     <div style="display:flex;align-items:center;gap:12px">
         <button class="agent-sidebar-toggle" onclick="toggleAgentSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
-        <div class="logo">SKY<span>KIN</span> Technologies</div>
+        <div class="logo" onclick="switchTab('dashboard')" title="Go to Dashboard" style="cursor:pointer">SKY<span>KIN</span> Technologies</div>
     </div>
     <div class="agent-info">
         <div class="agent-avatar"><?php echo $initials; ?></div>
@@ -2226,32 +2310,36 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 </div>
 
-<!-- ── Agent Side Menu ─────────────────────────────────────── -->
-<div id="agentSideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
-    <div class="agent-sidebar-brand" style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
-        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
-        <div style="font-size:11px;opacity:.8;margin-top:3px">Agent Panel</div>
-    </div>
-    <div style="flex:1;overflow-y:auto;padding:8px 0">
+<!-- ── Collapsible Left Sidebar ─────────────────────────── -->
+<div id="sidebarMenu">
+    <div class="sb-nav">
+        <div class="sb-section-label">Menu</div>
+
+        <button class="sb-item active" id="sbDashboardBtn"   onclick="sidebarNav('dashboard')">Dashboard</button>
+        <button class="sb-item"        id="sbCallHistoryBtn" onclick="sidebarNav('callHistory')">Call History</button>
+        <button class="sb-item"        id="sbRecordingsBtn"  onclick="sidebarNav('recordings')">Recordings</button>
+        <button class="sb-item"        id="sbAcwBtn"         onclick="sidebarNav('acw')">ACW History</button>
+        <button class="sb-item"        id="sbEscalationBtn"  onclick="sidebarNav('escalation')">New Ticket</button>
+        <button class="sb-item"        id="sbLookupBtn"      onclick="sidebarNav('lookup')">Customer Lookup</button>
+        <button class="sb-item"        id="sbCallbacksBtn"   onclick="sidebarNav('callbacks')">Callbacks</button>
+        <button class="sb-item"        id="sbAhununuBtn"     onclick="sidebarNav('ahununu')">Ahununu.com</button>
+
         <?php if ($is_supervisor): ?>
-        <a href="supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128202;</span> Supervisor View
-        </a>
-        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <div class="sb-divider"></div>
+        <div class="sb-section-label">Management</div>
+        <a class="sb-item" href="supervisor.php">Supervisor View</a>
         <?php endif; ?>
+    </div>
 
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Account</div>
-        <a href="#" onclick="toggleAgentSideMenu();document.getElementById('settingsModal').classList.add('show')" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#9881;</span> Phone Settings
-        </a>
-
-        <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128682;</span> Sign Out
-        </a>
+    <div class="sb-footer">
+        <button class="sb-item" onclick="document.getElementById('settingsModal').classList.add('show')">Phone Settings</button>
+        <a class="sb-item signout" href="/logout.php">Sign Out</a>
     </div>
 </div>
-<div id="agentSideMenuBackdrop" onclick="toggleAgentSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
+
+<!-- Mobile backdrop -->
+<div id="sidebarBackdrop" onclick="toggleAgentSideMenu()"></div>
+
 
 <!-- ?? MAIN ?? -->
 <div class="main">
@@ -2459,11 +2547,6 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                     <tr><td colspan="6" class="rec-empty">No recordings found for today.</td></tr>
                 </tbody>
             </table>
-            <div id="recPlayerWrap" style="display:none;align-items:center;gap:8px;margin-top:12px;">
-                <button class="rec-stop" onclick="stopRecording()">&#9632; Stop</button>
-                <span id="recPlayingName" style="font-size:11px;color:#888;flex:1;"></span>
-            </div>
-            <audio id="recPlayer" controls style="width:100%;margin-top:8px;display:none"></audio>
         </div>
 
         <!-- ACW History Tab -->
@@ -3185,15 +3268,60 @@ document.getElementById('leaveRequestModal')?.addEventListener('click', function
     if (e.target === this) closeLeaveRequestModal();
 });
 
-// ?? Side menu ??????????????????????????????????????
+// ── Sidebar toggle & navigation ─────────────────────────────
 function toggleAgentSideMenu() {
-    const menu     = document.getElementById('agentSideMenu');
-    const backdrop = document.getElementById('agentSideMenuBackdrop');
-    if (!menu) return;
-    const isOpen = menu.style.left === '0px';
-    menu.style.left = isOpen ? '-260px' : '0px';
-    if (backdrop) backdrop.style.display = isOpen ? 'none' : 'block';
+    const sidebar  = document.getElementById('sidebarMenu');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    const main     = document.querySelector('.main');
+    if (!sidebar) return;
+
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+        const isOpen = sidebar.classList.contains('mobile-open');
+        sidebar.classList.toggle('mobile-open', !isOpen);
+        if (backdrop) backdrop.style.display = isOpen ? 'none' : 'block';
+    } else {
+        const isCollapsed = sidebar.classList.contains('collapsed');
+        sidebar.classList.toggle('collapsed', !isCollapsed);
+        if (main) main.classList.toggle('sidebar-collapsed', !isCollapsed);
+        try { localStorage.setItem('sidebarState', isCollapsed ? 'expanded' : 'collapsed'); } catch(e) {}
+    }
 }
+
+function sidebarNav(tab) {
+    // Activate tab content
+    switchTab(tab);
+    // Update sidebar active state
+    const tabToSb = {
+        dashboard: 'sbDashboardBtn', callHistory: 'sbCallHistoryBtn',
+        recordings: 'sbRecordingsBtn', acw: 'sbAcwBtn',
+        escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn',
+        callbacks: 'sbCallbacksBtn', ahununu: 'sbAhununuBtn'
+    };
+    document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
+    const activeBtn = document.getElementById(tabToSb[tab]);
+    if (activeBtn) activeBtn.classList.add('active');
+    // On mobile close sidebar after navigation
+    if (window.innerWidth <= 768) {
+        const sidebar  = document.getElementById('sidebarMenu');
+        const backdrop = document.getElementById('sidebarBackdrop');
+        if (sidebar)  sidebar.classList.remove('mobile-open');
+        if (backdrop) backdrop.style.display = 'none';
+    }
+}
+
+// Restore sidebar state on page load
+(function initSidebar() {
+    try {
+        const saved = localStorage.getItem('sidebarState');
+        if (saved === 'collapsed') {
+            const sidebar = document.getElementById('sidebarMenu');
+            const main    = document.querySelector('.main');
+            if (sidebar) sidebar.classList.add('collapsed');
+            if (main)    main.classList.add('sidebar-collapsed');
+        }
+    } catch(e) {}
+})();
 
 // ?? Customer info panel (ahununu.com) ??????????????
 // Slides in over the dashboard during a call; the Ahununu tab is the
@@ -3380,8 +3508,7 @@ function updateRecordings(recs) {
             <td><span class="badge ${badge}">${dir}</span></td>
             <td style="font-size:11px;color:#888;">${r.filename}</td>
             <td>
-                <button class="rec-play" onclick="playRecording('${r.filepath}', '${r.filename}')">&#9654; Play</button>
-                <button class="rec-stop" onclick="stopRecording()">&#9632; Stop</button>
+                <button class="rec-play" onclick="playRecording('${r.filepath}')">&#9654; Play</button>
                 <a href="${r.filepath}" download>
                     <button class="rec-download">&#8595; Save</button>
                 </a>
@@ -3391,38 +3518,15 @@ function updateRecordings(recs) {
     document.getElementById('recordingsBody').innerHTML = html;
 }
 
-function playRecording(path, filename) {
-    const player = document.getElementById('recPlayer');
-    const wrap   = document.getElementById('recPlayerWrap');
-    const label  = document.getElementById('recPlayingName');
-    if (!player) return;
-
-    player.onerror = () => {
-        const code = player.error ? player.error.code : 0;
+let recAudio = null;
+function playRecording(path) {
+    if (recAudio) { recAudio.pause(); recAudio = null; }
+    recAudio = new Audio(path);
+    recAudio.addEventListener('error', () => {
+        const code = recAudio.error ? recAudio.error.code : 0;
         toast(code === 4 ? 'Recording file is missing or unreadable' : 'Playback failed (code ' + code + ')', '#c62828');
-    };
-    player.onended = () => stopRecording();
-
-    player.src = path;
-    player.style.display = 'block';
-    if (wrap)  wrap.style.display = 'flex';
-    if (label) label.textContent = filename ? 'Playing: ' + filename : '';
-    player.play().catch(e => toast('Playback blocked: ' + (e.name || e.message), '#c62828'));
-}
-
-function stopRecording() {
-    const player = document.getElementById('recPlayer');
-    const wrap   = document.getElementById('recPlayerWrap');
-    const label  = document.getElementById('recPlayingName');
-    if (player) {
-        player.pause();
-        player.currentTime = 0;
-        player.removeAttribute('src');
-        player.load();
-        player.style.display = 'none';
-    }
-    if (wrap)  wrap.style.display = 'none';
-    if (label) label.textContent = '';
+    });
+    recAudio.play().catch(e => toast('Playback blocked: ' + (e.name || e.message), '#c62828'));
 }
 
 // ?? Empty data (no calls / API error) ?????????????

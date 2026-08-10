@@ -119,7 +119,7 @@ final class config {
 	public function read() {
 
 		//check if include is needed
-		if (substr($this->file, 0, -4) === '.php') {
+		if (substr($this->file, -4) === '.php') {
 			//allow global variables to be set in the old config.php file
 			global $db_type, $db_host, $db_port, $db_name, $db_username, $db_password, $db_path;
 			global $db_sslmode, $db_secure, $db_cert_authority;

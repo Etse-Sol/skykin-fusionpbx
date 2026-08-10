@@ -13,26 +13,8 @@ $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 
 function getDB() {
     static $db = null;
-    if ($db) return $db;
-    $h='127.0.0.1';$p='5432';$n='fusionpbx';$u='fusionpbx';$pw='';
-    $conf='/etc/fusionpbx/config.conf';
-    if (file_exists($conf)) foreach(file($conf) as $ln) {
-        $ln=trim($ln);
-        if(strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
-    }
-    try {
-        $db = new PDO("pgsql:host={$h};port={$p};dbname={$n};connect_timeout=2",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
-        return $db;
-    } catch(Exception $e) {}
-    
-    // SQLite fallback for local development
-    $sqliteFile = __DIR__ . '/skykin_local.db';
-    $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
-    $db->exec('PRAGMA journal_mode=WAL');
+    if ($db !== null) return $db;
+    $db = skykin_pdo_fusionpbx(); // throws RuntimeException on failure
     return $db;
 }
 
@@ -337,6 +319,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
       <a href="/app/agent_dashboard/reports.php">Reports</a>
       <a href="/app/agent_dashboard/evaluation.php">Evaluation</a>
       <a href="/app/agent_dashboard/crm.php" class="active">CRM</a>
+      <a href="/app/agent_dashboard/billing.php">Billing</a>
       <a href="/app/agent_dashboard/index.php">Agent View</a>
     </nav>
   </div>

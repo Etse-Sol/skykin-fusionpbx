@@ -13,18 +13,8 @@ $today   = date('Y-m-d');
 
 function getDB() {
     static $db = null;
-    if ($db) return $db;
-    $h='127.0.0.1';$p='5432';$n='fusionpbx';$u='fusionpbx';$pw='';
-    $conf='/etc/fusionpbx/config.conf';
-    if (file_exists($conf)) foreach(file($conf) as $ln) {
-        $ln=trim($ln);
-        if(strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
-    }
-    $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+    if ($db !== null) return $db;
+    $db = skykin_pdo_fusionpbx(); // throws RuntimeException on failure
     return $db;
 }
 
@@ -329,6 +319,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
       <a href="/app/agent_dashboard/reports.php">Reports</a>
       <a href="/app/agent_dashboard/evaluation.php" class="active">Evaluation</a>
       <a href="/app/agent_dashboard/crm.php">CRM</a>
+      <a href="/app/agent_dashboard/billing.php">Billing</a>
       <a href="/app/agent_dashboard/index.php">Agent View</a>
     </nav>
   </div>
@@ -382,12 +373,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 
         <!-- Recording playback if available -->
         <div class="audio-wrap" id="audioWrap" style="display:none">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            <span style="font-size:11px;color:#888">Recording</span>
-            <button onclick="stopEvalAudio()"
-              style="background:#c62828;color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;font-weight:700">
-              &#9632; Stop</button>
-          </div>
+          <div style="font-size:11px;color:#888;margin-bottom:6px">Recording</div>
           <audio id="evalAudio" controls></audio>
         </div>
 
@@ -569,7 +555,6 @@ function selectCall(r) {
 
     // Recording
     const aw = document.getElementById('audioWrap');
-    stopEvalAudio();
     if (r.record_name) {
         const fname = r.record_name;
         const domain = (window.SKYKIN && SKYKIN.domain) || location.hostname;
@@ -580,7 +565,6 @@ function selectCall(r) {
         aw.style.display = 'block';
     } else { aw.style.display = 'none'; }
 
-
     // Reset scores
     Object.keys(scores).forEach(k => setStar(k,0));
     document.getElementById('evalNotes').value = '';
@@ -588,13 +572,6 @@ function selectCall(r) {
     document.getElementById('btnSave').textContent = 'Save Evaluation';
 
     switchTab('score');
-}
-
-function stopEvalAudio() {
-    const a = document.getElementById('evalAudio');
-    if (!a) return;
-    a.pause();
-    a.currentTime = 0;
 }
 
 async function saveEval() {

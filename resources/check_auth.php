@@ -43,6 +43,153 @@
 		}
 	}
 
+
+// SkyKin: development auto-login bypass
+	$dev_auto_login = false;
+	if (getenv('DEV_AUTO_LOGIN') === 'true') {
+		$dev_auto_login = true;
+	} else {
+		$env_file = dirname(__DIR__) . '/.env';
+		if (file_exists($env_file)) {
+			foreach (file($env_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+				$line = trim($line);
+				if ($line !== '' && $line[0] !== '#' && strpos($line, '=') !== false) {
+					list($key, $val) = array_map('trim', explode('=', $line, 2));
+					$val = trim($val, " \t\n\r\0\x0B\"'");
+					if ($key === 'DEV_AUTO_LOGIN' && strtolower($val) === 'true') {
+						$dev_auto_login = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	if ($dev_auto_login && (empty($_SESSION['authorized']) || !$_SESSION['authorized'])) {
+		require_once __DIR__ . "/pdo.php";
+		try {
+			// Find the domain and user info for Agent1
+			$sql = "SELECT u.user_uuid, u.username, d.domain_uuid, d.domain_name, u.contact_uuid
+					FROM v_users u
+					JOIN v_domains d ON d.domain_uuid = u.domain_uuid
+					WHERE LOWER(u.username) = LOWER('Agent1') LIMIT 1";
+			$s = $db->prepare($sql);
+			$s->execute();
+			$user_row = $s->fetch(PDO::FETCH_ASSOC);
+
+			// Safe UUID generator helper (global uuid() function fails on Windows dev environments without COM extension)
+			$get_uuid_safe = function() {
+				$u = uuid();
+				if (!empty($u)) { return $u; }
+				$data = random_bytes(16);
+				$data[6] = chr(ord($data[6]) & 0x0f | 0x40);
+				$data[8] = chr(ord($data[8]) & 0x3f | 0x80);
+				return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+			};
+
+			if (!$user_row) {
+				// Find first domain from v_domains
+				$sql = "SELECT domain_uuid, domain_name FROM v_domains LIMIT 1";
+				$s = $db->prepare($sql);
+				$s->execute();
+				$domain_row = $s->fetch(PDO::FETCH_ASSOC);
+				if ($domain_row) {
+					$domain_uuid = $domain_row['domain_uuid'];
+					$domain_name = $domain_row['domain_name'];
+				} else {
+					$domain_uuid = '86970909-efb7-4b70-b271-14c9bc5ad619';
+					$domain_name = '192.168.1.7';
+				}
+
+				// Create Agent1 user
+				$user_uuid = $get_uuid_safe();
+				$sql = "INSERT INTO v_users (user_uuid, domain_uuid, username, user_enabled)
+						VALUES (:user_uuid, :domain_uuid, 'Agent1', true)";
+				$s = $db->prepare($sql);
+				$s->execute([
+					':user_uuid' => $user_uuid,
+					':domain_uuid' => $domain_uuid
+				]);
+
+				// Find agent group
+				$sql = "SELECT group_uuid FROM v_groups WHERE group_name = 'agent' LIMIT 1";
+				$s = $db->prepare($sql);
+				$s->execute();
+				$group_row = $s->fetch(PDO::FETCH_ASSOC);
+				$group_uuid = $group_row ? $group_row['group_uuid'] : 'f18aff85-23fe-471d-8e00-d72c6654b57a';
+
+				// Associate user with agent group
+				$sql = "INSERT INTO v_user_groups (user_group_uuid, domain_uuid, group_uuid, user_uuid, group_name)
+						VALUES (:user_group_uuid, :domain_uuid, :group_uuid, :user_uuid, 'agent')";
+				$s = $db->prepare($sql);
+				$s->execute([
+					':user_group_uuid' => $get_uuid_safe(),
+					':domain_uuid' => $domain_uuid,
+					':group_uuid' => $group_uuid,
+					':user_uuid' => $user_uuid
+				]);
+
+				// Try to map to extension 1003 if it exists
+				$sql = "SELECT extension_uuid FROM v_extensions WHERE extension = '1003' LIMIT 1";
+				$s = $db->prepare($sql);
+				$s->execute();
+				$ext_row = $s->fetch(PDO::FETCH_ASSOC);
+				if ($ext_row) {
+					$sql = "INSERT INTO v_extension_users (extension_user_uuid, domain_uuid, extension_uuid, user_uuid)
+							VALUES (:extension_user_uuid, :domain_uuid, :extension_uuid, :user_uuid)";
+					$s = $db->prepare($sql);
+					$s->execute([
+						':extension_user_uuid' => $get_uuid_safe(),
+						':domain_uuid' => $domain_uuid,
+						':extension_uuid' => $ext_row['extension_uuid'],
+						':user_uuid' => $user_uuid
+					]);
+				}
+
+				$user_row = [
+					'user_uuid' => $user_uuid,
+					'username' => 'Agent1',
+					'domain_uuid' => $domain_uuid,
+					'domain_name' => $domain_name,
+					'contact_uuid' => null
+				];
+			}
+
+			// Establish FusionPBX user session
+			$settings = new settings(['database' => $database, 'domain_uuid' => $user_row['domain_uuid'], 'user_uuid' => $user_row['user_uuid']]);
+			authentication::create_user_session($user_row, $settings);
+			$_SESSION['authorized'] = true;
+
+			// Determine redirect path
+			$redirect_path = '/app/agent_dashboard/index.php';
+			if (!empty($_REQUEST['path'])) {
+				$parsed_url = parse_url($_REQUEST['path']);
+				if (empty($parsed_url['host'])) {
+					$redirect_path = $_REQUEST['path'];
+				}
+			}
+
+			// Append agent/domain parameters for agent dashboard
+			if (strpos($redirect_path, '/app/agent_dashboard/index.php') !== false) {
+				$sep = (strpos($redirect_path, '?') === false) ? '?' : '&';
+				if (strpos($redirect_path, 'agent=') === false) {
+					$redirect_path .= $sep . 'agent=Agent1';
+					$sep = '&';
+				}
+				if (strpos($redirect_path, 'domain=') === false) {
+					$redirect_path .= $sep . 'domain=' . rawurlencode($user_row['domain_name']);
+				}
+			}
+
+			header("Location: " . $redirect_path);
+			exit;
+
+		} catch (Exception $e) {
+			// Fail silently or log error for local debug
+			error_log("DEV_AUTO_LOGIN failed: " . $e->getMessage());
+		}
+	}
+
 	//regenerate sessions to avoid session ID attacks, such as session fixation
 	if (isset($_SESSION['authorized']) && $_SESSION['authorized']) {
 		//set the last activity time
