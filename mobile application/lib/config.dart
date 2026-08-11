@@ -2,7 +2,7 @@
 /// AppConfig — single source of truth for the API base URL.
 ///
 /// DESKTOP / LOCAL TESTING  →  use 'localhost'
-/// PHONE ON SAME WIFI LAN   →  use your laptop's LAN IP, e.g. '192.168.1.7'
+/// PHONE ON SAME WIFI LAN   →  use your laptop's LAN IP, e.g. '192.168.1.10'
 /// PRODUCTION               →  use your server hostname, e.g. 'api.skykin.com'
 ///
 /// Change ONE value here and every screen picks it up automatically.

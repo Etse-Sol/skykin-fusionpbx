@@ -1573,11 +1573,16 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .crm-panel-header button:hover { background: rgba(255,255,255,0.35); }
 .crm-panel iframe { flex: 1; border: none; width: 100%; }
 
-/* ?? Summary Cards ?? */
+/* ── Summary Cards ── */
 .summary-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 14px; margin-bottom: 20px;
+}
+@media (min-width: 769px) {
+    .main:not(.sidebar-collapsed) .summary-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
 }
 .card {
     background: white; border-radius: 10px; padding: 16px;

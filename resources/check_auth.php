@@ -98,7 +98,7 @@
 					$domain_name = $domain_row['domain_name'];
 				} else {
 					$domain_uuid = '86970909-efb7-4b70-b271-14c9bc5ad619';
-					$domain_name = '192.168.1.7';
+					$domain_name = '192.168.1.10';
 				}
 
 				// Create Agent1 user

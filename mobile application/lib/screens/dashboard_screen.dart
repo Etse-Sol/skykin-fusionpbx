@@ -61,7 +61,7 @@ class _DashboardScreenState extends State<DashboardScreen> implements SipUaHelpe
     final settings = UaSettings();
     // ws:// port 5066 — plain WebSocket binding enabled in FusionPBX internal
     // profile (ws-binding = :5066, enabled=true).
-    // TCP connectivity to 192.168.1.7:5066 confirmed reachable (TcpTestSucceeded=True)
+    // TCP connectivity to 192.168.1.10:5066 confirmed reachable (TcpTestSucceeded=True)
     // and HTTP 101 WebSocket upgrade confirmed working from this machine.
     settings.webSocketUrl = 'ws://${widget.domain}:5066';
     settings.webSocketSettings.allowBadCertificate = true;

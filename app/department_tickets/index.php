@@ -17,7 +17,7 @@ function getDB() {
     if ($db) return $db;
 
     // ── Read credentials from FusionPBX resources/config.php (single source of truth) ──
-    $h = '192.168.1.7'; $p = '5432'; $n = 'fusionpbx'; $u = 'fusionpbx'; $pw = '';
+    $h = '192.168.1.10'; $p = '5432'; $n = 'fusionpbx'; $u = 'fusionpbx'; $pw = '';
     $fpbxConfig = dirname(__DIR__, 2) . '/resources/config.php';
     if (is_file($fpbxConfig)) {
         // config.php sets $db_host, $db_port, $db_name, $db_username, $db_password
