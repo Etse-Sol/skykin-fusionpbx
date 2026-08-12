@@ -145,19 +145,24 @@ if [ -n "$TRUNK_PROXY" ]; then
 EOF
   mkdir -p /etc/freeswitch/dialplan/default \
            /etc/freeswitch/dialplan/client1.skykin.local
-  cat > /etc/freeswitch/dialplan/default/01_ethio_mobile.xml <<EOF
+  # Agent 101 is WebRTC/Opus. Setting absolute_codec_string=PCMA on the A-leg
+  # abandons the call before sofia/gateway/SIP is ever dialed. Put PCMA only
+  # on the B-leg (curly-brace vars on bridge). Rewrite 09… / +251… → 251….
+  cat > /etc/freeswitch/dialplan/default/00_ethio_mobile.xml <<EOF
 <include>
   <extension name="ethio_mobile">
     <condition field="destination_number" expression="^(?:\\+?|00)?(?:251)?0?([79]\\d{8})\$">
       <action application="set" data="effective_caller_id_number=${TRUNK_USERNAME}"/>
-      <action application="set" data="absolute_codec_string=${TRUNK_CODEC_PREFS}"/>
-      <action application="bridge" data="sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
+      <action application="set" data="effective_caller_id_name=SkyKin"/>
+      <action application="bridge" data="{absolute_codec_string='${TRUNK_CODEC_PREFS}',origination_caller_id_number=${TRUNK_USERNAME}}sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
     </condition>
   </extension>
 </include>
 EOF
-  cp /etc/freeswitch/dialplan/default/01_ethio_mobile.xml \
-     /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
+  rm -f /etc/freeswitch/dialplan/default/01_ethio_mobile.xml \
+        /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
+  cp /etc/freeswitch/dialplan/default/00_ethio_mobile.xml \
+     /etc/freeswitch/dialplan/client1.skykin.local/00_ethio_mobile.xml
   if [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ]; then
     cat > /etc/freeswitch/dialplan/client1.skykin.local.xml <<'EOF'
 <include>
