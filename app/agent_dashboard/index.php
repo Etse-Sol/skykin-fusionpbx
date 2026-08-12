@@ -3937,6 +3937,20 @@ function makeCall(number) {
     else showToast('SIP not ready. Open Phone Settings to connect.');
 }
 
+// Strip spaces / dashes / leading +. Keep short values as extensions.
+// Ethio interconnects expect 2519… not +2519… or 09….
+function normalizeDialNumber(raw) {
+    let n = String(raw || '').trim();
+    if (!n) return '';
+    if (/^\d{2,6}$/.test(n)) return n;
+    n = n.replace(/[^\d+]/g, '');
+    if (n.charAt(0) === '+') n = n.slice(1);
+    if (n.indexOf('00') === 0) n = n.slice(2);
+    if (n.charAt(0) === '0' && n.length === 10) n = '251' + n.slice(1);
+    else if (/^[79]\d{8}$/.test(n)) n = '251' + n;
+    return n;
+}
+
 // ?? Ringtone (Web Audio API ? no file needed) ??????????????????????????????
 let _ringCtx = null, _ringNode = null, _ringInterval = null;
 function startRingtone() {
@@ -5063,8 +5077,17 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = (typeof normalizeDialNumber === 'function') ? normalizeDialNumber(number) : String(number || '').trim();
+    if (!number) {
+        window.showToast && window.showToast('Enter a number to dial');
+        return;
+    }
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
-    if (!uri) return;
+    if (!uri) {
+        window.showToast && window.showToast('Invalid number: ' + number);
+        window.sipReport && window.sipReport('bad_dial_uri', null, 'to=' + number);
+        return;
+    }
 
     // A previous failed attempt leaves a session whose peer connection is already
     // closed. Reusing it makes the next offer fail with "Peer connection closed".
