@@ -10,7 +10,7 @@ Hybrid mode (FreeSWITCH on a host/VM) is still available for safer production SI
 |---------|-----------|-------|
 | FusionPBX + SkyKin dashboards | `skykin-web` | http://localhost:8080 |
 | PostgreSQL | `skykin-db` | localhost:5433 |
-| FreeSWITCH | `skykin-freeswitch` | SIP 5060, WS 5066, ESL 127.0.0.1:8021, RTP 16384–16584/udp |
+| FreeSWITCH | `skykin-freeswitch` | SIP 5060, trunk 5080/udp, WS 5066, ESL 127.0.0.1:8021, RTP+RTCP 16384–16584/udp |
 
 ## Quick start (full Docker)
 
@@ -56,7 +56,7 @@ On Linux, allow Docker → host ESL/WS, or set the VM IP explicitly.
 ## Production notes (important)
 
 1. **Fresh Postgres is empty** — import a FusionPBX dump from your working VM for agents/queues/CDRs.  
-2. **RTP in compose uses a narrow range** (`16384–16584`) so port publishing stays workable. Real trunks often need `16384–32768` and **`network_mode: host`** for the FreeSWITCH service on Linux.  
+2. **RTP in compose uses a narrow range** (`16384–16584`) so port publishing stays workable. That range must stay contiguous so **odd RTCP ports (RTP+1)** are published; publishing even RTP ports only produces ICMP port unreachable and some IMS cores then send no audio to the subscriber. Real trunks often need `16384–32768` and **`network_mode: host`** for the FreeSWITCH service on Linux. Set `EXT_RTP_IP` / `EXT_SIP_IP` to the interconnect address advertised in SDP (e.g. `10.0.0.93`).  
 3. **HTTPS** — browsers need a trusted cert for mic/WSS. Put nginx/Caddy or a cloud LB in front with Let’s Encrypt; keep `/wss/` proxied to the web container (or directly to FreeSWITCH WS).  
 4. **Full Docker ≠ zero FreeSWITCH ops** — dialplan, gateways, NAT, and codecs still need FusionPBX/FreeSWITCH tuning after DB restore.  
 5. Do **not** expose ESL (`8021`) on a public interface.
@@ -94,6 +94,7 @@ docker compose exec -T db pg_restore -U fusionpbx -d fusionpbx --clean --if-exis
 | Web up, phone never registers | `docker compose logs freeswitch` and `web`; confirm `/wss/` → `freeswitch:5066` |
 | ESL / agent status stuck | `ESL_HOST=freeswitch`, password matches, `docker compose exec freeswitch fs_cli -x status` |
 | One-way audio | RTP ports not published / NAT; use host networking or hybrid |
+| Carrier hears silence, we hear them | Confirm `5080/udp` published; `fs_cli -x 'sofia status profile external'` shows RTCP; odd RTP+1 ports open (`ss -ulnp \| grep freeswitch`) |
 | Empty dashboards | DB not restored / wrong domain |
 
 ```bash
