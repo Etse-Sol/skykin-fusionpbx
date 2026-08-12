@@ -1,7 +1,7 @@
 #!/bin/sh
-# Register Ethio gateways SIP (+251111138755) and SIP759 (+251111138759).
-# Run on flipstar-app-server (Docker host). Passwords are read from
-# FusionPBX v_gateways and never printed.
+# Ethio SBC at 10.208.233.134 returns 404 to SIP REGISTER — this is an
+# IP trunk (NOREG), not a registrar. Do not set register=true.
+# This script is kept as a reference only.
 set -eu
 
 FS="${FREESWITCH_CONTAINER:-skykin-freeswitch}"

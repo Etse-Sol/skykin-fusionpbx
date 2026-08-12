@@ -19,7 +19,7 @@ TRUNK_REALM="${TRUNK_REALM:-}"
 TRUNK_USERNAME="${TRUNK_USERNAME:-}"
 TRUNK_FROM_USER="${TRUNK_FROM_USER:-${TRUNK_USERNAME:-}}"
 TRUNK_FROM_DOMAIN="${TRUNK_FROM_DOMAIN:-${TRUNK_REALM:-}}"
-TRUNK_REGISTER="${TRUNK_REGISTER:-true}"
+TRUNK_REGISTER="${TRUNK_REGISTER:-false}"
 TRUNK_PASSWORD="${TRUNK_PASSWORD:-}"
 TRUNK_TRANSPORT="${TRUNK_TRANSPORT:-udp}"
 TRUNK_CODEC_PREFS="${TRUNK_CODEC_PREFS:-PCMA,PCMU}"
@@ -31,7 +31,7 @@ TRUNK2_FROM_USER="${TRUNK2_FROM_USER:-${TRUNK2_USERNAME:-}}"
 TRUNK2_FROM_DOMAIN="${TRUNK2_FROM_DOMAIN:-${TRUNK_FROM_DOMAIN:-}}"
 TRUNK2_REALM="${TRUNK2_REALM:-${TRUNK_REALM:-}}"
 TRUNK2_PROXY="${TRUNK2_PROXY:-${TRUNK_PROXY:-}}"
-TRUNK2_REGISTER="${TRUNK2_REGISTER:-${TRUNK_REGISTER:-true}}"
+TRUNK2_REGISTER="${TRUNK2_REGISTER:-${TRUNK_REGISTER:-false}}"
 
 # Bootstrap vanilla config (same as safarov/freeswitch docker-entrypoint.sh).
 # Our ENTRYPOINT replaces theirs, so we must do this ourselves.
@@ -128,8 +128,17 @@ for _profile in "$INTERNAL" "$EXTERNAL" "$EXTERNAL6"; do
 done
 
 # Advertise the interconnect IP in SDP (e.g. 10.0.0.93), not the Docker bridge.
+# Literal profile values so STUN cannot put the public IP in Contact again.
 set_fs_var external_rtp_ip "$EXT_RTP_IP"
 set_fs_var external_sip_ip "$EXT_SIP_IP"
+if [ -n "$EXT_RTP_IP" ]; then
+  upsert_sofia_param "$EXTERNAL"  ext-rtp-ip "$EXT_RTP_IP"
+  upsert_sofia_param "$EXTERNAL6" ext-rtp-ip "$EXT_RTP_IP"
+fi
+if [ -n "$EXT_SIP_IP" ]; then
+  upsert_sofia_param "$EXTERNAL"  ext-sip-ip "$EXT_SIP_IP"
+  upsert_sofia_param "$EXTERNAL6" ext-sip-ip "$EXT_SIP_IP"
+fi
 
 # Drop the vanilla example.com gateway so Sofia does not show a fake trunk.
 rm -f /etc/freeswitch/sip_profiles/external/example.xml \
