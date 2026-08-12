@@ -4111,10 +4111,14 @@ function endCall() {
         if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
     } catch(e) {}
 
-    try { setAgentStatus('acw'); } catch(e) {}
+    // Failed outbound (never connected) must not enter ACW — that modal made
+    // 00:00 wrap-ups look like real calls. Only wrap up connected or inbound legs.
+    const connected = callDur > 0 || lastCallType === 'Inbound';
+    try { setAgentStatus(connected ? 'acw' : 'ready'); } catch(e) {}
 
-    // Small delay so recording upload completes before ACW modal opens
-    setTimeout(() => { try { openAcwModal(callerNum, callDur, lastCallType, recFile); } catch(e) {} }, 800);
+    if (connected) {
+        setTimeout(() => { try { openAcwModal(callerNum, callDur, lastCallType, recFile); } catch(e) {} }, 800);
+    }
     setTimeout(() => { try { fetchData(); startCountdown(); } catch(e) {} }, 4000);
     setTimeout(() => { try { fetchData(); } catch(e) {} }, 8000);
 
