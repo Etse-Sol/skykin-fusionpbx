@@ -42,6 +42,15 @@ services:
       # Interconnect IP advertised in SDP (Ethio). Leave empty for stun/auto.
       EXT_RTP_IP: ${EXT_RTP_IP:-}
       EXT_SIP_IP: ${EXT_SIP_IP:-}
+      TRUNK_GATEWAY_NAME: ${TRUNK_GATEWAY_NAME:-SIP}
+      TRUNK_PROXY: ${TRUNK_PROXY:-}
+      TRUNK_REALM: ${TRUNK_REALM:-}
+      TRUNK_USERNAME: ${TRUNK_USERNAME:-}
+      TRUNK_FROM_USER: ${TRUNK_FROM_USER:-}
+      TRUNK_FROM_DOMAIN: ${TRUNK_FROM_DOMAIN:-}
+      TRUNK_REGISTER: ${TRUNK_REGISTER:-false}
+      TRUNK_TRANSPORT: ${TRUNK_TRANSPORT:-udp}
+      TRUNK_CODEC_PREFS: ${TRUNK_CODEC_PREFS:-PCMA,PCMU}
     volumes:
       # Recordings shared with the web container for playback uploads.
       # Do not mount an empty volume over /etc/freeswitch — that wipes image config.

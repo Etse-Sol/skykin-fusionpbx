@@ -11,6 +11,17 @@ SIP_EXTERNAL_PORT="${SIP_EXTERNAL_PORT:-5080}"
 RTCP_AUDIO_INTERVAL_MSEC="${RTCP_AUDIO_INTERVAL_MSEC:-5000}"
 EXT_RTP_IP="${EXT_RTP_IP:-}"
 EXT_SIP_IP="${EXT_SIP_IP:-${EXT_RTP_IP:-}}"
+# Ethio IMS trunk (FusionPBX v_gateways). Vanilla FreeSWITCH only ships
+# example.com — without this file, agent→mobile never leaves the box.
+TRUNK_GATEWAY_NAME="${TRUNK_GATEWAY_NAME:-SIP}"
+TRUNK_PROXY="${TRUNK_PROXY:-}"
+TRUNK_REALM="${TRUNK_REALM:-}"
+TRUNK_USERNAME="${TRUNK_USERNAME:-}"
+TRUNK_FROM_USER="${TRUNK_FROM_USER:-${TRUNK_USERNAME:-}}"
+TRUNK_FROM_DOMAIN="${TRUNK_FROM_DOMAIN:-${TRUNK_REALM:-}}"
+TRUNK_REGISTER="${TRUNK_REGISTER:-false}"
+TRUNK_TRANSPORT="${TRUNK_TRANSPORT:-udp}"
+TRUNK_CODEC_PREFS="${TRUNK_CODEC_PREFS:-PCMA,PCMU}"
 
 # Bootstrap vanilla config (same as safarov/freeswitch docker-entrypoint.sh).
 # Our ENTRYPOINT replaces theirs, so we must do this ourselves.
@@ -109,6 +120,43 @@ done
 # Advertise the interconnect IP in SDP (e.g. 10.0.0.93), not the Docker bridge.
 set_fs_var external_rtp_ip "$EXT_RTP_IP"
 set_fs_var external_sip_ip "$EXT_SIP_IP"
+
+# Drop the vanilla example.com gateway so Sofia does not show a fake trunk.
+rm -f /etc/freeswitch/sip_profiles/external/example.xml \
+      /etc/freeswitch/sip_profiles/external/example.com.xml 2>/dev/null || true
+
+if [ -n "$TRUNK_PROXY" ]; then
+  mkdir -p /etc/freeswitch/sip_profiles/external
+  cat > /etc/freeswitch/sip_profiles/external/ethio.xml <<EOF
+<include>
+  <gateway name="${TRUNK_GATEWAY_NAME}">
+    <param name="username" value="${TRUNK_USERNAME}"/>
+    <param name="realm" value="${TRUNK_REALM}"/>
+    <param name="from-user" value="${TRUNK_FROM_USER}"/>
+    <param name="from-domain" value="${TRUNK_FROM_DOMAIN}"/>
+    <param name="proxy" value="${TRUNK_PROXY}"/>
+    <param name="register" value="${TRUNK_REGISTER}"/>
+    <param name="register-transport" value="${TRUNK_TRANSPORT}"/>
+    <param name="caller-id-in-from" value="true"/>
+    <param name="extension-in-contact" value="true"/>
+    <param name="codec-prefs" value="${TRUNK_CODEC_PREFS}"/>
+  </gateway>
+</include>
+EOF
+  mkdir -p /etc/freeswitch/dialplan/default
+  cat > /etc/freeswitch/dialplan/default/01_ethio_mobile.xml <<EOF
+<include>
+  <extension name="ethio_mobile">
+    <condition field="destination_number" expression="^(?:\+?|00)?(251[79]\\d{8})\$">
+      <action application="set" data="effective_caller_id_number=${TRUNK_USERNAME}"/>
+      <action application="set" data="absolute_codec_string=${TRUNK_CODEC_PREFS}"/>
+      <action application="bridge" data="sofia/gateway/${TRUNK_GATEWAY_NAME}/\$1"/>
+    </condition>
+  </extension>
+</include>
+EOF
+  echo "  Trunk:    ${TRUNK_GATEWAY_NAME} -> ${TRUNK_PROXY} (${TRUNK_REALM}) register=${TRUNK_REGISTER}"
+fi
 
 echo "SkyKin FreeSWITCH starting"
 echo "  ESL:      ${ESL_LISTEN_IP}:8021"
