@@ -143,18 +143,30 @@ if [ -n "$TRUNK_PROXY" ]; then
   </gateway>
 </include>
 EOF
-  mkdir -p /etc/freeswitch/dialplan/default
+  mkdir -p /etc/freeswitch/dialplan/default \
+           /etc/freeswitch/dialplan/client1.skykin.local
   cat > /etc/freeswitch/dialplan/default/01_ethio_mobile.xml <<EOF
 <include>
   <extension name="ethio_mobile">
-    <condition field="destination_number" expression="^(?:\+?|00)?(251[79]\\d{8})\$">
+    <condition field="destination_number" expression="^(?:\\+?|00)?(?:251)?0?([79]\\d{8})\$">
       <action application="set" data="effective_caller_id_number=${TRUNK_USERNAME}"/>
       <action application="set" data="absolute_codec_string=${TRUNK_CODEC_PREFS}"/>
-      <action application="bridge" data="sofia/gateway/${TRUNK_GATEWAY_NAME}/\$1"/>
+      <action application="bridge" data="sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
     </condition>
   </extension>
 </include>
 EOF
+  cp /etc/freeswitch/dialplan/default/01_ethio_mobile.xml \
+     /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
+  if [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ]; then
+    cat > /etc/freeswitch/dialplan/client1.skykin.local.xml <<'EOF'
+<include>
+  <context name="client1.skykin.local">
+    <X-PRE-PROCESS cmd="include" data="client1.skykin.local/*.xml"/>
+  </context>
+</include>
+EOF
+  fi
   echo "  Trunk:    ${TRUNK_GATEWAY_NAME} -> ${TRUNK_PROXY} (${TRUNK_REALM}) register=${TRUNK_REGISTER}"
 fi
 
