@@ -131,13 +131,15 @@ done
 # Literal profile values so STUN cannot put the public IP in Contact again.
 set_fs_var external_rtp_ip "$EXT_RTP_IP"
 set_fs_var external_sip_ip "$EXT_SIP_IP"
-if [ -n "$EXT_RTP_IP" ]; then
-  upsert_sofia_param "$EXTERNAL"  ext-rtp-ip "$EXT_RTP_IP"
-  upsert_sofia_param "$EXTERNAL6" ext-rtp-ip "$EXT_RTP_IP"
-fi
 if [ -n "$EXT_SIP_IP" ]; then
   upsert_sofia_param "$EXTERNAL"  ext-sip-ip "$EXT_SIP_IP"
+  upsert_sofia_param "$EXTERNAL"  sip-ip "$EXT_SIP_IP"
   upsert_sofia_param "$EXTERNAL6" ext-sip-ip "$EXT_SIP_IP"
+fi
+if [ -n "$EXT_RTP_IP" ]; then
+  upsert_sofia_param "$EXTERNAL"  ext-rtp-ip "$EXT_RTP_IP"
+  upsert_sofia_param "$EXTERNAL"  rtp-ip "$EXT_RTP_IP"
+  upsert_sofia_param "$EXTERNAL6" ext-rtp-ip "$EXT_RTP_IP"
 fi
 
 # Drop the vanilla example.com gateway so Sofia does not show a fake trunk.

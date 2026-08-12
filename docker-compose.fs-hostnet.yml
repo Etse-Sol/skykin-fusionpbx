@@ -1,0 +1,26 @@
+# Run FreeSWITCH on the host network so Ethio INVITEs use 10.0.0.93
+# natively (Via/Contact/source). Bridge+SNAT leaves Via as 172.22.0.2
+# and the SBC never replies.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fs-hostnet.yml up -d
+#
+# Then set web ESL/WS to the host:
+#   ESL_HOST=host.docker.internal
+#   FREESWITCH_WS_UPSTREAM=host.docker.internal:5066
+
+services:
+  freeswitch:
+    network_mode: host
+    ports: []
+    environment:
+      EXT_RTP_IP: ${EXT_RTP_IP:-10.0.0.93}
+      EXT_SIP_IP: ${EXT_SIP_IP:-10.0.0.93}
+      TRUNK_PROXY: ${TRUNK_PROXY:-10.208.233.134:5080}
+      TRUNK_REGISTER: ${TRUNK_REGISTER:-false}
+
+  web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      ESL_HOST: ${ESL_HOST:-host.docker.internal}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
