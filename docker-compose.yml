@@ -48,9 +48,18 @@ services:
       TRUNK_USERNAME: ${TRUNK_USERNAME:-}
       TRUNK_FROM_USER: ${TRUNK_FROM_USER:-}
       TRUNK_FROM_DOMAIN: ${TRUNK_FROM_DOMAIN:-}
-      TRUNK_REGISTER: ${TRUNK_REGISTER:-false}
+      TRUNK_PASSWORD: ${TRUNK_PASSWORD:-}
+      TRUNK_REGISTER: ${TRUNK_REGISTER:-true}
       TRUNK_TRANSPORT: ${TRUNK_TRANSPORT:-udp}
       TRUNK_CODEC_PREFS: ${TRUNK_CODEC_PREFS:-PCMA,PCMU}
+      TRUNK2_GATEWAY_NAME: ${TRUNK2_GATEWAY_NAME:-SIP759}
+      TRUNK2_USERNAME: ${TRUNK2_USERNAME:-}
+      TRUNK2_PASSWORD: ${TRUNK2_PASSWORD:-}
+      TRUNK2_FROM_USER: ${TRUNK2_FROM_USER:-}
+      TRUNK2_FROM_DOMAIN: ${TRUNK2_FROM_DOMAIN:-}
+      TRUNK2_REALM: ${TRUNK2_REALM:-}
+      TRUNK2_PROXY: ${TRUNK2_PROXY:-}
+      TRUNK2_REGISTER: ${TRUNK2_REGISTER:-true}
     volumes:
       # Recordings shared with the web container for playback uploads.
       # Do not mount an empty volume over /etc/freeswitch — that wipes image config.

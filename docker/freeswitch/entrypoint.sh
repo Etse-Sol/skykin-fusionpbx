@@ -19,9 +19,19 @@ TRUNK_REALM="${TRUNK_REALM:-}"
 TRUNK_USERNAME="${TRUNK_USERNAME:-}"
 TRUNK_FROM_USER="${TRUNK_FROM_USER:-${TRUNK_USERNAME:-}}"
 TRUNK_FROM_DOMAIN="${TRUNK_FROM_DOMAIN:-${TRUNK_REALM:-}}"
-TRUNK_REGISTER="${TRUNK_REGISTER:-false}"
+TRUNK_REGISTER="${TRUNK_REGISTER:-true}"
+TRUNK_PASSWORD="${TRUNK_PASSWORD:-}"
 TRUNK_TRANSPORT="${TRUNK_TRANSPORT:-udp}"
 TRUNK_CODEC_PREFS="${TRUNK_CODEC_PREFS:-PCMA,PCMU}"
+# Second Ethio DID (must show REGED alongside SIP).
+TRUNK2_GATEWAY_NAME="${TRUNK2_GATEWAY_NAME:-SIP759}"
+TRUNK2_USERNAME="${TRUNK2_USERNAME:-}"
+TRUNK2_PASSWORD="${TRUNK2_PASSWORD:-}"
+TRUNK2_FROM_USER="${TRUNK2_FROM_USER:-${TRUNK2_USERNAME:-}}"
+TRUNK2_FROM_DOMAIN="${TRUNK2_FROM_DOMAIN:-${TRUNK_FROM_DOMAIN:-}}"
+TRUNK2_REALM="${TRUNK2_REALM:-${TRUNK_REALM:-}}"
+TRUNK2_PROXY="${TRUNK2_PROXY:-${TRUNK_PROXY:-}}"
+TRUNK2_REGISTER="${TRUNK2_REGISTER:-${TRUNK_REGISTER:-true}}"
 
 # Bootstrap vanilla config (same as safarov/freeswitch docker-entrypoint.sh).
 # Our ENTRYPOINT replaces theirs, so we must do this ourselves.
@@ -125,24 +135,46 @@ set_fs_var external_sip_ip "$EXT_SIP_IP"
 rm -f /etc/freeswitch/sip_profiles/external/example.xml \
       /etc/freeswitch/sip_profiles/external/example.com.xml 2>/dev/null || true
 
-if [ -n "$TRUNK_PROXY" ]; then
-  mkdir -p /etc/freeswitch/sip_profiles/external
-  cat > /etc/freeswitch/sip_profiles/external/ethio.xml <<EOF
+write_ethio_gateway() {
+  _file=$1
+  _name=$2
+  _user=$3
+  _pass=$4
+  _realm=$5
+  _from_user=$6
+  _from_domain=$7
+  _proxy=$8
+  _register=$9
+  [ -n "$_name" ] && [ -n "$_user" ] && [ -n "$_proxy" ] || return 0
+  cat > "$_file" <<EOF
 <include>
-  <gateway name="${TRUNK_GATEWAY_NAME}">
-    <param name="username" value="${TRUNK_USERNAME}"/>
-    <param name="realm" value="${TRUNK_REALM}"/>
-    <param name="from-user" value="${TRUNK_FROM_USER}"/>
-    <param name="from-domain" value="${TRUNK_FROM_DOMAIN}"/>
-    <param name="proxy" value="${TRUNK_PROXY}"/>
-    <param name="register" value="${TRUNK_REGISTER}"/>
+  <gateway name="${_name}">
+    <param name="username" value="${_user}"/>
+    <param name="password" value="${_pass}"/>
+    <param name="realm" value="${_realm}"/>
+    <param name="from-user" value="${_from_user}"/>
+    <param name="from-domain" value="${_from_domain}"/>
+    <param name="proxy" value="${_proxy}"/>
+    <param name="register" value="${_register}"/>
     <param name="register-transport" value="${TRUNK_TRANSPORT}"/>
     <param name="caller-id-in-from" value="true"/>
     <param name="extension-in-contact" value="true"/>
+    <param name="expire-seconds" value="3600"/>
+    <param name="retry-seconds" value="30"/>
     <param name="codec-prefs" value="${TRUNK_CODEC_PREFS}"/>
   </gateway>
 </include>
 EOF
+}
+
+if [ -n "$TRUNK_PROXY" ]; then
+  mkdir -p /etc/freeswitch/sip_profiles/external
+  write_ethio_gateway /etc/freeswitch/sip_profiles/external/ethio.xml \
+    "$TRUNK_GATEWAY_NAME" "$TRUNK_USERNAME" "$TRUNK_PASSWORD" "$TRUNK_REALM" \
+    "$TRUNK_FROM_USER" "$TRUNK_FROM_DOMAIN" "$TRUNK_PROXY" "$TRUNK_REGISTER"
+  write_ethio_gateway /etc/freeswitch/sip_profiles/external/ethio759.xml \
+    "$TRUNK2_GATEWAY_NAME" "$TRUNK2_USERNAME" "$TRUNK2_PASSWORD" "$TRUNK2_REALM" \
+    "$TRUNK2_FROM_USER" "$TRUNK2_FROM_DOMAIN" "$TRUNK2_PROXY" "$TRUNK2_REGISTER"
   mkdir -p /etc/freeswitch/dialplan/default \
            /etc/freeswitch/dialplan/client1.skykin.local
   # Agent 101 is WebRTC/Opus. Setting absolute_codec_string=PCMA on the A-leg
@@ -183,6 +215,9 @@ EOF
 EOF
   fi
   echo "  Trunk:    ${TRUNK_GATEWAY_NAME} -> ${TRUNK_PROXY} (${TRUNK_REALM}) register=${TRUNK_REGISTER}"
+  if [ -n "$TRUNK2_USERNAME" ]; then
+    echo "  Trunk2:   ${TRUNK2_GATEWAY_NAME} ${TRUNK2_USERNAME} register=${TRUNK2_REGISTER}"
+  fi
 fi
 
 echo "SkyKin FreeSWITCH starting"
