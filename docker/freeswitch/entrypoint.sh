@@ -195,7 +195,7 @@ if [ -n "$TRUNK_PROXY" ]; then
     <condition field="destination_number" expression="^(?:\\+?|00)?(?:251)?0?([79]\\d{8})\$">
       <action application="set" data="effective_caller_id_number=${TRUNK_USERNAME}"/>
       <action application="set" data="effective_caller_id_name=SkyKin"/>
-      <action application="bridge" data="{absolute_codec_string=PCMA,origination_caller_id_number=${TRUNK_USERNAME}}sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
+      <action application="bridge" data="{absolute_codec_string=PCMA,origination_caller_id_number=${TRUNK_USERNAME},originate_timeout=60}sofia/gateway/${TRUNK_GATEWAY_NAME}/0\$1,sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
     </condition>
   </extension>
 </include>
