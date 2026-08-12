@@ -40,7 +40,11 @@ docker exec -i "$CONTAINER" sh -c '
      /etc/freeswitch/dialplan/client1.skykin.local/00_ethio_mobile.xml
   rm -f /etc/freeswitch/dialplan/default/01_ethio_mobile.xml \
         /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
-  # Do not write client1.skykin.local.xml if SkyKin already shipped a context.
+  f=/etc/freeswitch/dialplan/01_skykin_client1.skykin.local.xml
+  if [ -f "$f" ] && ! grep -q "client1.skykin.local/\*\.xml" "$f"; then
+    sed -i "/<context name=\"client1.skykin.local\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"client1.skykin.local/*.xml\"/>" "$f"
+  fi
+  rm -f /etc/freeswitch/dialplan/client1.skykin.local.xml
 '
 
 docker exec -i "$CONTAINER" fs_cli -x 'reloadxml'

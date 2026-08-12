@@ -163,11 +163,17 @@ EOF
         /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
   cp /etc/freeswitch/dialplan/default/00_ethio_mobile.xml \
      /etc/freeswitch/dialplan/client1.skykin.local/00_ethio_mobile.xml
-  # Never overwrite a FusionPBX/SkyKin context file (e.g.
-  # 01_skykin_client1.skykin.local.xml). A stub context with the same
-  # name replaces the real outbound routes and 101 dies immediately.
-  if [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ] \
-     && ! ls /etc/freeswitch/dialplan/*client1.skykin.local*.xml >/dev/null 2>&1; then
+  # Hook ethio_mobile into the real SkyKin context. Do not write a second
+  # <context name="client1.skykin.local"> — that either replaces 01_skykin
+  # or is ignored, and 101 then ends with NO_ROUTE_DESTINATION.
+  SKYKIN_CTX=/etc/freeswitch/dialplan/01_skykin_client1.skykin.local.xml
+  if [ -f "$SKYKIN_CTX" ]; then
+    if ! grep -q 'client1.skykin.local/\*\.xml' "$SKYKIN_CTX"; then
+      sed -i '/<context name="client1.skykin.local">/a\
+    <X-PRE-PROCESS cmd="include" data="client1.skykin.local/*.xml"/>' "$SKYKIN_CTX" || true
+    fi
+    rm -f /etc/freeswitch/dialplan/client1.skykin.local.xml
+  elif [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ]; then
     cat > /etc/freeswitch/dialplan/client1.skykin.local.xml <<'EOF'
 <include>
   <context name="client1.skykin.local">
