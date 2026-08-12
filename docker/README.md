@@ -96,6 +96,7 @@ docker compose exec -T db pg_restore -U fusionpbx -d fusionpbx --clean --if-exis
 | Agent outbound **Abandoned**, no `sofia/gateway/SIP` | A-leg was forced to PCMA (WebRTC/Opus then dies). On the Docker host: `sh docker/freeswitch/fix-live-outbound.sh` then dial from **101 Registered**. Do not `set absolute_codec_string` on the agent leg. |
 | One-way audio | RTP ports not published / NAT; use host networking or hybrid |
 | Carrier hears silence, we hear them | Confirm `5080/udp` published; `fs_cli -x 'sofia status profile external'` shows RTCP; odd RTP+1 ports open (`ss -ulnp \| grep freeswitch`) |
+| Outbound INVITE, mobile never rings, 30s `NO_ANSWER` / `[calling][0]` | Contact/source is the public IP instead of interconnect `10.0.0.93`. Set `EXT_SIP_IP`/`EXT_RTP_IP=10.0.0.93`, `TRUNK_PROXY=10.208.233.134:5080`, SNAT toward `10.208.233.134` from `10.0.0.93`, or run FreeSWITCH with `network_mode: host`. |
 | Empty dashboards | DB not restored / wrong domain |
 
 ```bash
