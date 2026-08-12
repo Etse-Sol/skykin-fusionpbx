@@ -29,7 +29,7 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_ethio_mobile
     <condition field="destination_number" expression="^(?:\+?|00)?(?:251)?0?([79]\d{8})$">
       <action application="set" data="effective_caller_id_number=+251111138755"/>
       <action application="set" data="effective_caller_id_name=SkyKin"/>
-      <action application="bridge" data="{absolute_codec_string='PCMA,PCMU',origination_caller_id_number=+251111138755}sofia/gateway/SIP/251$1"/>
+      <action application="bridge" data="{absolute_codec_string=PCMA,origination_caller_id_number=+251111138755}sofia/gateway/SIP/251$1"/>
     </condition>
   </extension>
 </include>
@@ -40,15 +40,7 @@ docker exec -i "$CONTAINER" sh -c '
      /etc/freeswitch/dialplan/client1.skykin.local/00_ethio_mobile.xml
   rm -f /etc/freeswitch/dialplan/default/01_ethio_mobile.xml \
         /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
-  if [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ]; then
-    cat > /etc/freeswitch/dialplan/client1.skykin.local.xml <<EOF
-<include>
-  <context name="client1.skykin.local">
-    <X-PRE-PROCESS cmd="include" data="client1.skykin.local/*.xml"/>
-  </context>
-</include>
-EOF
-  fi
+  # Do not write client1.skykin.local.xml if SkyKin already shipped a context.
 '
 
 docker exec -i "$CONTAINER" fs_cli -x 'reloadxml'

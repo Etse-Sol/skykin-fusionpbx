@@ -154,7 +154,7 @@ EOF
     <condition field="destination_number" expression="^(?:\\+?|00)?(?:251)?0?([79]\\d{8})\$">
       <action application="set" data="effective_caller_id_number=${TRUNK_USERNAME}"/>
       <action application="set" data="effective_caller_id_name=SkyKin"/>
-      <action application="bridge" data="{absolute_codec_string='${TRUNK_CODEC_PREFS}',origination_caller_id_number=${TRUNK_USERNAME}}sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
+      <action application="bridge" data="{absolute_codec_string=PCMA,origination_caller_id_number=${TRUNK_USERNAME}}sofia/gateway/${TRUNK_GATEWAY_NAME}/251\$1"/>
     </condition>
   </extension>
 </include>
@@ -163,7 +163,11 @@ EOF
         /etc/freeswitch/dialplan/client1.skykin.local/01_ethio_mobile.xml
   cp /etc/freeswitch/dialplan/default/00_ethio_mobile.xml \
      /etc/freeswitch/dialplan/client1.skykin.local/00_ethio_mobile.xml
-  if [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ]; then
+  # Never overwrite a FusionPBX/SkyKin context file (e.g.
+  # 01_skykin_client1.skykin.local.xml). A stub context with the same
+  # name replaces the real outbound routes and 101 dies immediately.
+  if [ ! -f /etc/freeswitch/dialplan/client1.skykin.local.xml ] \
+     && ! ls /etc/freeswitch/dialplan/*client1.skykin.local*.xml >/dev/null 2>&1; then
     cat > /etc/freeswitch/dialplan/client1.skykin.local.xml <<'EOF'
 <include>
   <context name="client1.skykin.local">
