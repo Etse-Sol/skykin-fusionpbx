@@ -1,5 +1,6 @@
 -- Return the sofia_contact that is a WebSocket registration.
 -- Skip sip:ext@<stun-ip>:<ice-port>;ob (that 488s INCOMPATIBLE_DESTINATION).
+-- Live: 101 was also registered as MicroSIP/3.22.12 UDP, which stole the AOR.
 local api = freeswitch.API()
 local user = argv[1] or ""
 local domain = argv[2] or "client1.skykin.local"
