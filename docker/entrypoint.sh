@@ -29,8 +29,12 @@ database.0.username = ${DB_USER}
 database.0.password = ${DB_PASSWORD}
 EOF
 
-# Patch nginx upstream for FreeSWITCH plain WebSocket
-sed -i "s|http://FREESWITCH_WS_UPSTREAM|http://${FREESWITCH_WS_UPSTREAM}|g" /etc/nginx/sites-available/skykin.conf
+# Patch nginx upstream for FreeSWITCH plain WebSocket (never FS :7443 —
+# that cert has no SAN and nginx/browsers close the socket with 1006).
+WS_UPSTREAM="${FREESWITCH_WS_UPSTREAM#http://}"
+WS_UPSTREAM="${WS_UPSTREAM#https://}"
+sed -i "s|http://FREESWITCH_WS_UPSTREAM/|http://${WS_UPSTREAM}/|g" /etc/nginx/sites-available/skykin.conf
+sed -i "s|http://FREESWITCH_WS_UPSTREAM|http://${WS_UPSTREAM}|g" /etc/nginx/sites-available/skykin.conf
 
 # Ensure agent dashboard SQLite is writable by PHP-FPM
 touch /var/www/fusionpbx/app/agent_dashboard/skykin_local.db

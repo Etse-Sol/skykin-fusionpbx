@@ -104,13 +104,11 @@ set_fs_var() {
 }
 
 INTERNAL=/etc/freeswitch/sip_profiles/internal.xml
-if [ -f "$INTERNAL" ]; then
-  if grep -q 'ws-binding' "$INTERNAL"; then
-    sed -i "s#<param name=\"ws-binding\".*#<param name=\"ws-binding\" value=\":5066\"/>#" "$INTERNAL" || true
-  else
-    sed -i "s#</settings>#    <param name=\"ws-binding\" value=\":5066\"/>\n  </settings>#" "$INTERNAL" || true
-  fi
-fi
+# Bind WS/WSS on all interfaces. Pinning them to EXT_SIP_IP (10.0.0.93)
+# makes skykin-web on the Docker bridge unable to complete /wss/ (browser
+# close 1006). Signaling to Ethio stays on the external profile.
+upsert_sofia_param "$INTERNAL" ws-binding "0.0.0.0:5066"
+upsert_sofia_param "$INTERNAL" wss-binding "0.0.0.0:7443"
 
 # Trunk / carrier profile (Ethio interconnect uses 5080). Bake live-server
 # media fixes here so a container rebuild does not undo them:
