@@ -193,6 +193,15 @@ cat > /etc/freeswitch/dialplan/default/00_webrtc_local.xml <<'EOF'
 EOF
 cp /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
    /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
+# Include at the top of context default. default/*.xml is expanded after
+# skykin_local_extension, so a file in default/ alone never matches 101.
+for f in /etc/freeswitch/dialplan/default.xml /etc/freeswitch/dialplan/*.xml; do
+  [ -f "$f" ] || continue
+  grep -q '<context name="default">' "$f" || continue
+  sed -i '/00_webrtc_local.xml/d' "$f"
+  sed -i '/<context name="default">/a\
+    <X-PRE-PROCESS cmd="include" data="default/00_webrtc_local.xml"/>' "$f" || true
+done
 
 if [ -n "$TRUNK_PROXY" ]; then
   mkdir -p /etc/freeswitch/sip_profiles/external

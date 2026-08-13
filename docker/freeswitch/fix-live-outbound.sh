@@ -40,6 +40,16 @@ XML
 docker exec -i "$CONTAINER" sh -c '
   cp /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
      /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
+  # default/*.xml is included AFTER skykin_local_extension in default.xml,
+  # so 00_webrtc_local never ran (08:05 still executed record_session +
+  # sofia/internal/101@domain → 503). Pin it at the top of context default.
+  for f in /etc/freeswitch/dialplan/default.xml /etc/freeswitch/dialplan/*.xml; do
+    [ -f "$f" ] || continue
+    grep -q "<context name=\"default\">" "$f" || continue
+    sed -i "/00_webrtc_local.xml/d" "$f"
+    sed -i "/<context name=\"default\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"default/00_webrtc_local.xml\"/>" "$f"
+    echo "pinned webrtc_local at top of $f"
+  done
 '
 
 # PCMA belongs only on the B-leg (curly-brace vars on bridge). Do not set
@@ -66,15 +76,19 @@ docker exec -i "$CONTAINER" sh -c '
     sed -i "/<context name=\"client1.skykin.local\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"client1.skykin.local/*.xml\"/>" "$f"
   fi
   rm -f /etc/freeswitch/dialplan/client1.skykin.local.xml
-  # skykin_local_extension still matches 101 in context default and was
-  # advertising the public IP (STUN 488). Strip that; leave user/ so the
-  # directory dial-string / sofia_contact (WSS fs_path) is used if this
-  # extension ever wins. Do not rewrite user/ → sofia/internal/user@domain
-  # — that skips the registered WSS contact and 503s in ~300ms.
+'
+
+docker exec -i "$CONTAINER" tee /tmp/patch_skykin.sed >/dev/null <<'SED'
+s#{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/\([^"]*\)#{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS}${sofia_contact(*/\1)}#g
+s#bridge" data="user/\([^"]*\)#bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS}${sofia_contact(*/\1)}#g
+SED
+docker exec -i "$CONTAINER" sh -c '
   find /etc/freeswitch/dialplan -name "*.xml" | while read -r f; do
     grep -q "skykin_local_extension" "$f" || continue
     sed -i "/rtp_advertise_ip/d; /include_external_ip/d" "$f"
+    sed -i -f /tmp/patch_skykin.sed "$f"
     echo "patched skykin_local_extension in $f"
+    grep -n "bridge\|sofia_contact" "$f" | head -20
   done
 '
 
@@ -102,6 +116,6 @@ echo "--- dialplan files ---"
 docker exec -i "$CONTAINER" sh -c 'ls -l /etc/freeswitch/dialplan/default/00_webrtc_local.xml; grep -n "webrtc_local\|skykin_local_extension\|rtp_advertise_ip\|user/" /etc/freeswitch/dialplan/default/*.xml /etc/freeswitch/dialplan/default.xml 2>/dev/null | head -80 || true'
 echo
 echo "Dialplan reloaded."
-echo "Agent-to-agent: from 102 dial 101. Expect parsing [default->webrtc_local] then"
-echo "  EXECUTE bridge(sofia/internal/101@client1.skykin.local) — not user/101 and not context client1."
-echo "Mobile: from 101 dial 0945184650. Expect sofia/gateway/SIP — not Abandoned."
+echo "Agent-to-agent: from 102 dial 101. Expect parsing [default->webrtc_local] FIRST"
+echo "  then EXECUTE bridge({media_webrtc=true...}\${sofia_contact(...)})."
+echo "NOT: record_session + bridge(sofia/internal/101@client1.skykin.local) → 503."
