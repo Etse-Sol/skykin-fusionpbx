@@ -29,8 +29,9 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/client1.skykin.local/00
   <extension name="webrtc_local" continue="false">
     <condition field="destination_number" expression="^(101|102)$">
       <action application="set" data="hangup_after_bridge=true"/>
+      <action application="set" data="rtp_secure_media=optional"/>
       <action application="set" data="absolute_codec_string=OPUS,PCMU,PCMA"/>
-      <action application="bridge" data="{sip_invite_domain=client1.skykin.local,presence_id=$1@client1.skykin.local}${sofia_contact(*/$1@client1.skykin.local)}"/>
+      <action application="bridge" data="{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/$1@client1.skykin.local"/>
     </condition>
   </extension>
 </include>
