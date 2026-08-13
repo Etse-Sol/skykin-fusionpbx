@@ -54,7 +54,7 @@ if not best then
   stream:write("error/user_not_registered")
   return
 end
-stream:write(best)
+stream:write("sofia/internal/" .. user .. "@" .. domain)
 LUA
 docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml >/dev/null <<'XML'
 <include>
@@ -92,6 +92,13 @@ docker exec "$CONTAINER" sh -c '
     sed -i "s#</settings>#    <param name=\"sip-force-contact\" value=\"NDLB-tls-connectile-dysfunction\"/>\n  </settings>#" "$f"
   fi
   grep "sip-force-contact" "$f"
+  if grep -q "name=\"enable-rfc-5626\"" "$f"; then
+    sed -i "s#name=\"enable-rfc-5626\".*#name=\"enable-rfc-5626\" value=\"true\"/>#" "$f"
+  else
+    sed -i "s#</settings>#    <param name=\"enable-rfc-5626\" value=\"true\"/>\n  </settings>#" "$f"
+  fi
+  grep "enable-rfc-5626" "$f"
+  echo "--" > /usr/share/freeswitch/scripts/app.lua
 '
 
 # PCMA belongs only on the B-leg (curly-brace vars on bridge). Do not set

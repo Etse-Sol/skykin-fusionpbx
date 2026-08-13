@@ -38,4 +38,7 @@ if not best then
   stream:write("error/user_not_registered")
   return
 end
-stream:write(best)
+-- Do not return the .invalid;fs_path=172.22.0.3:ephemeral URI. Sofia treats
+-- that as a new WSS connect to nginx's source port and 503s in ~20ms.
+-- AOR + transport=wss uses the existing registration flow instead.
+stream:write("sofia/internal/" .. user .. "@" .. domain)

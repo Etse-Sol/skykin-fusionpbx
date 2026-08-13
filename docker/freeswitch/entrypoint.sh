@@ -89,7 +89,7 @@ if not best then
   stream:write("error/user_not_registered")
   return
 end
-stream:write(best)
+stream:write("sofia/internal/" .. user .. "@" .. domain)
 LUA
 
 # Default ESL ACL is loopback.auto (blocks Docker bridge peers).
