@@ -21,6 +21,21 @@ docker exec -i "$CONTAINER" mkdir -p \
   /etc/freeswitch/dialplan/default \
   /etc/freeswitch/dialplan/client1.skykin.local
 
+# Agent-to-agent must use the WSS sofia_contact (fs_path), not a STUN
+# public IP:port. After host-net, user/101 was originating to
+# 101@196.189.x.x:10632 and dying 488 INCOMPATIBLE_DESTINATION.
+docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml >/dev/null <<'XML'
+<include>
+  <extension name="webrtc_local" continue="false">
+    <condition field="destination_number" expression="^(101|102)$">
+      <action application="set" data="hangup_after_bridge=true"/>
+      <action application="set" data="absolute_codec_string=OPUS,PCMU,PCMA"/>
+      <action application="bridge" data="{sip_invite_domain=client1.skykin.local,presence_id=$1@client1.skykin.local}${sofia_contact(*/$1@client1.skykin.local)}"/>
+    </condition>
+  </extension>
+</include>
+XML
+
 # PCMA belongs only on the B-leg (curly-brace vars on bridge). Do not set
 # absolute_codec_string on the WebRTC A-leg.
 docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_ethio_mobile.xml >/dev/null <<'XML'
