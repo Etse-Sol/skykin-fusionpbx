@@ -82,8 +82,10 @@ services:
     networks:
       - skykin
     restart: unless-stopped
-    # Linux production tip: uncomment the next line and remove the ports: block
-    # so FreeSWITCH owns the host network stack (best for SIP/RTP).
+    # Linux production: use docker-compose.fs-hostnet.yml (network_mode: host
+    # on FreeSWITCH only). Do not put web on host network — it must keep
+    # Docker DNS for `db`. Host-net FS has no hostname `freeswitch`; the
+    # overlay adds extra_hosts + WSS :7443.
     # network_mode: host
 
   web:
@@ -103,9 +105,17 @@ services:
       ESL_HOST: ${ESL_HOST:-freeswitch}
       ESL_PORT: ${ESL_PORT:-8021}
       ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
-      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}
+      SKYKIN_DOMAIN: ${SKYKIN_DOMAIN:-${FS_DOMAIN:-}}
+      CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
+      # Live call-center-web: SIP.js WSS transport needs https://…:7443, not :5066.
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:7443}
+      FREESWITCH_WS_SCHEME: ${FREESWITCH_WS_SCHEME:-https}
+      SERVER_NAME: ${TLS_CN:-skykin.local}
+      TLS_CN: ${TLS_CN:-skykin.local}
+      TLS_SAN_IP: ${TLS_SAN_IP:-}
     ports:
       - "${WEB_PORT:-8080}:80"
+      - "${WEB_HTTPS_PORT:-8088}:443"
     volumes:
       - ./app/agent_dashboard:/var/www/fusionpbx/app/agent_dashboard
       - skykin_recordings:/var/lib/freeswitch/recordings

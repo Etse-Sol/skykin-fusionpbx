@@ -16,7 +16,8 @@ services:
       ESL_HOST: ${ESL_HOST:-host.docker.internal}
       ESL_PORT: ${ESL_PORT:-8021}
       ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
-      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:7443}
+      FREESWITCH_WS_SCHEME: ${FREESWITCH_WS_SCHEME:-https}
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "freeswitch:host-gateway"
