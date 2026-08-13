@@ -11,13 +11,9 @@ EXT_IP="${EXT_SIP_IP:-10.0.0.93}"
 
 docker exec -i "$DB" psql -U fusionpbx -d fusionpbx -v ON_ERROR_STOP=1 <<'SQL'
 UPDATE v_gateways
-   SET register = true,
+   SET register = false,
        enabled = true,
-       proxy = CASE
-         WHEN proxy IS NULL OR proxy = '' OR proxy = '10.208.233.134'
-           THEN '10.208.233.134:5080'
-         ELSE proxy
-       END
+       proxy = '10.208.233.134:5080'
  WHERE gateway IN ('SIP', 'SIP759');
 SQL
 
@@ -68,7 +64,7 @@ for line in rows.splitlines():
     <param name="from-user" value="{x.escape(from_user)}"/>
     <param name="from-domain" value="{x.escape(from_domain)}"/>
     <param name="proxy" value="{x.escape(proxy)}"/>
-    <param name="register" value="true"/>
+    <param name="register" value="false"/>
     <param name="register-transport" value="{x.escape(transport)}"/>
     <param name="caller-id-in-from" value="true"/>
     <param name="extension-in-contact" value="true"/>
