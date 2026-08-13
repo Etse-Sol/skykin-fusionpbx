@@ -48,6 +48,23 @@ docker exec -i "$CONTAINER" sh -c '
 '
 
 docker exec -i "$CONTAINER" fs_cli -x 'reloadxml'
+
+# This interconnect is an IP trunk. REGISTER returns 404/408 and leaves
+# the gateway in FAIL_WAIT so outbound drops immediately.
+docker exec -i "$CONTAINER" sh -c '
+  for f in /etc/freeswitch/sip_profiles/external/*.xml; do
+    [ -f "$f" ] || continue
+    grep -q "gateway name=\"SIP\"" "$f" || continue
+    sed -i "s/<param name=\"register\" value=\"true\"/<param name=\"register\" value=\"false\"/" "$f"
+    echo "patched $f"
+  done
+  rm -f /etc/freeswitch/sip_profiles/external/example.xml \
+        /etc/freeswitch/sip_profiles/external/example.com.xml
+'
+docker exec -i "$CONTAINER" fs_cli -x 'sofia profile external killgw example.com' || true
+docker exec -i "$CONTAINER" fs_cli -x 'sofia profile external rescan'
+sleep 2
+
 echo "--- gateway ---"
 docker exec -i "$CONTAINER" fs_cli -x 'sofia status gateway'
 echo "--- dialplan files ---"
