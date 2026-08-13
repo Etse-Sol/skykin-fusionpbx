@@ -11,6 +11,13 @@ ESL_PORT="${ESL_PORT:-8021}"
 ESL_PASSWORD="${ESL_PASSWORD:-ClueCon}"
 FREESWITCH_WS_UPSTREAM="${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}"
 
+# Host-network FreeSWITCH has no Docker DNS name. extra_hosts is preferred;
+# this lets an existing image also pin "freeswitch" without a compose overlay.
+if [ -n "${FREESWITCH_HOSTS_IP:-}" ]; then
+  grep -qE '(^|[[:space:]])freeswitch([[:space:]]|$)' /etc/hosts || \
+    echo "${FREESWITCH_HOSTS_IP} freeswitch" >> /etc/hosts
+fi
+
 mkdir -p /etc/fusionpbx
 cat > /etc/fusionpbx/config.conf <<EOF
 #database settings

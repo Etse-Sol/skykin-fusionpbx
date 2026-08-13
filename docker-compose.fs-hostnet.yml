@@ -4,14 +4,16 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.fs-hostnet.yml up -d
 #
-# Then set web ESL/WS to the host:
-#   ESL_HOST=host.docker.internal
-#   FREESWITCH_WS_UPSTREAM=host.docker.internal:5066
+# Host-network FreeSWITCH is not on the compose DNS network, so nginx
+# cannot resolve hostname "freeswitch" (crash loop:
+#   host not found in upstream "freeswitch"
+# ). Pin that name to the interconnect IP — WSS is bound on
+# 10.0.0.93:7443, not on the docker-bridge gateway.
 
 services:
   freeswitch:
     network_mode: host
-    ports: []
+    ports: !reset []
     environment:
       EXT_RTP_IP: ${EXT_RTP_IP:-10.0.0.93}
       EXT_SIP_IP: ${EXT_SIP_IP:-10.0.0.93}
@@ -21,6 +23,7 @@ services:
   web:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      - "freeswitch:${EXT_SIP_IP:-10.0.0.93}"
     environment:
-      ESL_HOST: ${ESL_HOST:-host.docker.internal}
-      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-host.docker.internal:5066}
+      ESL_HOST: ${ESL_HOST:-freeswitch}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}
