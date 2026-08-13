@@ -21,12 +21,10 @@ docker exec -i "$CONTAINER" mkdir -p \
   /etc/freeswitch/dialplan/default \
   /etc/freeswitch/dialplan/client1.skykin.local
 
-# Agent-to-agent MUST live in context default. Live logs show:
-#   Processing 102 <102>->101 in context default
-#   parsing [default->skykin_local_extension]
-# Putting this only under client1.skykin.local/ never runs. python3 is
-# not in the FS image; use tee/sed only.
-docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_webrtc_local.xml >/dev/null <<'XML'
+# Live: default/00_skykin.xml sorts before 00_webrtc_local.xml, so the
+# glob never reached webrtc_local. Use 00_aa_* and pin at top of default.
+# BusyBox grep has no --include. python3 is not in the FS image.
+docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml >/dev/null <<'XML'
 <include>
   <extension name="webrtc_local" continue="false">
     <condition field="destination_number" expression="^(101|102)$">
@@ -38,18 +36,16 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_webrtc_local
 </include>
 XML
 docker exec -i "$CONTAINER" sh -c '
-  cp /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
-     /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
-  # default/*.xml is included AFTER skykin_local_extension in default.xml,
-  # so 00_webrtc_local never ran (08:05 still executed record_session +
-  # sofia/internal/101@domain → 503). Pin it at the top of context default.
-  for f in /etc/freeswitch/dialplan/default.xml /etc/freeswitch/dialplan/*.xml; do
-    [ -f "$f" ] || continue
-    grep -q "<context name=\"default\">" "$f" || continue
-    sed -i "/00_webrtc_local.xml/d" "$f"
-    sed -i "/<context name=\"default\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"default/00_webrtc_local.xml\"/>" "$f"
+  cp /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml \
+     /etc/freeswitch/dialplan/client1.skykin.local/00_aa_webrtc_local.xml
+  rm -f /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
+        /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
+  f=/etc/freeswitch/dialplan/default.xml
+  if [ -f "$f" ] && grep -q "<context name=\"default\">" "$f"; then
+    sed -i "/webrtc_local.xml/d" "$f"
+    sed -i "/<context name=\"default\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"default/00_aa_webrtc_local.xml\"/>" "$f"
     echo "pinned webrtc_local at top of $f"
-  done
+  fi
 '
 
 # PCMA belongs only on the B-leg (curly-brace vars on bridge). Do not set
@@ -113,7 +109,7 @@ sleep 2
 echo "--- gateway ---"
 docker exec -i "$CONTAINER" fs_cli -x 'sofia status gateway'
 echo "--- dialplan files ---"
-docker exec -i "$CONTAINER" sh -c 'ls -l /etc/freeswitch/dialplan/default/00_webrtc_local.xml; grep -n "webrtc_local\|skykin_local_extension\|rtp_advertise_ip\|user/" /etc/freeswitch/dialplan/default/*.xml /etc/freeswitch/dialplan/default.xml 2>/dev/null | head -80 || true'
+docker exec -i "$CONTAINER" sh -c 'ls -l /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml /etc/freeswitch/dialplan/default/00_skykin.xml 2>/dev/null; grep -n "webrtc_local\|skykin_local_extension\|sofia_contact\|rtp_advertise_ip" /etc/freeswitch/dialplan/default.xml /etc/freeswitch/dialplan/default/*.xml 2>/dev/null | head -80 || true'
 echo
 echo "Dialplan reloaded."
 echo "Agent-to-agent: from 102 dial 101. Expect parsing [default->webrtc_local] FIRST"

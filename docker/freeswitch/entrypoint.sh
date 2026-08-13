@@ -180,7 +180,7 @@ mkdir -p /etc/freeswitch/dialplan/default \
          /etc/freeswitch/dialplan/client1.skykin.local
 # 102→101 is processed in context default (user_context), not
 # client1.skykin.local. This file must live in default/ or it never runs.
-cat > /etc/freeswitch/dialplan/default/00_webrtc_local.xml <<'EOF'
+cat > /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml <<'EOF'
 <include>
   <extension name="webrtc_local" continue="false">
     <condition field="destination_number" expression="^(101|102)$">
@@ -191,17 +191,17 @@ cat > /etc/freeswitch/dialplan/default/00_webrtc_local.xml <<'EOF'
   </extension>
 </include>
 EOF
-cp /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
-   /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
-# Include at the top of context default. default/*.xml is expanded after
-# skykin_local_extension, so a file in default/ alone never matches 101.
-for f in /etc/freeswitch/dialplan/default.xml /etc/freeswitch/dialplan/*.xml; do
-  [ -f "$f" ] || continue
-  grep -q '<context name="default">' "$f" || continue
-  sed -i '/00_webrtc_local.xml/d' "$f"
+cp /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml \
+   /etc/freeswitch/dialplan/client1.skykin.local/00_aa_webrtc_local.xml
+rm -f /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
+      /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
+# Pin at top of context default. Live 00_skykin.xml sorts before 00_webrtc_*.
+if [ -f /etc/freeswitch/dialplan/default.xml ]; then
+  sed -i '/webrtc_local.xml/d' /etc/freeswitch/dialplan/default.xml
   sed -i '/<context name="default">/a\
-    <X-PRE-PROCESS cmd="include" data="default/00_webrtc_local.xml"/>' "$f" || true
-done
+    <X-PRE-PROCESS cmd="include" data="default/00_aa_webrtc_local.xml"/>' \
+    /etc/freeswitch/dialplan/default.xml || true
+fi
 
 if [ -n "$TRUNK_PROXY" ]; then
   mkdir -p /etc/freeswitch/sip_profiles/external
