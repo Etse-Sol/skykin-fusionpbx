@@ -5036,6 +5036,8 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
         authorizationUsername: ext,
         authorizationPassword: pass,
         hackIpInContact: false,
+        viaHost: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + '.invalid',
+        contactParams: { transport: 'ws' },
         logLevel: 'error',
         logConfiguration: false
     });

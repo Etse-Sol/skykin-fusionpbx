@@ -2,6 +2,7 @@
 FROM safarov/freeswitch:latest
 
 COPY entrypoint.sh /usr/local/bin/skykin-fs-entrypoint.sh
+COPY wss_contact.lua /usr/share/freeswitch/scripts/wss_contact.lua
 RUN sed -i 's/\r$//' /usr/local/bin/skykin-fs-entrypoint.sh \
     && chmod +x /usr/local/bin/skykin-fs-entrypoint.sh \
     && head -1 /usr/local/bin/skykin-fs-entrypoint.sh | od -c | head -2

@@ -24,13 +24,47 @@ docker exec -i "$CONTAINER" mkdir -p \
 # Live: default/00_skykin.xml sorts before 00_webrtc_local.xml, so the
 # glob never reached webrtc_local. Use 00_aa_* and pin at top of default.
 # BusyBox grep has no --include. python3 is not in the FS image.
+docker exec -i "$CONTAINER" tee /usr/share/freeswitch/scripts/wss_contact.lua >/dev/null <<'LUA'
+-- Return the sofia_contact that is a WebSocket registration.
+local api = freeswitch.API()
+local user = argv[1] or ""
+local domain = argv[2] or "client1.skykin.local"
+if user == "" then
+  stream:write("error/user_not_specified")
+  return
+end
+local function contacts_for(spec)
+  local raw = api:execute("sofia_contact", spec) or ""
+  return raw:gsub("%s+$", "")
+end
+local raw = contacts_for("internal/" .. user .. "@" .. domain)
+if raw == "" or raw:find("error/", 1, true) then
+  raw = contacts_for("*/" .. user .. "@" .. domain)
+end
+local best
+for part in string.gmatch(raw .. ",", "([^,]+)") do
+  part = part:gsub("^%s+", ""):gsub("%s+$", "")
+  if part ~= "" and (part:find("fs_path", 1, true) or part:find("transport=wss", 1, true) or part:find("transport=ws", 1, true) or part:find(".invalid", 1, true)) then
+    best = part
+    break
+  end
+end
+if not best then
+  freeswitch.consoleLog("WARNING", "wss_contact: no WSS registration for " .. user .. "@" .. domain .. " raw=" .. tostring(raw) .. "\n")
+  stream:write("error/user_not_registered")
+  return
+end
+stream:write(best)
+LUA
 docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml >/dev/null <<'XML'
 <include>
   <extension name="webrtc_local" continue="false">
     <condition field="destination_number" expression="^(101|102)$">
       <action application="set" data="hangup_after_bridge=true"/>
       <action application="set" data="rtp_secure_media=optional"/>
-      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS,sip_invite_params=transport=wss}${sofia_contact(internal/$1@client1.skykin.local)}"/>
+      <action application="set" data="wss_dest=${lua(wss_contact.lua $1 client1.skykin.local)}"/>
+      <action application="log" data="INFO webrtc_local dest=${wss_dest}"/>
+      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS,sip_invite_params=transport=wss}${wss_dest}"/>
     </condition>
   </extension>
 </include>
