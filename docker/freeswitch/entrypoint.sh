@@ -176,6 +176,24 @@ write_ethio_gateway() {
 EOF
 }
 
+mkdir -p /etc/freeswitch/dialplan/default \
+         /etc/freeswitch/dialplan/client1.skykin.local
+# 102→101 is processed in context default (user_context), not
+# client1.skykin.local. This file must live in default/ or it never runs.
+cat > /etc/freeswitch/dialplan/default/00_webrtc_local.xml <<'EOF'
+<include>
+  <extension name="webrtc_local" continue="false">
+    <condition field="destination_number" expression="^(101|102)$">
+      <action application="set" data="hangup_after_bridge=true"/>
+      <action application="set" data="rtp_secure_media=optional"/>
+      <action application="bridge" data="{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/$1@client1.skykin.local"/>
+    </condition>
+  </extension>
+</include>
+EOF
+cp /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
+   /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
+
 if [ -n "$TRUNK_PROXY" ]; then
   mkdir -p /etc/freeswitch/sip_profiles/external
   write_ethio_gateway /etc/freeswitch/sip_profiles/external/ethio.xml \
@@ -184,8 +202,6 @@ if [ -n "$TRUNK_PROXY" ]; then
   write_ethio_gateway /etc/freeswitch/sip_profiles/external/ethio759.xml \
     "$TRUNK2_GATEWAY_NAME" "$TRUNK2_USERNAME" "$TRUNK2_PASSWORD" "$TRUNK2_REALM" \
     "$TRUNK2_FROM_USER" "$TRUNK2_FROM_DOMAIN" "$TRUNK2_PROXY" "$TRUNK2_REGISTER"
-  mkdir -p /etc/freeswitch/dialplan/default \
-           /etc/freeswitch/dialplan/client1.skykin.local
   # Agent 101 is WebRTC/Opus. Setting absolute_codec_string=PCMA on the A-leg
   # abandons the call before sofia/gateway/SIP is ever dialed. Put PCMA only
   # on the B-leg (curly-brace vars on bridge). Rewrite 09… / +251… → 251….

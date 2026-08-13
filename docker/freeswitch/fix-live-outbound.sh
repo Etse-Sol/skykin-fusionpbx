@@ -21,21 +21,26 @@ docker exec -i "$CONTAINER" mkdir -p \
   /etc/freeswitch/dialplan/default \
   /etc/freeswitch/dialplan/client1.skykin.local
 
-# Agent-to-agent must use the WSS sofia_contact (fs_path), not a STUN
-# public IP:port. After host-net, user/101 was originating to
-# 101@196.189.x.x:10632 and dying 488 INCOMPATIBLE_DESTINATION.
-docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml >/dev/null <<'XML'
+# Agent-to-agent MUST live in context default. Live logs show:
+#   Processing 102 <102>->101 in context default
+#   parsing [default->skykin_local_extension]
+# Putting this only under client1.skykin.local/ never runs. python3 is
+# not in the FS image; use tee/sed only.
+docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_webrtc_local.xml >/dev/null <<'XML'
 <include>
   <extension name="webrtc_local" continue="false">
     <condition field="destination_number" expression="^(101|102)$">
       <action application="set" data="hangup_after_bridge=true"/>
       <action application="set" data="rtp_secure_media=optional"/>
-      <action application="set" data="absolute_codec_string=OPUS,PCMU,PCMA"/>
       <action application="bridge" data="{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/$1@client1.skykin.local"/>
     </condition>
   </extension>
 </include>
 XML
+docker exec -i "$CONTAINER" sh -c '
+  cp /etc/freeswitch/dialplan/default/00_webrtc_local.xml \
+     /etc/freeswitch/dialplan/client1.skykin.local/00_webrtc_local.xml
+'
 
 # PCMA belongs only on the B-leg (curly-brace vars on bridge). Do not set
 # absolute_codec_string on the WebRTC A-leg.
@@ -61,6 +66,15 @@ docker exec -i "$CONTAINER" sh -c '
     sed -i "/<context name=\"client1.skykin.local\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"client1.skykin.local/*.xml\"/>" "$f"
   fi
   rm -f /etc/freeswitch/dialplan/client1.skykin.local.xml
+  # skykin_local_extension still matches 101 in context default and was
+  # advertising the public IP then bridging user/101 (STUN 488/503).
+  # Strip those even if webrtc_local somehow does not win first.
+  find /etc/freeswitch/dialplan -name "*.xml" | while read -r f; do
+    grep -q "skykin_local_extension" "$f" || continue
+    sed -i "/rtp_advertise_ip/d; /include_external_ip/d" "$f"
+    sed -i "s#bridge\" data=\"user/#bridge\" data=\"{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/#" "$f"
+    echo "patched skykin_local_extension in $f"
+  done
 '
 
 docker exec -i "$CONTAINER" fs_cli -x 'reloadxml'
@@ -84,8 +98,9 @@ sleep 2
 echo "--- gateway ---"
 docker exec -i "$CONTAINER" fs_cli -x 'sofia status gateway'
 echo "--- dialplan files ---"
-docker exec -i "$CONTAINER" sh -c 'grep -n absolute_codec_string /etc/freeswitch/dialplan/default/*.xml /etc/freeswitch/dialplan/client1.skykin.local/*.xml 2>/dev/null || true'
+docker exec -i "$CONTAINER" sh -c 'ls -l /etc/freeswitch/dialplan/default/00_webrtc_local.xml; grep -n "webrtc_local\|skykin_local_extension\|rtp_advertise_ip\|user/" /etc/freeswitch/dialplan/default/*.xml /etc/freeswitch/dialplan/default.xml 2>/dev/null | head -80 || true'
 echo
-echo "Dialplan reloaded. From agent 101 (Registered) dial 0945184650."
-echo "Expect sofia/gateway/SIP/251945184650 — not Abandoned with no gateway leg."
-echo "Confirm with: docker logs --since 2m $CONTAINER 2>&1 | grep -E 'gateway/SIP|Abandoned|101@'"
+echo "Dialplan reloaded."
+echo "Agent-to-agent: from 102 dial 101. Expect parsing [default->webrtc_local] then"
+echo "  EXECUTE bridge(sofia/internal/101@client1.skykin.local) — not user/101 and not context client1."
+echo "Mobile: from 101 dial 0945184650. Expect sofia/gateway/SIP — not Abandoned."
