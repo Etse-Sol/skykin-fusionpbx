@@ -29,7 +29,7 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_ethio_mobile
     <condition field="destination_number" expression="^(?:\+?|00)?(?:251)?0?([79]\d{8})$">
       <action application="set" data="effective_caller_id_number=+251111138755"/>
       <action application="set" data="effective_caller_id_name=SkyKin"/>
-      <action application="bridge" data="{absolute_codec_string=PCMA,origination_caller_id_number=+251111138755}sofia/gateway/SIP/251$1"/>
+      <action application="bridge" data="{absolute_codec_string=PCMA,origination_caller_id_number=+251111138755,originate_timeout=60}sofia/gateway/SIP/0$1,sofia/gateway/SIP/251$1"/>
     </condition>
   </extension>
 </include>
