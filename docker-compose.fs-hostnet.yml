@@ -7,8 +7,9 @@
 # Host-network FreeSWITCH is not on the compose DNS network, so nginx
 # cannot resolve hostname "freeswitch" (crash loop:
 #   host not found in upstream "freeswitch"
-# ). Pin that name to the interconnect IP — WSS is bound on
-# 10.0.0.93:7443, not on the docker-bridge gateway.
+# ). Docker often cannot complete TCP to 10.0.0.93:7443 (rp_filter);
+# live call-center-web must proxy /wss/ to the docker-network gateway
+# :7443 with proxy_ssl_verify off (SIP.js transport=WSS; do not use :5066).
 
 services:
   freeswitch:
