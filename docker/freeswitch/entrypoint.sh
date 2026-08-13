@@ -156,6 +156,9 @@ upsert_sofia_param "$INTERNAL" wss-binding "0.0.0.0:7443"
 # (sip:101@196.189.57.158:10632;ob) so agent-to-agent 488s. WSS must
 # keep the websocket fs_path (172.22.0.3:…;transport=wss).
 upsert_sofia_param "$INTERNAL" sip-force-contact "NDLB-tls-connectile-dysfunction"
+# Send the INVITE back on the existing WSS flow (nginx→:7443), not a
+# new connect() to the proxy's ephemeral source port (that 503s).
+upsert_sofia_param "$INTERNAL" enable-rfc-5626 "true"
 
 # Trunk / carrier profile (Ethio interconnect uses 5080). Bake live-server
 # media fixes here so a container rebuild does not undo them:
@@ -235,7 +238,7 @@ cat > /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml <<'EOF'
       <action application="set" data="rtp_secure_media=optional"/>
       <action application="set" data="wss_dest=${lua(wss_contact.lua $1 client1.skykin.local)}"/>
       <action application="log" data="INFO webrtc_local dest=${wss_dest}"/>
-      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS,sip_invite_params=transport=wss}${wss_dest}"/>
+      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional}${wss_dest}"/>
     </condition>
   </extension>
 </include>

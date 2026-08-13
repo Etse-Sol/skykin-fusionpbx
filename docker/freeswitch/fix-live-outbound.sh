@@ -64,7 +64,7 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_aa_webrtc_lo
       <action application="set" data="rtp_secure_media=optional"/>
       <action application="set" data="wss_dest=${lua(wss_contact.lua $1 client1.skykin.local)}"/>
       <action application="log" data="INFO webrtc_local dest=${wss_dest}"/>
-      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS,sip_invite_params=transport=wss}${wss_dest}"/>
+      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional}${wss_dest}"/>
     </condition>
   </extension>
 </include>
