@@ -5035,6 +5035,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
         },
         authorizationUsername: ext,
         authorizationPassword: pass,
+        hackIpInContact: false,
         logLevel: 'error',
         logConfiguration: false
     });

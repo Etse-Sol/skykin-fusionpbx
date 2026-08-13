@@ -30,7 +30,7 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_aa_webrtc_lo
     <condition field="destination_number" expression="^(101|102)$">
       <action application="set" data="hangup_after_bridge=true"/>
       <action application="set" data="rtp_secure_media=optional"/>
-      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS}${sofia_contact(*/$1@client1.skykin.local)}"/>
+      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS,sip_invite_params=transport=wss}${sofia_contact(internal/$1@client1.skykin.local)}"/>
     </condition>
   </extension>
 </include>
@@ -46,6 +46,18 @@ docker exec -i "$CONTAINER" sh -c '
     sed -i "/<context name=\"default\">/a\\    <X-PRE-PROCESS cmd=\"include\" data=\"default/00_aa_webrtc_local.xml\"/>" "$f"
     echo "pinned webrtc_local at top of $f"
   fi
+'
+
+# WSS Contact must keep fs_path. NDLB-connectile-dysfunction rewrites it
+# to the browser STUN/RTP address (488 INCOMPATIBLE_DESTINATION).
+docker exec "$CONTAINER" sh -c '
+  f=/etc/freeswitch/sip_profiles/internal.xml
+  if grep -q "name=\"sip-force-contact\"" "$f"; then
+    sed -i "s#name=\"sip-force-contact\".*#name=\"sip-force-contact\" value=\"NDLB-tls-connectile-dysfunction\"/>#" "$f"
+  else
+    sed -i "s#</settings>#    <param name=\"sip-force-contact\" value=\"NDLB-tls-connectile-dysfunction\"/>\n  </settings>#" "$f"
+  fi
+  grep "sip-force-contact" "$f"
 '
 
 # PCMA belongs only on the B-leg (curly-brace vars on bridge). Do not set
@@ -114,4 +126,5 @@ echo
 echo "Dialplan reloaded."
 echo "Agent-to-agent: from 102 dial 101. Expect parsing [default->webrtc_local] FIRST"
 echo "  then EXECUTE bridge({media_webrtc=true...}\${sofia_contact(...)})."
-echo "NOT: record_session + bridge(sofia/internal/101@client1.skykin.local) → 503."
+echo "NOT: record_session + sofia/internal/101@client1.skykin.local → 503."
+echo "NOT: sip:101@<STUN-IP>:<ice-port>;ob → 488 INCOMPATIBLE_DESTINATION."
