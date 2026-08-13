@@ -233,7 +233,7 @@ mkdir -p /etc/freeswitch/dialplan/default \
 cat > /etc/freeswitch/dialplan/default/00_aa_webrtc_local.xml <<'EOF'
 <include>
   <extension name="webrtc_local" continue="false">
-    <condition field="destination_number" expression="^(101|102)$">
+    <condition field="destination_number" expression="^(10[0-9])$">
       <action application="set" data="hangup_after_bridge=true"/>
       <action application="set" data="rtp_secure_media=optional"/>
       <action application="set" data="wss_dest=${lua(wss_contact.lua $1 client1.skykin.local)}"/>

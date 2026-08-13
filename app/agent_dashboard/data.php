@@ -69,27 +69,13 @@ $data = [
 ];
 
 try {
-    // Get extension number for this agent
+    // Get extension number for this agent (Agent3 == "Agent 3" == 103)
     $extension = $ext_override;
     if (!$extension) {
-        // Try lookup by FusionPBX username
         try {
-            $ext_stmt = $db->prepare("
-                SELECT e.extension 
-                FROM v_extensions e
-                JOIN v_users u ON u.user_uuid = e.user_uuid
-                WHERE u.username = :agent AND e.domain_name = :domain
-                LIMIT 1
-            ");
-            $ext_stmt->execute([':agent' => $agent_name, ':domain' => $domain]);
-            $ext_row = $ext_stmt->fetch(PDO::FETCH_ASSOC);
-            $extension = $ext_row ? $ext_row['extension'] : null;
+            $sip = skykin_resolve_agent_sip($db, $agent_name, $domain);
+            $extension = $sip['extension'] !== '' ? $sip['extension'] : null;
         } catch (Exception $ignored) {}
-
-        // Fallback: if agent_name looks like an extension number, use it directly
-        if (!$extension && preg_match('/^\d{2,6}$/', $agent_name)) {
-            $extension = $agent_name;
-        }
     }
 
     // Allow direct extension override from URL parameter (always wins)

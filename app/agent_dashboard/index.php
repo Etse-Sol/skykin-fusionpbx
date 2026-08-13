@@ -67,18 +67,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     }
 
     try {
-        // Resolve extension via v_extension_users join (v_extensions has no user_uuid or domain_name column)
+        // Resolve extension (Agent3 == "Agent 3" == 103)
         if (!$extension) {
-            $s = $db->prepare("SELECT e.extension FROM v_extensions e
-                JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                JOIN v_users u ON u.user_uuid = eu.user_uuid
-                JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                WHERE LOWER(u.username)=LOWER(:a) AND d.domain_name=:d LIMIT 1");
-            $s->execute([':a'=>$agent_name,':d'=>$domain]);
-            $r = $s->fetch(PDO::FETCH_ASSOC);
-            if ($r) $extension = $r['extension'];
+            $sip = skykin_resolve_agent_sip($db, $agent_name, $domain);
+            if (!empty($sip['extension'])) {
+                $extension = $sip['extension'];
+            }
         }
-        if (!$extension && preg_match('/^\d{2,6}$/',$agent_name)) $extension = $agent_name;
 
         $data['resolved_ext'] = $extension ?: 'NOT RESOLVED';
 
@@ -1356,8 +1351,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUES
     exit;
 }
 
-$agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
-$domain = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$agent_name_raw = isset($_GET['agent']) ? trim((string)$_GET['agent']) : '';
+if ($agent_name_raw === '') {
+    $agent_name_raw = trim((string)($_SESSION['username'] ?? 'Agent1'));
+}
+$agent_name = htmlspecialchars($agent_name_raw, ENT_QUOTES, 'UTF-8');
+$domain_raw = skykin_domain_param($_GET['domain'] ?? null);
+$domain = htmlspecialchars($domain_raw, ENT_QUOTES, 'UTF-8');
 
 // Detect if logged-in user is supervisor/admin
 $is_supervisor = false;
@@ -1416,33 +1416,9 @@ try {
         }
     }
     $pdb = getSkykinDB();
-
-    // 1) Try: username match via v_extension_users (v_extensions has no user_uuid or domain_name column)
-    $s = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
-                         JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                         JOIN v_users u ON u.user_uuid = eu.user_uuid
-                         JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                         WHERE LOWER(u.username) = LOWER(:a) AND d.domain_name = :d LIMIT 1");
-    $s->execute([':a' => $agent_name, ':d' => $domain]);
-    $row = $s->fetch(PDO::FETCH_ASSOC);
-    if ($row) { $agent_ext = $row['extension']; $agent_password = $row['password']; }
-
-    // 2) Try: caller-ID name contains agent name (join v_domains for domain filter)
-    if (!$agent_ext) {
-        $s2 = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
-                              JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                              WHERE d.domain_name = :d
-                              AND (LOWER(e.description) LIKE :p OR LOWER(e.effective_caller_id_name) LIKE :p)
-                              LIMIT 1");
-        $s2->execute([':d' => $domain, ':p' => '%' . strtolower($agent_name) . '%']);
-        $row2 = $s2->fetch(PDO::FETCH_ASSOC);
-        if ($row2) { $agent_ext = $row2['extension']; $agent_password = $row2['password']; }
-    }
-
-    // 3) If agent_name is purely numeric treat it as an extension
-    if (!$agent_ext && preg_match('/^\d{2,6}$/', $agent_name)) {
-        $agent_ext = $agent_name;
-    }
+    $sip = skykin_resolve_agent_sip($pdb, $agent_name_raw, $domain_raw);
+    $agent_ext = $sip['extension'];
+    $agent_password = $sip['password'];
 } catch (Exception $e) { /* silent — JS will fall back to localStorage */ }
 
 // ── Agent timing config + queue/tier assignments (any extension, read-only) ──
@@ -2928,15 +2904,25 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
 <?php echo skykin_js_bootstrap(); ?>
-const agentName  = '<?php echo $agent_name; ?>';
-const domain     = '<?php echo $domain; ?>';
-const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB
-const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
-const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
+const agentName  = <?php echo json_encode($agent_name_raw, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const domain     = <?php echo json_encode($domain_raw, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const serverExt  = <?php echo json_encode($agent_ext, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const serverPass = <?php echo json_encode($agent_password, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const serverWss  = <?php echo json_encode($agent_wss, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG); ?>;
 
-// Auto-configure SIP from server on every page load ? no manual setup needed
-if (serverExt)  localStorage.setItem('sip_ext',  serverExt);
-if (serverPass) localStorage.setItem('sip_pass', serverPass);
+// Bind this login to the server-resolved extension. Stale sip_ext/sip_pass
+// from Agent 2 would otherwise register the wrong phone (or 403) for Agent 3.
+if (serverExt) {
+    localStorage.setItem('sip_ext', serverExt);
+    if (serverPass) {
+        localStorage.setItem('sip_pass', serverPass);
+    } else {
+        localStorage.removeItem('sip_pass');
+    }
+} else {
+    localStorage.removeItem('sip_ext');
+    localStorage.removeItem('sip_pass');
+}
 localStorage.setItem('sip_server', (window.SKYKIN && SKYKIN.sipServer) || location.hostname);
 localStorage.setItem('sip_domain', domain || ((window.SKYKIN && SKYKIN.domain) || location.hostname));
 localStorage.removeItem('sip_port');
@@ -3051,7 +3037,7 @@ const FPBX_STATUS_MAP = {
 };
 
 function agentDisplayName() {
-    return <?php echo json_encode($agent_name); ?>;
+    return <?php echo json_encode($agent_name_raw, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 }
 
 function applyStatusUi(status, labelOverride) {
@@ -3816,7 +3802,13 @@ function loadSipSettings() {
     document.getElementById('sipPort').value   = isHttps ? (location.port || '443') : port;
     document.getElementById('sipDomain').value = dom;
     
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+    if (ext && pass) {
+        waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+    } else {
+        setSipStatus('failed', ext
+            ? ('No SIP password for extension ' + ext)
+            : ('No SIP extension for ' + (agentName || 'this agent')));
+    }
 }
 
 function waitForSipBridge(cb, tries) {
