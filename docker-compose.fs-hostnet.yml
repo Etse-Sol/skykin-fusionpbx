@@ -19,6 +19,8 @@ services:
       EXT_SIP_IP: ${EXT_SIP_IP:-10.0.0.93}
       TRUNK_PROXY: ${TRUNK_PROXY:-10.208.233.134:5080}
       TRUNK_REGISTER: ${TRUNK_REGISTER:-false}
+      # Host-net FS has no Docker DNS name `web`. HTTP there 301s to HTTPS.
+      CDR_URL: ${CDR_URL:-https://127.0.0.1:8088/app/xml_cdr/xml_cdr_import.php}
 
   web:
     extra_hosts:

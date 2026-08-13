@@ -306,6 +306,24 @@ EOF
   fi
 fi
 
+# CDR POST. Hostname `web` 301s (HTTP→HTTPS) and mod_xml_cdr does not
+# follow redirects, so hangup records fall to disk. Host-net FS should
+# post to the dashboard HTTPS port on loopback. reloadxml picks this up;
+# it does not restart Sofia.
+CDR_URL="${CDR_URL:-}"
+if [ -n "$CDR_URL" ]; then
+  XML_CDR=/etc/freeswitch/autoload_configs/xml_cdr.conf.xml
+  if [ -f "$XML_CDR" ]; then
+    if grep -q 'name="url"' "$XML_CDR"; then
+      sed -i "s#<param name=\"url\" value=\"[^\"]*\"#<param name=\"url\" value=\"${CDR_URL}\"#" "$XML_CDR"
+      sed -i "s#<!--[[:space:]]*<param name=\"url\" value=\"[^\"]*\"/>[[:space:]]*-->#<param name=\"url\" value=\"${CDR_URL}\"/>#" "$XML_CDR"
+    else
+      sed -i "/<settings>/a\\    <param name=\"url\" value=\"${CDR_URL}\"/>" "$XML_CDR"
+    fi
+    echo "  CDR url: ${CDR_URL}"
+  fi
+fi
+
 echo "SkyKin FreeSWITCH starting"
 echo "  ESL:      ${ESL_LISTEN_IP}:8021"
 echo "  WS:       :5066"
