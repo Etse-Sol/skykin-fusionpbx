@@ -67,18 +67,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
     }
 
     try {
-        // Resolve extension via v_extension_users join (v_extensions has no user_uuid or domain_name column)
+        // Resolve extension (Agent3 == "Agent 3" == 103)
         if (!$extension) {
-            $s = $db->prepare("SELECT e.extension FROM v_extensions e
-                JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                JOIN v_users u ON u.user_uuid = eu.user_uuid
-                JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                WHERE LOWER(u.username)=LOWER(:a) AND d.domain_name=:d LIMIT 1");
-            $s->execute([':a'=>$agent_name,':d'=>$domain]);
-            $r = $s->fetch(PDO::FETCH_ASSOC);
-            if ($r) $extension = $r['extension'];
+            $sip = skykin_resolve_agent_sip($db, $agent_name, $domain);
+            if (!empty($sip['extension'])) {
+                $extension = $sip['extension'];
+            }
         }
-        if (!$extension && preg_match('/^\d{2,6}$/',$agent_name)) $extension = $agent_name;
 
         $data['resolved_ext'] = $extension ?: 'NOT RESOLVED';
 
@@ -1356,8 +1351,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUES
     exit;
 }
 
-$agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
-$domain = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$agent_name_raw = isset($_GET['agent']) ? trim((string)$_GET['agent']) : '';
+if ($agent_name_raw === '') {
+    $agent_name_raw = trim((string)($_SESSION['username'] ?? 'Agent1'));
+}
+$agent_name = htmlspecialchars($agent_name_raw, ENT_QUOTES, 'UTF-8');
+$domain_raw = skykin_domain_param($_GET['domain'] ?? null);
+$domain = htmlspecialchars($domain_raw, ENT_QUOTES, 'UTF-8');
 
 // Detect if logged-in user is supervisor/admin
 $is_supervisor = false;
@@ -1416,33 +1416,9 @@ try {
         }
     }
     $pdb = getSkykinDB();
-
-    // 1) Try: username match via v_extension_users (v_extensions has no user_uuid or domain_name column)
-    $s = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
-                         JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
-                         JOIN v_users u ON u.user_uuid = eu.user_uuid
-                         JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                         WHERE LOWER(u.username) = LOWER(:a) AND d.domain_name = :d LIMIT 1");
-    $s->execute([':a' => $agent_name, ':d' => $domain]);
-    $row = $s->fetch(PDO::FETCH_ASSOC);
-    if ($row) { $agent_ext = $row['extension']; $agent_password = $row['password']; }
-
-    // 2) Try: caller-ID name contains agent name (join v_domains for domain filter)
-    if (!$agent_ext) {
-        $s2 = $pdb->prepare("SELECT e.extension, e.password FROM v_extensions e
-                              JOIN v_domains d ON d.domain_uuid = e.domain_uuid
-                              WHERE d.domain_name = :d
-                              AND (LOWER(e.description) LIKE :p OR LOWER(e.effective_caller_id_name) LIKE :p)
-                              LIMIT 1");
-        $s2->execute([':d' => $domain, ':p' => '%' . strtolower($agent_name) . '%']);
-        $row2 = $s2->fetch(PDO::FETCH_ASSOC);
-        if ($row2) { $agent_ext = $row2['extension']; $agent_password = $row2['password']; }
-    }
-
-    // 3) If agent_name is purely numeric treat it as an extension
-    if (!$agent_ext && preg_match('/^\d{2,6}$/', $agent_name)) {
-        $agent_ext = $agent_name;
-    }
+    $sip = skykin_resolve_agent_sip($pdb, $agent_name_raw, $domain_raw);
+    $agent_ext = $sip['extension'];
+    $agent_password = $sip['password'];
 } catch (Exception $e) { /* silent — JS will fall back to localStorage */ }
 
 // ── Agent timing config + queue/tier assignments (any extension, read-only) ──
@@ -2928,15 +2904,25 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
 <?php echo skykin_js_bootstrap(); ?>
-const agentName  = '<?php echo $agent_name; ?>';
-const domain     = '<?php echo $domain; ?>';
-const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB
-const serverPass = '<?php echo $agent_password; ?>';   // SIP password from DB
-const serverWss  = '<?php echo $agent_wss; ?>';        // WSS server URL
+const agentName  = <?php echo json_encode($agent_name_raw, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const domain     = <?php echo json_encode($domain_raw, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const serverExt  = <?php echo json_encode($agent_ext, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const serverPass = <?php echo json_encode($agent_password, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+const serverWss  = <?php echo json_encode($agent_wss, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG); ?>;
 
-// Auto-configure SIP from server on every page load ? no manual setup needed
-if (serverExt)  localStorage.setItem('sip_ext',  serverExt);
-if (serverPass) localStorage.setItem('sip_pass', serverPass);
+// Bind this login to the server-resolved extension. Stale sip_ext/sip_pass
+// from Agent 2 would otherwise register the wrong phone (or 403) for Agent 3.
+if (serverExt) {
+    localStorage.setItem('sip_ext', serverExt);
+    if (serverPass) {
+        localStorage.setItem('sip_pass', serverPass);
+    } else {
+        localStorage.removeItem('sip_pass');
+    }
+} else {
+    localStorage.removeItem('sip_ext');
+    localStorage.removeItem('sip_pass');
+}
 localStorage.setItem('sip_server', (window.SKYKIN && SKYKIN.sipServer) || location.hostname);
 localStorage.setItem('sip_domain', domain || ((window.SKYKIN && SKYKIN.domain) || location.hostname));
 localStorage.removeItem('sip_port');
@@ -3051,7 +3037,7 @@ const FPBX_STATUS_MAP = {
 };
 
 function agentDisplayName() {
-    return <?php echo json_encode($agent_name); ?>;
+    return <?php echo json_encode($agent_name_raw, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 }
 
 function applyStatusUi(status, labelOverride) {
@@ -3816,7 +3802,13 @@ function loadSipSettings() {
     document.getElementById('sipPort').value   = isHttps ? (location.port || '443') : port;
     document.getElementById('sipDomain').value = dom;
     
-    if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+    if (ext && pass) {
+        waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+    } else {
+        setSipStatus('failed', ext
+            ? ('No SIP password for extension ' + ext)
+            : ('No SIP extension for ' + (agentName || 'this agent')));
+    }
 }
 
 function waitForSipBridge(cb, tries) {
@@ -3935,6 +3927,20 @@ function makeCall(number) {
     lastCallType = 'Outbound';
     if (sipBridge.makeCall) sipBridge.makeCall(number);
     else showToast('SIP not ready. Open Phone Settings to connect.');
+}
+
+// Strip spaces / dashes / leading +. Keep short values as extensions.
+// Ethio interconnects expect 2519… not +2519… or 09….
+function normalizeDialNumber(raw) {
+    let n = String(raw || '').trim();
+    if (!n) return '';
+    if (/^\d{2,6}$/.test(n)) return n;
+    n = n.replace(/[^\d+]/g, '');
+    if (n.charAt(0) === '+') n = n.slice(1);
+    if (n.indexOf('00') === 0) n = n.slice(2);
+    if (n.charAt(0) === '0' && n.length === 10) n = '251' + n.slice(1);
+    else if (/^[79]\d{8}$/.test(n)) n = '251' + n;
+    return n;
 }
 
 // ?? Ringtone (Web Audio API ? no file needed) ??????????????????????????????
@@ -4097,10 +4103,14 @@ function endCall() {
         if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
     } catch(e) {}
 
-    try { setAgentStatus('acw'); } catch(e) {}
+    // Failed outbound (never connected) must not enter ACW — that modal made
+    // 00:00 wrap-ups look like real calls. Only wrap up connected or inbound legs.
+    const connected = callDur > 0 || lastCallType === 'Inbound';
+    try { setAgentStatus(connected ? 'acw' : 'ready'); } catch(e) {}
 
-    // Small delay so recording upload completes before ACW modal opens
-    setTimeout(() => { try { openAcwModal(callerNum, callDur, lastCallType, recFile); } catch(e) {} }, 800);
+    if (connected) {
+        setTimeout(() => { try { openAcwModal(callerNum, callDur, lastCallType, recFile); } catch(e) {} }, 800);
+    }
     setTimeout(() => { try { fetchData(); startCountdown(); } catch(e) {} }, 4000);
     setTimeout(() => { try { fetchData(); } catch(e) {} }, 8000);
 
@@ -5017,11 +5027,18 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
         },
         authorizationUsername: ext,
         authorizationPassword: pass,
+        hackIpInContact: false,
+        viaHost: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + '.invalid',
+        contactParams: { transport: 'ws' },
         logLevel: 'error',
         logConfiguration: false
     });
 
-    reg = new Registerer(ua, { logConfiguration: false });
+    reg = new Registerer(ua, {
+        logConfiguration: false,
+        extraContactHeaderParams: ['ob'],
+        regId: 1
+    });
     reg.stateChange.addListener(state => {
         if (state === 'Registered') {
             window.setSipStatus('registered', 'Registered (' + ext + ')');
@@ -5063,8 +5080,17 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = (typeof normalizeDialNumber === 'function') ? normalizeDialNumber(number) : String(number || '').trim();
+    if (!number) {
+        window.showToast && window.showToast('Enter a number to dial');
+        return;
+    }
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
-    if (!uri) return;
+    if (!uri) {
+        window.showToast && window.showToast('Invalid number: ' + number);
+        window.sipReport && window.sipReport('bad_dial_uri', null, 'to=' + number);
+        return;
+    }
 
     // A previous failed attempt leaves a session whose peer connection is already
     // closed. Reusing it makes the next offer fail with "Peer connection closed".

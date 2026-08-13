@@ -1,0 +1,32 @@
+# Run FreeSWITCH on the host network so Ethio INVITEs use 10.0.0.93
+# natively (Via/Contact/source). Bridge+SNAT leaves Via as 172.22.0.2
+# and the SBC never replies.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fs-hostnet.yml up -d
+#
+# Web STAYS on the skykin bridge (needs DNS name `db`). Host-net FS is
+# not on that network, so pin hostname `freeswitch` to the Docker
+# host-gateway (not 10.0.0.93 — rp_filter drops container → interconnect
+# IP:7443). Live nginx uses https://freeswitch:7443 (SIP.js transport=WSS).
+# Open INPUT tcp/7443 from 172.16.0.0/12 or /wss/ times out.
+
+services:
+  freeswitch:
+    network_mode: host
+    ports: !reset []
+    environment:
+      EXT_RTP_IP: ${EXT_RTP_IP:-10.0.0.93}
+      EXT_SIP_IP: ${EXT_SIP_IP:-10.0.0.93}
+      TRUNK_PROXY: ${TRUNK_PROXY:-10.208.233.134:5080}
+      TRUNK_REGISTER: ${TRUNK_REGISTER:-false}
+      # Host-net FS has no Docker DNS name `web`. HTTP there 301s to HTTPS.
+      CDR_URL: ${CDR_URL:-https://127.0.0.1:8088/app/xml_cdr/xml_cdr_import.php}
+
+  web:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "freeswitch:host-gateway"
+    environment:
+      ESL_HOST: ${ESL_HOST:-freeswitch}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:7443}
+      FREESWITCH_WS_SCHEME: ${FREESWITCH_WS_SCHEME:-https}

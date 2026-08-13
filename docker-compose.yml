@@ -37,25 +37,55 @@ services:
       ESL_LISTEN_IP: "0.0.0.0"
       RTP_START_PORT: ${RTP_START_PORT:-16384}
       RTP_END_PORT: ${RTP_END_PORT:-16584}
+      SIP_EXTERNAL_PORT: ${SIP_EXTERNAL_PORT:-5080}
+      RTCP_AUDIO_INTERVAL_MSEC: ${RTCP_AUDIO_INTERVAL_MSEC:-5000}
+      # Interconnect IP advertised in SDP (Ethio). Leave empty for stun/auto.
+      EXT_RTP_IP: ${EXT_RTP_IP:-}
+      EXT_SIP_IP: ${EXT_SIP_IP:-}
+      TRUNK_GATEWAY_NAME: ${TRUNK_GATEWAY_NAME:-SIP}
+      TRUNK_PROXY: ${TRUNK_PROXY:-}
+      TRUNK_REALM: ${TRUNK_REALM:-}
+      TRUNK_USERNAME: ${TRUNK_USERNAME:-}
+      TRUNK_FROM_USER: ${TRUNK_FROM_USER:-}
+      TRUNK_FROM_DOMAIN: ${TRUNK_FROM_DOMAIN:-}
+      TRUNK_PASSWORD: ${TRUNK_PASSWORD:-}
+      TRUNK_REGISTER: ${TRUNK_REGISTER:-false}
+      TRUNK_TRANSPORT: ${TRUNK_TRANSPORT:-udp}
+      TRUNK_CODEC_PREFS: ${TRUNK_CODEC_PREFS:-PCMA,PCMU}
+      TRUNK2_GATEWAY_NAME: ${TRUNK2_GATEWAY_NAME:-SIP759}
+      TRUNK2_USERNAME: ${TRUNK2_USERNAME:-}
+      TRUNK2_PASSWORD: ${TRUNK2_PASSWORD:-}
+      TRUNK2_FROM_USER: ${TRUNK2_FROM_USER:-}
+      TRUNK2_FROM_DOMAIN: ${TRUNK2_FROM_DOMAIN:-}
+      TRUNK2_REALM: ${TRUNK2_REALM:-}
+      TRUNK2_PROXY: ${TRUNK2_PROXY:-}
+      TRUNK2_REGISTER: ${TRUNK2_REGISTER:-true}
     volumes:
       # Recordings shared with the web container for playback uploads.
       # Do not mount an empty volume over /etc/freeswitch — that wipes image config.
       - skykin_recordings:/var/lib/freeswitch/recordings
     ports:
-      # SIP
+      # SIP internal (extensions / sofia internal)
       - "${SIP_PORT:-5060}:5060/tcp"
       - "${SIP_PORT:-5060}:5060/udp"
+      # SIP external (carrier trunk). Live Ethio interconnect uses 5080/udp.
+      - "${SIP_EXTERNAL_PORT:-5080}:5080/tcp"
+      - "${SIP_EXTERNAL_PORT:-5080}:5080/udp"
       # Softphone WebSocket (proxied via web /wss/ — also published for debug)
       - "${FS_WS_PORT:-5066}:5066/tcp"
       # ESL — keep bound to localhost on the host for safety
       - "127.0.0.1:${ESL_PUBLISH_PORT:-8021}:8021"
-      # Lab RTP window (widen + prefer host network for real trunks)
+      # RTP + RTCP. RTCP is RTP+1 (odd ports). Do not publish even ports only —
+      # a missing odd port is ICMP "port unreachable" and some IMS cores then
+      # never open media toward the subscriber.
       - "${RTP_START_PORT:-16384}-${RTP_END_PORT:-16584}:${RTP_START_PORT:-16384}-${RTP_END_PORT:-16584}/udp"
     networks:
       - skykin
     restart: unless-stopped
-    # Linux production tip: uncomment the next line and remove the ports: block
-    # so FreeSWITCH owns the host network stack (best for SIP/RTP).
+    # Linux production: use docker-compose.fs-hostnet.yml (network_mode: host
+    # on FreeSWITCH only). Do not put web on host network — it must keep
+    # Docker DNS for `db`. Host-net FS has no hostname `freeswitch`; the
+    # overlay adds extra_hosts + WSS :7443.
     # network_mode: host
 
   web:
@@ -75,9 +105,17 @@ services:
       ESL_HOST: ${ESL_HOST:-freeswitch}
       ESL_PORT: ${ESL_PORT:-8021}
       ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
-      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}
+      SKYKIN_DOMAIN: ${SKYKIN_DOMAIN:-${FS_DOMAIN:-}}
+      CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
+      # Live call-center-web: SIP.js WSS transport needs https://…:7443, not :5066.
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:7443}
+      FREESWITCH_WS_SCHEME: ${FREESWITCH_WS_SCHEME:-https}
+      SERVER_NAME: ${TLS_CN:-skykin.local}
+      TLS_CN: ${TLS_CN:-skykin.local}
+      TLS_SAN_IP: ${TLS_SAN_IP:-}
     ports:
       - "${WEB_PORT:-8080}:80"
+      - "${WEB_HTTPS_PORT:-8088}:443"
     volumes:
       - ./app/agent_dashboard:/var/www/fusionpbx/app/agent_dashboard
       - skykin_recordings:/var/lib/freeswitch/recordings

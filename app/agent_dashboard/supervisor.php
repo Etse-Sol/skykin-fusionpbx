@@ -2287,10 +2287,17 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
         transportOptions: { server: wsUri, traceSip: false },
         authorizationUsername: ext,
         authorizationPassword: pass,
+        hackIpInContact: false,
+        viaHost: Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + '.invalid',
+        contactParams: { transport: 'ws' },
         logLevel: 'error',
         logConfiguration: false
     });
-    reg = new Registerer(ua, { logConfiguration: false });
+    reg = new Registerer(ua, {
+        logConfiguration: false,
+        extraContactHeaderParams: ['ob'],
+        regId: 1
+    });
     reg.stateChange.addListener(state => {
         if (state === 'Registered') {
             window.setSipStatus('registered', 'Registered (' + ext + ')');
@@ -2329,8 +2336,16 @@ window.ensureMic = function() {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = String(number || '').trim().replace(/[^\d+]/g, '');
+    if (number.charAt(0) === '+') number = number.slice(1);
+    if (number.indexOf('00') === 0) number = number.slice(2);
+    if (number.charAt(0) === '0' && number.length === 10) number = '251' + number.slice(1);
+    else if (/^[79]\d{8}$/.test(number) && number.length === 9) number = '251' + number;
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
-    if (!uri) return;
+    if (!uri) {
+        window.showToast && window.showToast('Invalid number: ' + number);
+        return;
+    }
     if (session) { try { session.dispose && session.dispose(); } catch(e) {} session = null; }
     window.ensureMic().then(function() {
         const inv = new Inviter(ua, uri, {

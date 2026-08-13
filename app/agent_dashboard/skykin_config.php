@@ -419,4 +419,152 @@ h2{color:#c62828;margin:0 0 10px}p{color:#666;font-size:14px}a{color:#0047AB}</s
 
 date_default_timezone_set(skykin_timezone());
 
+/**
+ * Strip spaces so login "Agent3" matches FusionPBX "Agent 3".
+ */
+function skykin_agent_key_norm(string $agent): string {
+	return strtolower(preg_replace('/\s+/', '', trim($agent)));
+}
+
+/**
+ * SkyKin numbering: supervisor 100, Agent 1 → 101, Agent 3 → 103.
+ * Also accepts a bare extension in the login/URL.
+ */
+function skykin_guess_agent_extension(string $agent): string {
+	$raw = trim($agent);
+	if (preg_match('/^\d{2,6}$/', $raw)) {
+		return $raw;
+	}
+	$norm = skykin_agent_key_norm($raw);
+	if (preg_match('/^agent(\d+)$/', $norm, $m)) {
+		$n = (int)$m[1];
+		if ($n >= 1 && $n <= 89) {
+			return (string)(100 + $n);
+		}
+	}
+	return '';
+}
+
+function skykin_fetch_extension_password(PDO $db, string $ext, string $domain): string {
+	if ($ext === '' || $domain === '') {
+		return '';
+	}
+	$s = $db->prepare(
+		"SELECT e.password FROM v_extensions e
+		 JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+		 WHERE e.extension = :e AND d.domain_name = :d
+		 LIMIT 1"
+	);
+	$s->execute([':e' => $ext, ':d' => $domain]);
+	$row = $s->fetch(PDO::FETCH_ASSOC);
+	return $row ? (string)($row['password'] ?? '') : '';
+}
+
+/**
+ * Resolve dashboard login / ?agent= to a SIP extension + password.
+ *
+ * Agent 3 used to stay Unregistered because:
+ *   - login sends ?agent=Agent3 (no space)
+ *   - v_extensions.effective_caller_id_name is "Agent 3" (space)
+ *   - LIKE '%agent3%' does not match "agent 3"
+ *   - missing v_extension_users row skipped lookup 1
+ *   - leftover localStorage from Agent 2 then registered the wrong phone
+ *
+ * @return array{extension:string,password:string}
+ */
+function skykin_resolve_agent_sip(PDO $db, string $agent_key, string $domain): array {
+	$raw = trim($agent_key);
+	$norm = skykin_agent_key_norm($raw);
+	$out = ['extension' => '', 'password' => ''];
+	if ($raw === '' || $domain === '') {
+		return $out;
+	}
+
+	try {
+		$s = $db->prepare(
+			"SELECT e.extension, e.password FROM v_extensions e
+			 JOIN v_extension_users eu ON eu.extension_uuid = e.extension_uuid
+			 JOIN v_users u ON u.user_uuid = eu.user_uuid
+			 JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+			 WHERE d.domain_name = :d
+			   AND (LOWER(u.username) = LOWER(:a)
+			        OR LOWER(REPLACE(COALESCE(u.username,''), ' ', '')) = :n)
+			 LIMIT 1"
+		);
+		$s->execute([':d' => $domain, ':a' => $raw, ':n' => $norm]);
+		$row = $s->fetch(PDO::FETCH_ASSOC);
+		if ($row) {
+			$out['extension'] = (string)$row['extension'];
+			$out['password'] = (string)($row['password'] ?? '');
+		}
+	} catch (Exception $e) { /* schema may differ on older FusionPBX */ }
+
+	if ($out['extension'] === '') {
+		try {
+			$s = $db->prepare(
+				"SELECT e.extension, e.password FROM v_extensions e
+				 JOIN v_domains d ON d.domain_uuid = e.domain_uuid
+				 WHERE d.domain_name = :d
+				   AND (
+				     LOWER(REPLACE(COALESCE(e.effective_caller_id_name,''), ' ', '')) = :n
+				     OR LOWER(REPLACE(COALESCE(e.outbound_caller_id_name,''), ' ', '')) = :n
+				     OR LOWER(REPLACE(COALESCE(e.description,''), ' ', '')) LIKE :p
+				     OR e.extension = :guess
+				   )
+				 LIMIT 1"
+			);
+			$guess = skykin_guess_agent_extension($raw);
+			$s->execute([
+				':d' => $domain,
+				':n' => $norm,
+				':p' => '%' . $norm . '%',
+				':guess' => $guess !== '' ? $guess : $raw,
+			]);
+			$row = $s->fetch(PDO::FETCH_ASSOC);
+			if ($row) {
+				$out['extension'] = (string)$row['extension'];
+				$out['password'] = (string)($row['password'] ?? '');
+			}
+		} catch (Exception $e) { /* ignore */ }
+	}
+
+	if ($out['extension'] === '') {
+		try {
+			$s = $db->prepare(
+				"SELECT a.agent_id, a.agent_contact FROM v_call_center_agents a
+				 JOIN v_domains d ON d.domain_uuid = a.domain_uuid
+				 WHERE d.domain_name = :d
+				   AND (
+				     LOWER(REPLACE(COALESCE(a.agent_name,''), ' ', '')) = :n
+				     OR LOWER(REPLACE(COALESCE(a.agent_id,''), ' ', '')) = :n
+				     OR LOWER(a.agent_id) = LOWER(:a)
+				   )
+				 LIMIT 1"
+			);
+			$s->execute([':d' => $domain, ':n' => $norm, ':a' => $raw]);
+			$row = $s->fetch(PDO::FETCH_ASSOC);
+			if ($row) {
+				$contact = (string)($row['agent_contact'] ?? '');
+				if (preg_match('#/(\d{2,6})@#', $contact, $m)) {
+					$out['extension'] = $m[1];
+				} elseif (preg_match('/^\d{2,6}$/', (string)$row['agent_id'])) {
+					$out['extension'] = (string)$row['agent_id'];
+				}
+			}
+		} catch (Exception $e) { /* ignore */ }
+	}
+
+	if ($out['extension'] === '') {
+		$out['extension'] = skykin_guess_agent_extension($raw);
+	}
+
+	if ($out['extension'] !== '' && $out['password'] === '') {
+		try {
+			$out['password'] = skykin_fetch_extension_password($db, $out['extension'], $domain);
+		} catch (Exception $e) { /* ignore */ }
+	}
+
+	return $out;
+}
+
 } // function_exists guard
