@@ -2293,7 +2293,11 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
         logLevel: 'error',
         logConfiguration: false
     });
-    reg = new Registerer(ua, { logConfiguration: false });
+    reg = new Registerer(ua, {
+        logConfiguration: false,
+        extraContactHeaderParams: ['ob'],
+        regId: 1
+    });
     reg.stateChange.addListener(state => {
         if (state === 'Registered') {
             window.setSipStatus('registered', 'Registered (' + ext + ')');
