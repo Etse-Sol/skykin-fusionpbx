@@ -37,14 +37,55 @@ services:
       ESL_LISTEN_IP: "0.0.0.0"
       RTP_START_PORT: ${RTP_START_PORT:-16384}
       RTP_END_PORT: ${RTP_END_PORT:-16584}
+      # Must match FusionPBX / agent SIP Domain (not the container IP).
+      FS_DOMAIN: ${FS_DOMAIN:-client1.skykin.local}
+      EXTERNAL_SIP_IP: ${EXTERNAL_SIP_IP:-}
+      EXTERNAL_RTP_IP: ${EXTERNAL_RTP_IP:-}
+      # FusionPBX database, read by the Lua XML handler so that extensions created in
+      # the web UI can register immediately. Without it FreeSWITCH only knows the
+      # fixed FS_DIRECTORY_USERS list captured when the container started.
+      FUSIONPBX_DB_HOST: db
+      FUSIONPBX_DB_PORT: 5432
+      FUSIONPBX_DB_NAME: ${DB_NAME:-fusionpbx}
+      FUSIONPBX_DB_USER: ${DB_USER:-fusionpbx}
+      FUSIONPBX_DB_PASSWORD: ${DB_PASSWORD:-fusionpbx}
+      # Fallback directory users (ext:password,...) for a database-less lab. The
+      # FusionPBX database above is authoritative whenever it is reachable.
+      FS_DIRECTORY_USERS: ${FS_DIRECTORY_USERS:-}
+      # mod_callcenter queue used by the agent/supervisor dashboards.
+      FS_QUEUE_EXT: ${FS_QUEUE_EXT:-8000}
+      FS_QUEUE_STRATEGY: ${FS_QUEUE_STRATEGY:-longest-idle-agent}
+      FS_QUEUE_AGENTS: ${FS_QUEUE_AGENTS:-}
+      # Ethio Telecom IP trunk (register=false). Source IP for whitelist: host LAN IP.
+      FS_OUTBOUND_GATEWAY: ${FS_OUTBOUND_GATEWAY:-SIP}
+      FS_OUTBOUND_PROXY: ${FS_OUTBOUND_PROXY:-}
+      FS_OUTBOUND_USERNAME: ${FS_OUTBOUND_USERNAME:-}
+      FS_OUTBOUND_PASSWORD: ${FS_OUTBOUND_PASSWORD:-}
+      FS_OUTBOUND_CID: ${FS_OUTBOUND_CID:-}
+      FS_OUTBOUND_REGISTER: ${FS_OUTBOUND_REGISTER:-false}
+      FS_OUTBOUND_REALM: ${FS_OUTBOUND_REALM:-}
+      FS_OUTBOUND_AUTH_USERNAME: ${FS_OUTBOUND_AUTH_USERNAME:-}
+      FS_OUTBOUND_FROM_DOMAIN: ${FS_OUTBOUND_FROM_DOMAIN:-}
+      FS_OUTBOUND_REGISTER_PROXY: ${FS_OUTBOUND_REGISTER_PROXY:-}
+      FS_LAN_RTP_IP: ${FS_LAN_RTP_IP:-}
+      FS_INBOUND_DID_REGEX: ${FS_INBOUND_DID_REGEX:-}
+      # CDR posting to FusionPBX. Without this the dashboards show 0 calls and no
+      # recordings, because they read call history from the FusionPBX database.
+      CDR_URL: ${CDR_URL:-http://web/app/xml_cdr/xml_cdr_import.php}
+      CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
     volumes:
       # Recordings shared with the web container for playback uploads.
       # Do not mount an empty volume over /etc/freeswitch — that wipes image config.
       - skykin_recordings:/var/lib/freeswitch/recordings
+      # FusionPBX Lua XML handler. FreeSWITCH calls into this tree on every
+      # directory lookup to authenticate registrations against the database.
+      - ./app/switch/resources/scripts:/usr/share/freeswitch/scripts:ro
     ports:
-      # SIP
+      # SIP (internal 5060, trunk/external 5080)
       - "${SIP_PORT:-5060}:5060/tcp"
       - "${SIP_PORT:-5060}:5060/udp"
+      - "${SIP_EXTERNAL_PORT:-5080}:5080/tcp"
+      - "${SIP_EXTERNAL_PORT:-5080}:5080/udp"
       # Softphone WebSocket (proxied via web /wss/ — also published for debug)
       - "${FS_WS_PORT:-5066}:5066/tcp"
       # ESL — keep bound to localhost on the host for safety
@@ -75,9 +116,22 @@ services:
       ESL_HOST: ${ESL_HOST:-freeswitch}
       ESL_PORT: ${ESL_PORT:-8021}
       ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
-      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:5066}
+      # SIP/telephony domain the extensions live in. Set this when the web host
+      # is a bare IP but agents register into a named domain (e.g. FS_DOMAIN).
+      SKYKIN_DOMAIN: ${SKYKIN_DOMAIN:-${FS_DOMAIN:-}}
+      # Must match the freeswitch service's CDR_CRED: FusionPBX validates incoming
+      # CDR posts against this value.
+      CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-freeswitch:7443}
+      # WSS listener requires an https upstream so SIP.js's WSS transport works.
+      FREESWITCH_WS_SCHEME: ${FREESWITCH_WS_SCHEME:-https}
+      # Self-signed TLS SANs so the browser cert matches the URL agents use.
+      SERVER_NAME: ${TLS_CN:-skykin.local}
+      TLS_CN: ${TLS_CN:-skykin.local}
+      TLS_SAN_IP: ${TLS_SAN_IP:-}
     ports:
       - "${WEB_PORT:-8080}:80"
+      - "${WEB_HTTPS_PORT:-8443}:443"
     volumes:
       - ./app/agent_dashboard:/var/www/fusionpbx/app/agent_dashboard
       - skykin_recordings:/var/lib/freeswitch/recordings

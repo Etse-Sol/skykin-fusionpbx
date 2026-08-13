@@ -183,7 +183,13 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
 
         // Today's CDR stats per extension — resolve SIP usernames to extension numbers
         $s2 = $db->prepare("SELECT
-            CASE WHEN direction='outbound' OR direction='local' THEN caller_id_number ELSE destination_number END as ext,
+            COALESCE(
+                NULLIF(CASE WHEN direction IN ('outbound','local') THEN caller_id_number END, ''),
+                (SELECT a.agent_id FROM v_call_center_agents a
+                  WHERE a.call_center_agent_uuid::text = v_xml_cdr.cc_agent LIMIT 1),
+                CASE WHEN destination_number ~ '^[0-9]{2,6}$' THEN destination_number END,
+                caller_id_number
+            ) as ext,
             COUNT(*) as total,
             SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
             SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
@@ -218,7 +224,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
         // Live FreeSWITCH call-center status (authoritative for queue state)
         $fsCcStatus = [];
         try {
-            $fs_agents = shell_exec("fs_cli -x 'callcenter_config agent list' 2>/dev/null");
+            $fs_agents = skykin_fs_api('callcenter_config agent list');
             if ($fs_agents) {
                 foreach (explode("\n", $fs_agents) as $line) {
                     $line = trim($line);
@@ -235,62 +241,17 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             }
         } catch(Exception $ignored){}
 
-        // SIP registrations via FreeSWITCH CLI (not in PostgreSQL)
+        // SIP registrations come from FreeSWITCH, not PostgreSQL.
         $registered = [];
         try {
-            $fs_out = shell_exec("fs_cli -x 'show registrations as json' 2>/dev/null");
-            if ($fs_out) {
-                $reg_json = json_decode($fs_out, true);
-                $reg_rows = $reg_json['rows'] ?? null;
-                if (is_array($reg_rows)) {
-                    foreach ($reg_rows as $rr) {
-                        $reg_user = (string)($rr['reg_user'] ?? $rr['user'] ?? '');
-                        $realm    = (string)($rr['realm'] ?? '');
-                        if ($reg_user !== '' && ($realm === '' || stripos($realm, $domain) !== false || $domain === $realm)) {
-                            $registered[$reg_user] = true;
-                        }
-                    }
-                } else {
-                    // Fallback plain-text table
-                    foreach (explode("\n", $fs_out) as $line) {
-                        $line = trim($line);
-                        if (!$line || strpos($line,'reg_user')!==false || strpos($line,'row')!==false) continue;
-                        $parts = explode('|', $line);
-                        if (count($parts) >= 2) {
-                            $reg_user = trim($parts[0]);
-                            $realm    = trim($parts[1]);
-                            if (stripos($realm, $domain) !== false || $domain === $realm || $realm === '') {
-                                $registered[$reg_user] = true;
-                            }
-                        }
-                    }
-                }
-            }
-            // Plain command fallback if JSON unsupported
-            if (!$registered) {
-                $fs_out2 = shell_exec("fs_cli -x 'show registrations' 2>/dev/null");
-                if ($fs_out2) {
-                    foreach (explode("\n", $fs_out2) as $line) {
-                        $line = trim($line);
-                        if (!$line || strpos($line,'reg_user')!==false || strpos($line,'total')!==false) continue;
-                        $parts = explode('|', $line);
-                        if (count($parts) >= 2) {
-                            $reg_user = trim($parts[0]);
-                            $realm    = trim($parts[1]);
-                            if (stripos($realm, $domain) !== false || $domain === $realm) {
-                                $registered[$reg_user] = true;
-                            }
-                        }
-                    }
-                }
-            }
+            $registered = skykin_fs_registrations($domain);
         } catch(Exception $ignored){}
 
         // ── Active calls from FreeSWITCH live channels ───────────────────────
         // CDR only written after call ends, so use fs_cli show channels instead
         $activeCalls = [];
         try {
-            $ch_out = shell_exec("fs_cli -x 'show channels as json' 2>/dev/null");
+            $ch_out = skykin_fs_api('show channels as json');
             if ($ch_out) {
                 $ch_json = json_decode($ch_out, true);
                 $rows = $ch_json['rows'] ?? [];
@@ -423,22 +384,12 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             $s->execute([':d' => $domain]);
             $queue_rows = $s->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
-            $esl_err = '';
-            $esl = skykin_esl($esl_err);
             foreach ($queue_rows as $qr) {
                 $waiting = 0;
                 $qkey = trim((string)($qr['extension'] ?? ''));
                 if ($qkey !== '') {
                     $qkey .= '@' . $domain;
-                    $members = '';
-                    if ($esl) {
-                        $res = $esl->request('api callcenter_config queue list members ' . $qkey);
-                        $members = is_array($res) ? (string)($res['$'] ?? '') : (string)$res;
-                    } else {
-                        $members = (string)shell_exec(
-                            "fs_cli -x " . escapeshellarg('callcenter_config queue list members ' . $qkey) . " 2>/dev/null"
-                        );
-                    }
+                    $members = skykin_fs_api('callcenter_config queue list members ' . $qkey);
                     foreach (preg_split("/\r\n|\n|\r/", $members) as $line) {
                         $line = trim($line);
                         if ($line === '' || stripos($line, '+OK') === 0) {
@@ -474,20 +425,10 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $answered = (int)($totals['answered']??0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
-        // Agents online — count SIP registrations via FreeSWITCH CLI
+        // Agents online — SIP registrations, which only FreeSWITCH knows about.
         $online_count = 0;
         try {
-            $fs_out = shell_exec("fs_cli -x 'show registrations' 2>/dev/null");
-            if ($fs_out) {
-                foreach (explode("\n", $fs_out) as $line) {
-                    $line = trim($line);
-                    if (!$line || strpos($line,'reg_user')!==false) continue;
-                    $parts = explode('|', $line);
-                    if (count($parts) >= 2 && stripos(trim($parts[1]), $domain) !== false) {
-                        $online_count++;
-                    }
-                }
-            }
+            $online_count = count(skykin_fs_registrations($domain));
         } catch(Exception $ignored){}
         $online = ['cnt' => $online_count];
 
@@ -572,7 +513,7 @@ if (isset($_GET['action']) && $_GET['action']==='acw_all') {
     exit;
 }
 
-// ── API: monitor (eavesdrop via fs_cli) ──────────────────────────────────────
+// ── API: monitor (eavesdrop) ─────────────────────────────────────────────────
 if (isset($_GET['action']) && $_GET['action']==='monitor') {
     error_reporting(0); header('Content-Type: application/json');
     $mode      = $_GET['mode']      ?? 'listen';
@@ -582,19 +523,56 @@ if (isset($_GET['action']) && $_GET['action']==='monitor') {
 
     if (!$agent_ext || !$sup_ext_) { echo json_encode(['ok'=>false,'error'=>'Missing extension']); exit; }
 
-    // Map mode to eavesdrop flag: m=mute(listen), w=whisper to agent, t=three-way(barge)
-    $flag_map = ['listen'=>'m','whisper'=>'w','barge'=>'t'];
-    $flag = $flag_map[$mode] ?? 'm';
+    // eavesdrop() spies on one specific channel, so it needs that channel's uuid;
+    // handing it an extension number just fails. Find the agent's live channel.
+    $target_uuid = '';
+    $chans = json_decode(skykin_fs_api('show channels as json'), true);
+    foreach (($chans['rows'] ?? []) as $ch) {
+        $name = (string)($ch['name'] ?? '');
+        $pres = (string)($ch['presence_id'] ?? '');
+        $cid  = (string)($ch['cid_num'] ?? '');
+        $hit  = preg_match('#/(?:sip:)?' . preg_quote($agent_ext, '#') . '@#i', $name)
+             || strpos($pres, $agent_ext . '@') === 0
+             || $cid === $agent_ext;
+        if ($hit && !empty($ch['uuid'])) {
+            $target_uuid = (string)$ch['uuid'];
+            break;
+        }
+    }
+    if ($target_uuid === '') {
+        echo json_encode(['ok'=>false,'error'=>'Agent ' . $agent_ext . ' is not on a call right now']);
+        exit;
+    }
 
-    // Use fs_cli to originate eavesdrop — supervisor's phone will ring
-    $originate = "{eavesdrop_enable_dtmf=true,eavesdrop_audio={$flag}}sofia/internal/{$sup_ext_}@{$domain_}";
-    $cmd = "fs_cli -x " . escapeshellarg("originate {$originate} &eavesdrop({$agent_ext}@{$domain_})") . " 2>&1";
-    $res = shell_exec($cmd);
+    // listen  = hear both legs, stay muted (the eavesdrop default)
+    // whisper = supervisor is audible to the agent only  (ED_MUX_READ)
+    // barge   = supervisor is audible to both parties    (three-way)
+    $vars = ['eavesdrop_enable_dtmf=true'];
+    if ($mode === 'whisper') {
+        $vars[] = 'eavesdrop_whisper_aleg=true';
+    } elseif ($mode === 'barge') {
+        $vars[] = 'eavesdrop_whisper_aleg=true';
+        $vars[] = 'eavesdrop_whisper_bleg=true';
+    }
+    $vars[] = 'origination_caller_id_name=Monitor ' . $agent_ext;
 
-    if (strpos($res, '+OK') !== false || strpos($res, 'uuid') !== false) {
-        echo json_encode(['ok'=>true,'result'=>trim($res)]);
+    // Dial the supervisor through user/ so FreeSWITCH resolves the registered
+    // contact from the directory. sofia/internal/<ext>@<domain> instead treats the
+    // SIP domain as a hostname to route to, which never reaches a WebRTC client.
+    $cmd = 'originate {' . implode(',', $vars) . '}user/' . $sup_ext_ . '@' . $domain_
+         . ' &eavesdrop(' . $target_uuid . ')';
+    $res = trim(skykin_fs_api($cmd));
+
+    if (stripos($res, '+OK') !== false) {
+        echo json_encode(['ok'=>true,'result'=>$res]);
     } else {
-        echo json_encode(['ok'=>false,'error'=>trim($res) ?: 'Agent may not be on a call']);
+        // USER_NOT_REGISTERED is the common case: the supervisor softphone must be
+        // connected, because the monitored audio is delivered to it as a call.
+        $err = $res !== '' ? $res : 'Could not reach FreeSWITCH';
+        if (stripos($err, 'USER_NOT_REGISTERED') !== false) {
+            $err = 'Your softphone (ext ' . $sup_ext_ . ') is not registered — connect the phone first';
+        }
+        echo json_encode(['ok'=>false,'error'=>$err]);
     }
     exit;
 }
@@ -764,6 +742,7 @@ if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
     $te = strtotime($to.' 23:59:59');
     try {
         $db = getDB();
+        skykin_link_archive_recordings($db, $domain_, $ts, $te);
         $where  = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND (record_path IS NOT NULL OR record_name IS NOT NULL)";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
@@ -2045,25 +2024,42 @@ function showToast(msg, color){ toast(msg, color || '#333'); }
 
 function buildSipWsUrl(host, port) {
     const cleanHost = String(host || location.hostname).replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
-    if (location.protocol === 'https:') {
-        return 'wss://' + cleanHost + (location.port ? ':' + location.port : '') + '/wss/';
+    const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const pagePort = location.port ? (':' + location.port) : '';
+    if (!host || cleanHost === location.hostname) {
+        return scheme + location.hostname + pagePort + '/wss/';
     }
-    return 'ws://' + cleanHost + ':' + (port || '5066');
+    if (port && port !== location.port && port !== '80' && port !== '443' && port !== '8088') {
+        return scheme + cleanHost + ':' + port;
+    }
+    return scheme + cleanHost + pagePort + '/wss/';
+}
+
+function resolveSipDomain() {
+    const serverDom = (domain || '').trim();
+    const saved     = (localStorage.getItem('sup_sip_domain') || '').trim();
+    const isIp = s => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+    let dom = serverDom;
+    if (isIp(serverDom) || serverDom === '') {
+        dom = (saved && !isIp(saved) && saved !== location.hostname) ? saved : (serverDom || saved || location.hostname);
+    }
+    if (dom && dom !== saved) localStorage.setItem('sup_sip_domain', dom);
+    return dom;
 }
 
 function loadSipSettings() {
     const ext  = localStorage.getItem('sup_sip_ext')  || serverExt  || '';
     const pass = localStorage.getItem('sup_sip_pass') || serverPass || '';
-    const dom  = localStorage.getItem('sup_sip_domain') || domain;
+    const dom  = resolveSipDomain();
     const rawServer = localStorage.getItem('sup_sip_server') || location.hostname;
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
-    const port = localStorage.getItem('sup_sip_port') || '5066';
+    const port = location.port || (location.protocol === 'https:' ? '443' : '80');
     const wsUrl = buildSipWsUrl(cleanHost, port);
     const el = (id) => document.getElementById(id);
     if (el('sipExt')) el('sipExt').value = ext;
     if (el('sipPass')) el('sipPass').value = pass;
     if (el('sipServer')) el('sipServer').value = cleanHost;
-    if (el('sipPort')) el('sipPort').value = location.protocol === 'https:' ? (location.port || '443') : port;
+    if (el('sipPort')) el('sipPort').value = port;
     if (el('sipDomain')) el('sipDomain').value = dom;
     if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
     else setSipStatus('failed', 'Open phone settings to connect');
@@ -2083,15 +2079,14 @@ function saveSipSettings() {
     if (!ext || !pass) { alert('Enter extension and password'); return; }
     const rawServer = document.getElementById('sipServer').value.trim() || location.hostname;
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/:\d+$/,'');
-    const isHttps = location.protocol === 'https:';
-    const port = isHttps ? '' : (document.getElementById('sipPort').value.trim() || '5066');
+    const port = document.getElementById('sipPort').value.trim() || location.port || '';
     const wsUrl = buildSipWsUrl(cleanHost, port);
     localStorage.setItem('sup_sip_ext', ext);
     localStorage.setItem('sup_sip_pass', pass);
     localStorage.setItem('sup_sip_server', cleanHost);
     localStorage.setItem('sup_sip_domain', dom);
     localStorage.setItem('sup_ext', ext);
-    if (port) localStorage.setItem('sup_sip_port', port); else localStorage.removeItem('sup_sip_port');
+    localStorage.setItem('sup_sip_port', port || location.port || '');
     document.getElementById('settingsModal').classList.remove('show');
     waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
 }
@@ -2343,7 +2338,11 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
     }
     const hostPart = wsUri.replace(/^wss?:\/\//i, '');
     if (!hostPart.includes('/') && !hostPart.includes(':')) {
-        wsUri = location.protocol === 'https:' ? wsUri + '/wss/' : wsUri + ':' + (port || '5066');
+        const pagePort = location.port ? (':' + location.port) : '';
+        wsUri = wsUri.replace(/^(wss?:\/\/)([^/:]+)$/i, '$1$2' + pagePort) + '/wss/';
+    } else if (!hostPart.includes('/') && hostPart.endsWith(':' + (port || '5066'))) {
+        wsUri = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+            + location.hostname + (location.port ? ':' + location.port : '') + '/wss/';
     }
     ua = new UserAgent({
         uri: UserAgent.makeURI('sip:' + ext + '@' + dom),

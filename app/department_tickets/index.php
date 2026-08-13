@@ -167,7 +167,10 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <script>const SELF_URL = '<?php echo htmlspecialchars($self_url, ENT_QUOTES); ?>';</script>
+    <!-- Use the live page location so fetch() keeps the exact scheme, host AND port
+         (e.g. :8088). Building this server-side from HTTP_HOST dropped the port and
+         sent requests to :443 with a mismatched TLS cert -> "Failed to fetch". -->
+    <script>const SELF_URL = window.location.pathname;</script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Department Tickets - SkyKin Technologies</title>
     <style>

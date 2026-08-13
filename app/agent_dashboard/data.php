@@ -117,7 +117,11 @@ try {
                 SUM(CASE WHEN xml_cdr.xml::text LIKE '%transferred%' THEN 1 ELSE 0 END) as transfers
             FROM v_xml_cdr xml_cdr
             WHERE domain_name = :domain
-            AND (caller_id_number = :ext OR destination_number = :ext)
+            AND (caller_id_number = :ext OR destination_number = :ext OR caller_destination = :ext
+                 OR (cc_agent IN (
+                    SELECT call_center_agent_uuid::text FROM v_call_center_agents
+                    WHERE agent_id = :ext OR agent_contact LIKE '%/' || :ext || '@%'
+                 ) AND destination_number ~ '^[+0-9]{3,}$'))
             AND start_epoch >= :today_start
             AND start_epoch <= :today_end
         ");
@@ -172,7 +176,11 @@ try {
                 hangup_cause
             FROM v_xml_cdr
             WHERE domain_name = :domain
-            AND (caller_id_number = :ext OR destination_number = :ext)
+            AND (caller_id_number = :ext OR destination_number = :ext OR caller_destination = :ext
+                 OR (cc_agent IN (
+                    SELECT call_center_agent_uuid::text FROM v_call_center_agents
+                    WHERE agent_id = :ext OR agent_contact LIKE '%/' || :ext || '@%'
+                 ) AND destination_number ~ '^[+0-9]{3,}$'))
             AND start_epoch >= :today_start
             AND start_epoch <= :today_end
             ORDER BY start_epoch DESC

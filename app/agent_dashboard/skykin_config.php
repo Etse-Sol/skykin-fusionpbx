@@ -28,6 +28,12 @@ function skykin_is_https(): bool {
 }
 
 function skykin_default_domain(): string {
+	// Explicit override for deployments where the web host (often a bare IP)
+	// differs from the telephony SIP domain the extensions live in.
+	$env = getenv('SKYKIN_DOMAIN');
+	if ($env !== false && trim($env) !== '') {
+		return trim($env);
+	}
 	if (!empty($_SESSION['domain_name'])) {
 		return (string)$_SESSION['domain_name'];
 	}
@@ -77,14 +83,21 @@ function skykin_timezone(): string {
 	$candidates[] = $cfg_file_tz;
 	$candidates[] = getenv('SKYKIN_TZ') ?: null;
 	if (is_file('/etc/timezone')) {
-		$candidates[] = trim((string)file_get_contents('/etc/timezone'));
+		$sys_tz = trim((string)file_get_contents('/etc/timezone'));
+		if ($sys_tz !== '' && strcasecmp($sys_tz, 'UTC') !== 0 && strcasecmp($sys_tz, 'Etc/UTC') !== 0) {
+			$candidates[] = $sys_tz;
+		}
 	}
 	if (is_link('/etc/localtime')) {
 		$link = (string)readlink('/etc/localtime');
-		if (preg_match('#zoneinfo/(.+)$#', $link, $m)) {
+		if (preg_match('#zoneinfo/(.+)$#', $link, $m)
+			&& strcasecmp($m[1], 'UTC') !== 0
+			&& strcasecmp($m[1], 'Etc/UTC') !== 0) {
 			$candidates[] = $m[1];
 		}
 	}
+
+	$candidates[] = 'Africa/Addis_Ababa';
 
 	foreach ($candidates as $candidate) {
 		if (!$candidate) {
@@ -101,6 +114,26 @@ function skykin_timezone(): string {
 
 	$tz = date_default_timezone_get() ?: 'UTC';
 	return $tz;
+}
+
+/**
+ * SQL fragment that matches CDRs belonging to an agent extension.
+ *
+ * Outbound legs store the extension as caller_id_number. Inbound queue legs
+ * store the DID or 8000 as destination and the answering agent in cc_agent,
+ * so a caller/destination-only filter silently drops every inbound.
+ */
+function skykin_cdr_agent_sql(string $ext_param = ':e'): string {
+	return '('
+		. 'caller_id_number = ' . $ext_param
+		. ' OR destination_number = ' . $ext_param
+		. ' OR caller_destination = ' . $ext_param
+		. ' OR (cc_agent IN ('
+		. 'SELECT call_center_agent_uuid::text FROM v_call_center_agents'
+		. ' WHERE agent_id = ' . $ext_param
+		. " OR agent_contact LIKE '%/' || " . $ext_param . " || '@%'"
+		. ") AND destination_number ~ '^[+0-9]{3,}$')"
+		. ')';
 }
 
 function skykin_config(): array {
@@ -314,6 +347,282 @@ function skykin_esl(?string &$error = null) {
 		}
 	}
 	return null;
+}
+
+/**
+ * Run a FreeSWITCH API command and return its raw output ('' on failure).
+ *
+ * Prefer ESL over shelling out to fs_cli: in the Docker deployment FreeSWITCH
+ * lives in its own container, so the binary simply does not exist next to PHP
+ * and every shell_exec("fs_cli ...") returns null. That turns silently into
+ * "no agents / no registrations / no active calls" on the supervisor board and
+ * makes call monitoring fail as if the agent were idle. ESL reaches FreeSWITCH
+ * over the network, so it works both containerised and on a single host, with
+ * fs_cli kept only as a fallback for installs where ESL is locked down.
+ *
+ * The connection is reused across calls: a dashboard refresh issues several
+ * commands and each connect/auth round trip costs a socket and ~ms of latency.
+ */
+function skykin_fs_api(string $command): string {
+	static $esl = null;
+	static $tried = false;
+
+	$command = trim($command);
+	if ($command === '') {
+		return '';
+	}
+
+	if (!$tried) {
+		$tried = true;
+		$esl = skykin_esl($ignored_error);
+	}
+
+	if ($esl) {
+		try {
+			$res = $esl->request('api ' . $command);
+			if (is_array($res)) {
+				// event_socket returns the body under '$' and headers alongside it.
+				return (string)($res['$'] ?? implode(' | ', array_filter($res, 'is_scalar')));
+			}
+			return (string)$res;
+		} catch (Throwable $ignored) {
+			// Fall through to fs_cli below; a dropped socket should not be fatal.
+			$esl = null;
+		}
+	}
+
+	static $fs_cli = null;
+	if ($fs_cli === null) {
+		$fs_cli = '';
+		if (function_exists('shell_exec')) {
+			foreach (['/usr/bin/fs_cli', '/usr/local/bin/fs_cli', '/usr/local/freeswitch/bin/fs_cli'] as $p) {
+				if (is_executable($p)) {
+					$fs_cli = $p;
+					break;
+				}
+			}
+		}
+	}
+	if ($fs_cli !== '') {
+		return (string)shell_exec($fs_cli . ' -x ' . escapeshellarg($command) . ' 2>/dev/null');
+	}
+
+	return '';
+}
+
+/**
+ * Make sure mod_callcenter knows an agent, creating it if necessary.
+ *
+ * mod_callcenter's agent list is built from callcenter.conf.xml when FreeSWITCH
+ * starts, so an agent added to FusionPBX afterwards does not exist as far as
+ * FreeSWITCH is concerned and "callcenter_config agent set status" answers
+ * "-ERR Agent not found!". mod_callcenter can be provisioned at runtime, so
+ * create the agent, its contact and its queue membership on demand instead of
+ * requiring a restart.
+ *
+ * Every command is idempotent: "already exists" replies are expected and ignored.
+ * $agent is the name mod_callcenter knows the agent by, which the dashboards set
+ * to the FusionPBX call_center_agent_uuid.
+ */
+function skykin_cc_ensure_agent(string $agent, string $extension, string $domain, array $queues = []): bool {
+	if ($agent === '' || $extension === '' || $domain === '') {
+		return false;
+	}
+
+	skykin_fs_api('callcenter_config agent add ' . $agent . ' callback');
+	// Matches the contact format written into callcenter.conf.xml at startup.
+	skykin_fs_api('callcenter_config agent set contact ' . $agent
+		. " '[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=196.189.236.140,include_external_ip=true]user/"
+		. $extension . '@' . $domain . "'");
+	skykin_fs_api('callcenter_config agent set max_no_answer ' . $agent . ' 999');
+
+	foreach ($queues as $queue) {
+		$queue = trim($queue);
+		if ($queue === '') {
+			continue;
+		}
+		if (strpos($queue, '@') === false) {
+			$queue .= '@' . $domain;
+		}
+		skykin_fs_api('callcenter_config tier add ' . $queue . ' ' . $agent . ' 1 1');
+	}
+
+	// Confirm rather than trusting the replies: "add" reports an error both when the
+	// agent already existed and when the name was rejected.
+	$list = skykin_fs_api('callcenter_config agent list');
+	return $list !== '' && strpos($list, $agent) !== false;
+}
+
+/**
+ * Extensions currently registered to FreeSWITCH, as [extension => true].
+ *
+ * "show registrations" reads the core database, which is unavailable whenever
+ * FreeSWITCH runs with -nosql and returns "-ERR SQL disabled". Sofia keeps its
+ * own registration state in memory, so fall back to the profile listing: that
+ * keeps the dashboards' online/offline column honest either way.
+ */
+function skykin_fs_registrations(string $domain = '', string $profile = 'internal'): array {
+	$registered = [];
+
+	$json = json_decode(skykin_fs_api('show registrations as json'), true);
+	foreach ((is_array($json) ? ($json['rows'] ?? []) : []) as $row) {
+		$user  = trim((string)($row['reg_user'] ?? $row['user'] ?? ''));
+		$realm = trim((string)($row['realm'] ?? ''));
+		if ($user !== '' && ($domain === '' || $realm === '' || strcasecmp($realm, $domain) === 0)) {
+			$registered[$user] = true;
+		}
+	}
+	if ($registered) {
+		return $registered;
+	}
+
+	// Profile listing prints stanzas of "User:\t<ext>@<realm>" then "Status:\t...".
+	$out = skykin_fs_api('sofia status profile ' . $profile . ' reg');
+	$pending = null;
+	foreach (preg_split("/\r\n|\n|\r/", $out) ?: [] as $line) {
+		$line = trim($line);
+		if (stripos($line, 'User:') === 0) {
+			$who = trim(substr($line, 5));
+			$pending = null;
+			if (strpos($who, '@') !== false) {
+				[$user, $realm] = explode('@', $who, 2);
+				$user  = trim($user);
+				$realm = trim($realm);
+				if ($user !== '' && ($domain === '' || strcasecmp($realm, $domain) === 0)) {
+					$pending = $user;
+				}
+			}
+		} elseif ($pending !== null && stripos($line, 'Status:') === 0) {
+			if (stripos($line, 'Registered') !== false) {
+				$registered[$pending] = true;
+			}
+			$pending = null;
+		}
+	}
+
+	return $registered;
+}
+
+/**
+ * Absolute path of a recording, or '' when it cannot be found.
+ *
+ * $dir is the CDR's record_path when known; the remaining candidates cover
+ * softphone uploads, the legacy flat root and the FusionPBX archive tree. Shared
+ * with play_recording.php so the Recordings tab never offers a file the streamer
+ * would answer 404 for. Nothing outside the recordings root is ever returned.
+ */
+function skykin_recording_path(string $file, string $domain, string $dir = ''): string {
+	$root = '/var/lib/freeswitch/recordings';
+	$file = basename($file);
+	if ($file === '' || !preg_match('/^[\w.\-]+$/', $file)) {
+		return '';
+	}
+
+	$candidates = [];
+	if ($dir !== '') {
+		$candidates[] = rtrim($dir, '/') . '/' . $file;
+	}
+	$candidates[] = $root . '/' . $domain . '/agent/' . $file;
+	$candidates[] = $root . '/' . $domain . '/' . $file;
+	$candidates[] = $root . '/' . $file;
+
+	foreach ($candidates as $candidate) {
+		$real = realpath($candidate);
+		if ($real !== false && is_file($real) && strpos($real, $root . '/') === 0) {
+			return $real;
+		}
+	}
+
+	// Archive recordings are nested by year/month/day, so search as a last resort.
+	$archive = $root . '/' . $domain . '/archive';
+	if (is_dir($archive)) {
+		try {
+			$it = new RecursiveIteratorIterator(
+				new RecursiveDirectoryIterator($archive, FilesystemIterator::SKIP_DOTS)
+			);
+			foreach ($it as $entry) {
+				if ($entry->isFile() && $entry->getFilename() === $file) {
+					return (string)$entry->getRealPath();
+				}
+			}
+		} catch (Throwable $ignored) {
+			// Unreadable subdirectory: treat as not found.
+		}
+	}
+
+	return '';
+}
+
+/**
+ * True when a recording actually contains audio a browser can play.
+ *
+ * FreeSWITCH opens the WAV as soon as record_session runs, so a call whose media
+ * never carried any frames leaves a bare 44-byte header behind. Those files load
+ * fine but stay silent with a zero duration, which reads as "the recording does
+ * not play", so the dashboards leave them out of the list.
+ */
+function skykin_recording_playable(string $path): bool {
+	if ($path === '' || !is_file($path) || !is_readable($path)) {
+		return false;
+	}
+	$size = (int)filesize($path);
+	if (strtolower((string)pathinfo($path, PATHINFO_EXTENSION)) !== 'wav') {
+		// Browser uploads are compressed; size is the only cheap signal.
+		return $size > 1024;
+	}
+
+	$fh = @fopen($path, 'rb');
+	if (!$fh) {
+		return false;
+	}
+	$head = (string)fread($fh, 4096);
+	fclose($fh);
+	if (substr($head, 0, 4) !== 'RIFF' || substr($head, 8, 4) !== 'WAVE') {
+		return false;
+	}
+	$pos = strpos($head, 'data');
+	if ($pos === false) {
+		return false;
+	}
+	$channels = (int)(@unpack('v', substr($head, 22, 2))[1] ?? 0);
+	$rate     = (int)(@unpack('V', substr($head, 24, 4))[1] ?? 0);
+	$declared = (int)(@unpack('V', substr($head, $pos + 4, 4))[1] ?? 0);
+	if ($channels < 1 || $rate < 1) {
+		return false;
+	}
+	// The data length is written when the file is closed, so a recording still in
+	// progress (or interrupted) reports 0 while samples are already on disk.
+	$bytes = max($declared, $size - ($pos + 8));
+
+	return ($bytes / ($rate * $channels * 2)) >= 0.5;
+}
+
+/**
+ * Stamp record_path/record_name on CDR rows from archive/${uuid}.wav files.
+ */
+function skykin_link_archive_recordings(PDO $db, string $domain, int $ts, int $te): void {
+	$root = '/var/lib/freeswitch/recordings/' . $domain . '/archive';
+	if (!is_dir($root)) {
+		return;
+	}
+	$stmt = null;
+	for ($day = strtotime('midnight', $ts); $day !== false && $day <= $te; $day = strtotime('+1 day', $day)) {
+		$dir = $root . '/' . date('Y/M/d', $day);
+		foreach (glob($dir . '/*.wav') ?: [] as $path) {
+			$uuid = pathinfo($path, PATHINFO_FILENAME);
+			if (!preg_match('/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i', $uuid)) {
+				continue;
+			}
+			if ($stmt === null) {
+				$stmt = $db->prepare(
+					"UPDATE v_xml_cdr SET record_path = :path, record_name = :name
+					 WHERE xml_cdr_uuid = :uuid
+					   AND (record_name IS NULL OR record_name = '')"
+				);
+			}
+			$stmt->execute([':path' => $dir, ':name' => basename($path), ':uuid' => $uuid]);
+		}
+	}
 }
 
 /**

@@ -23,16 +23,14 @@ if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
 // Release session lock so background polls / other tabs are not blocked
 session_write_close();
 
-// ── Shared Skykin DB: tries PostgreSQL, falls back to local SQLite ──────────
-function getSkykinDB() {
+// ── Shared Skykin DB: connects to PostgreSQL via skykin_pdo_fusionpbx() ─────
+// FIX (2026-08-07): Removed silent SQLite fallback. If PostgreSQL is
+// unreachable, skykin_pdo_fusionpbx() throws a RuntimeException so the
+// problem is immediately visible instead of tickets going to the wrong DB.
+function getSkykinDB(): PDO {
     static $db = null;
-    if ($db) return $db;
-    $db = skykin_pdo_fusionpbx();
-    if ($db) return $db;
-    // SQLite fallback for local development only
-    $sqliteFile = __DIR__ . '/skykin_local.db';
-    $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-    $db->exec('PRAGMA journal_mode=WAL');
+    if ($db !== null) return $db;
+    $db = skykin_pdo_fusionpbx(); // throws RuntimeException on failure
     return $db;
 }
 
@@ -86,6 +84,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
 
         if ($extension) {
             // Stats
+            $agent_sql = skykin_cdr_agent_sql(':e');
             $s = $db->prepare("SELECT COUNT(*) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
                 SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
@@ -95,7 +94,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                 SUM(CASE WHEN direction='outbound' THEN billsec ELSE 0 END) as outbound_time,
                 SUM(CASE WHEN direction='local' THEN billsec ELSE 0 END) as internal_time
                 FROM v_xml_cdr WHERE domain_name=:d
-                AND (caller_id_number=:e OR destination_number=:e)
+                AND {$agent_sql}
                 AND start_epoch>=:ts AND start_epoch<=:te");
             $s->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
             $row = $s->fetch(PDO::FETCH_ASSOC);
@@ -118,23 +117,25 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
 
             // Recent calls
             $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
-                direction,caller_id_number,destination_number,billsec,hangup_cause
+                direction,caller_id_number,destination_number,caller_destination,billsec,hangup_cause
                 FROM v_xml_cdr WHERE domain_name=:d
-                AND (caller_id_number=:e OR destination_number=:e)
-                AND caller_id_number ~ '^[0-9+][0-9\-\(\) ]*$'
-                AND destination_number ~ '^[0-9+][0-9\-\(\) ]*$'
+                AND {$agent_sql}
                 AND start_epoch>=:ts AND start_epoch<=:te
                 ORDER BY start_epoch DESC LIMIT 500");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
             foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                $in   = ($r['destination_number']==$extension);
+                $dest = (string)$r['destination_number'];
+                $in   = ($dest === $extension || $dest === '8000' || strpos($dest, '+') === 0);
                 $bill = (int)$r['billsec'];
-                // Clean up SIP addresses ? strip @domain suffix
-                $raw_num = $in ? $r['caller_id_number'] : $r['destination_number'];
-                $clean_num = preg_replace('/@.*$/', '', $raw_num);   // strip @host
-                // If it still looks like garbage (non-dialable), mark as Unknown
+                $raw_num = $in
+                    ? ($r['caller_id_number'] ?: $r['caller_destination'] ?: $dest)
+                    : $dest;
+                $clean_num = preg_replace('/@.*$/', '', (string)$raw_num);
                 if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean_num)) {
-                    $clean_num = 'Unknown';
+                    $clean_num = $clean_num !== '' ? $clean_num : 'Unknown';
+                    if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean_num)) {
+                        $clean_num = 'Unknown';
+                    }
                 }
                 $data['recent_calls'][] = [
                     'time'       => $r['call_time'],
@@ -384,6 +385,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'upload_recording' && $_SERVER
     exit;
 }
 
+
 // ── List recordings for the agent dashboard Recordings tab ───────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
     error_reporting(0);
@@ -400,11 +402,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
     try {
         $db = skykin_pdo_fusionpbx();
         if ($db) {
+            skykin_link_archive_recordings($db, $domain_, $ts, $te);
             $where = "domain_name = :d AND start_epoch >= :ts AND start_epoch <= :te
                       AND ((record_name IS NOT NULL AND record_name <> '') OR (record_path IS NOT NULL AND record_path <> ''))";
             $params = [':d' => $domain_, ':ts' => $ts, ':te' => $te];
             if ($ext !== '') {
-                $where .= " AND (caller_id_number = :ext OR destination_number = :ext)";
+                $where .= ' AND ' . skykin_cdr_agent_sql(':ext');
                 $params[':ext'] = $ext;
             }
             $s = $db->prepare(
@@ -419,6 +422,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
                 $file = trim((string)($r['record_name'] ?? ''));
                 $path = rtrim(trim((string)($r['record_path'] ?? '')), '/');
                 if ($file === '') continue;
+                // A CDR can name a recording that never captured audio, or one that
+                // has since been removed from disk. Listing those hands the agent a
+                // Play button that stays silent, so check the file first.
+                if (!skykin_recording_playable(skykin_recording_path($file, $domain_, $path))) {
+                    continue;
+                }
                 $remote = ($r['direction'] === 'inbound')
                     ? ($r['caller_id_number'] ?? '')
                     : ($r['destination_number'] ?? '');
@@ -474,6 +483,46 @@ if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
                     . '&d=' . rawurlencode($domain_),
             ];
         }
+    }
+
+    // Legacy flat recordings saved directly under the recordings root by the
+    // earlier dialplan (e.g. 2026-08-10-10-27-53_102_101_<uuid>.wav). These have
+    // no CDR row and are not nested under {domain}/, so the queries above miss
+    // them. Parse the timestamp and the dest/caller numbers from the filename.
+    foreach (glob('/var/lib/freeswitch/recordings/*.wav') ?: [] as $path) {
+        $file = basename($path);
+        if (isset($seen[$file])) {
+            continue;
+        }
+        if (!preg_match('/^(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})_(\d+)_(\d+)_/', $file, $m)) {
+            continue;
+        }
+        $when = mktime((int)$m[4], (int)$m[5], (int)$m[6], (int)$m[2], (int)$m[3], (int)$m[1]);
+        if ($when < $ts || $when > $te) {
+            continue;
+        }
+        $dest = $m[7];
+        $caller = $m[8];
+        if ($ext !== '' && $caller !== $ext && $dest !== $ext) {
+            continue;
+        }
+        if (!skykin_recording_playable($path)) {
+            continue;
+        }
+        $remote = ($caller === $ext) ? $dest : $caller;
+        $size = filesize($path) ?: 0;
+        // WAV PCM 16-bit stereo 8kHz ~= 32KB/s; good enough for a rough length.
+        $secs = max(1, (int)round($size / 32000));
+        $seen[$file] = true;
+        $out[] = [
+            'datetime' => date('Y-m-d H:i', $when),
+            'remote_number' => $remote,
+            'duration' => floor($secs / 60) . ':' . str_pad((string)($secs % 60), 2, '0', STR_PAD_LEFT),
+            'direction' => ($dest === $ext) ? 'inbound' : 'outbound',
+            'filename' => $file,
+            'filepath' => '/app/agent_dashboard/play_recording.php?f=' . rawurlencode($file)
+                . '&d=' . rawurlencode($domain_),
+        ];
     }
 
     usort($out, function ($a, $b) {
@@ -967,9 +1016,29 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
         $esl = skykin_esl($esl_error);
         if ($esl) {
             $esl_connected = true;
-            // Set agent status (exact FusionPBX pattern from call_center_agent_status.php)
+            $q = $db->prepare(
+                "SELECT queue_extension FROM v_call_center_queues WHERE domain_uuid = :domain_uuid"
+            );
+            $q->execute([':domain_uuid' => $domain_uuid]);
+            $queues = $q->fetchAll(PDO::FETCH_COLUMN) ?: [];
+            $d = $db->prepare("SELECT domain_name FROM v_domains WHERE domain_uuid = :u");
+            $d->execute([':u' => $domain_uuid]);
+            $cc_domain = (string)($d->fetchColumn() ?: $domain_);
+            // Logged-in dashboard agents must exist in the queue with a WebRTC
+            // contact before status is set, including 101 if they use the dashboard.
+            if ($new_status === 'Available') {
+                skykin_cc_ensure_agent($agent_uuid, $agent_ext, $cc_domain, $queues);
+            }
             $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
             $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
+
+            if (stripos($esl_response, 'Agent not found') !== false) {
+                if (skykin_cc_ensure_agent($agent_uuid, $agent_ext, $cc_domain, $queues)) {
+                    $res = $esl->request('api callcenter_config agent set status ' . $agent_uuid . " '" . $new_status . "'");
+                    $esl_response = is_array($res) ? ($res['$'] ?? implode(' | ', $res)) : (string)$res;
+                }
+            }
+
             // Set agent state to Waiting when becoming Available or Logged Out
             if ($new_status === 'Available' || $new_status === 'Logged Out') {
                 $res2 = $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
@@ -1400,9 +1469,9 @@ $today = date('Y-m-d');
 // ?? Resolve the agent's extension from FusionPBX DB ??????????????????????????
 $agent_ext      = '';
 $agent_password = '';
-// Reached through nginx on the page's own port so the socket reuses the
-// dashboard certificate; FreeSWITCH's own cert on 7443 is rejected by browsers.
-$agent_wss      = 'wss://' . preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST']) . '/wss/';
+// Same-origin /wss/ on :8088. Chrome blocks WSS to :5060 (ERR_UNSAFE_PORT)
+// and the cloud firewall blocks :7443.
+$agent_wss      = 'wss://' . preg_replace('/:\d+$/', '', $_SERVER['HTTP_HOST']) . ':8088/wss/';
 try {
     $conf = '/etc/fusionpbx/config.conf';
     $db_host = '127.0.0.1'; $db_port = '5432';
@@ -1480,10 +1549,13 @@ if (!empty($agent_ext) && isset($pdb)) {
         $agent_queues = $sq->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Exception $e) { /* silent — display gracefully in UI */ }
 }
+header('Cache-Control: no-store, no-cache, must-revalidate');
+header('Pragma: no-cache');
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta http-equiv="Cache-Control" content="no-store">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SkyKin Agent Dashboard - <?php echo $agent_name; ?></title>
@@ -1547,7 +1619,11 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ?? Layout ?? */
-.main { margin-top: 64px; padding: 20px; margin-bottom: 20px; transition: margin-right 0.3s ease; }
+.main { margin-top: 64px; margin-left: 240px; padding: 20px; margin-bottom: 20px; transition: margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+.main.sidebar-collapsed { margin-left: 0; }
+@media (max-width: 768px) {
+    .main { margin-left: 0 !important; }
+}
 
 /* CRM slide-in panel */
 .crm-panel {
@@ -1571,11 +1647,16 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .crm-panel-header button:hover { background: rgba(255,255,255,0.35); }
 .crm-panel iframe { flex: 1; border: none; width: 100%; }
 
-/* ?? Summary Cards ?? */
+/* ── Summary Cards ── */
 .summary-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 14px; margin-bottom: 20px;
+}
+@media (min-width: 769px) {
+    .main:not(.sidebar-collapsed) .summary-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
 }
 .card {
     background: white; border-radius: 10px; padding: 16px;
@@ -1958,9 +2039,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 .rec-empty { text-align: center; color: #aaa; padding: 30px; font-size: 13px; }
 .rec-play     { background: #0047AB; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .rec-play:hover { background: #003a8c; }
+.rec-stop     { background: #c62828; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 4px; }
+.rec-stop:hover { background: #b71c1c; }
 .rec-download { background: #e9ecef; color: #555; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-left: 4px; }
-.rec-stop     { background: #c62828; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.rec-stop:hover { background: #a51f1f; }
 
 /* ?? Footer ?? */
 .footer { text-align: center; font-size: 11px; color: #aaa; padding: 16px; }
@@ -2172,6 +2253,90 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 }
 .btn-transfer.visible { display: block; }
 
+/* ── Hide old horizontal tab bar ─────────────────── */
+.tab-bar { display: none !important; }
+
+/* ── Left Sidebar ────────────────────────────────── */
+#sidebarMenu {
+    position: fixed;
+    top: 64px;
+    left: 0;
+    width: 240px;
+    height: calc(100vh - 64px);
+    background: #ffffff;
+    border-right: 1px solid #e2e8f0;
+    box-shadow: 2px 0 12px rgba(0,71,171,0.07);
+    z-index: 400;
+    display: flex;
+    flex-direction: column;
+    transition: width 0.28s cubic-bezier(0.4,0,0.2,1), transform 0.28s cubic-bezier(0.4,0,0.2,1);
+    overflow: hidden;
+}
+#sidebarMenu.collapsed { width: 0; }
+@media (max-width: 768px) {
+    #sidebarMenu {
+        transform: translateX(-100%);
+        width: 240px !important;
+        z-index: 1001;
+        box-shadow: 6px 0 24px rgba(0,0,0,0.18);
+    }
+    #sidebarMenu.mobile-open { transform: translateX(0); }
+}
+
+/* Sidebar section header */
+.sb-section-label {
+    font-size: 10px; font-weight: 700; color: #94a3b8;
+    text-transform: uppercase; letter-spacing: 1px;
+    padding: 16px 20px 6px;
+    white-space: nowrap;
+}
+
+/* Nav scroll area */
+.sb-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 0; }
+.sb-nav::-webkit-scrollbar { width: 3px; }
+.sb-nav::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+
+/* Nav items */
+.sb-item {
+    display: flex; align-items: center;
+    padding: 10px 20px;
+    color: #475569; font-size: 13.5px; font-weight: 500;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    background: none; border-top: none; border-right: none; border-bottom: none;
+    width: 100%; text-align: left; text-decoration: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    white-space: nowrap;
+    border-radius: 0;
+    gap: 0;
+    letter-spacing: 0.1px;
+}
+.sb-item:hover {
+    background: #f0f5ff;
+    border-left-color: #0047AB;
+    color: #0047AB;
+}
+.sb-item.active {
+    background: linear-gradient(90deg, #eef3ff 0%, #f8faff 100%);
+    border-left-color: #0047AB;
+    color: #0047AB;
+    font-weight: 700;
+}
+
+/* Divider */
+.sb-divider { height: 1px; background: #f1f5f9; margin: 6px 0; }
+
+/* Footer */
+.sb-footer { flex-shrink: 0; border-top: 1px solid #f1f5f9; padding: 8px 0; }
+.sb-footer .sb-item { font-size: 13px; }
+.sb-item.signout { color: #dc3545; }
+.sb-item.signout:hover { background: #fff5f5; border-left-color: #dc3545; color: #dc3545; }
+
+/* Mobile backdrop */
+#sidebarBackdrop {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.4); z-index: 1000;
+}
 
 </style>
 </head>
@@ -2181,7 +2346,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <div class="header">
     <div style="display:flex;align-items:center;gap:12px">
         <button class="agent-sidebar-toggle" onclick="toggleAgentSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1;flex-shrink:0">&#9776;</button>
-        <div class="logo">SKY<span>KIN</span> Technologies</div>
+        <div class="logo" onclick="switchTab('dashboard')" title="Go to Dashboard" style="cursor:pointer">SKY<span>KIN</span> Technologies</div>
     </div>
     <div class="agent-info">
         <div class="agent-avatar"><?php echo $initials; ?></div>
@@ -2226,32 +2391,36 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     </div>
 </div>
 
-<!-- ── Agent Side Menu ─────────────────────────────────────── -->
-<div id="agentSideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
-    <div class="agent-sidebar-brand" style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
-        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
-        <div style="font-size:11px;opacity:.8;margin-top:3px">Agent Panel</div>
-    </div>
-    <div style="flex:1;overflow-y:auto;padding:8px 0">
+<!-- ── Collapsible Left Sidebar ─────────────────────────── -->
+<div id="sidebarMenu">
+    <div class="sb-nav">
+        <div class="sb-section-label">Menu</div>
+
+        <button class="sb-item active" id="sbDashboardBtn"   onclick="sidebarNav('dashboard')">Dashboard</button>
+        <button class="sb-item"        id="sbCallHistoryBtn" onclick="sidebarNav('callHistory')">Call History</button>
+        <button class="sb-item"        id="sbRecordingsBtn"  onclick="sidebarNav('recordings')">Recordings</button>
+        <button class="sb-item"        id="sbAcwBtn"         onclick="sidebarNav('acw')">ACW History</button>
+        <button class="sb-item"        id="sbEscalationBtn"  onclick="sidebarNav('escalation')">New Ticket</button>
+        <button class="sb-item"        id="sbLookupBtn"      onclick="sidebarNav('lookup')">Customer Lookup</button>
+        <button class="sb-item"        id="sbCallbacksBtn"   onclick="sidebarNav('callbacks')">Callbacks</button>
+        <button class="sb-item"        id="sbAhununuBtn"     onclick="sidebarNav('ahununu')">Ahununu.com</button>
+
         <?php if ($is_supervisor): ?>
-        <a href="supervisor.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128202;</span> Supervisor View
-        </a>
-        <div style="height:1px;background:#eee;margin:6px 0"></div>
+        <div class="sb-divider"></div>
+        <div class="sb-section-label">Management</div>
+        <a class="sb-item" href="supervisor.php">Supervisor View</a>
         <?php endif; ?>
+    </div>
 
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Account</div>
-        <a href="#" onclick="toggleAgentSideMenu();document.getElementById('settingsModal').classList.add('show')" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#9881;</span> Phone Settings
-        </a>
-
-        <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:12px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5';this.style.borderColor='#dc3545'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:16px">&#128682;</span> Sign Out
-        </a>
+    <div class="sb-footer">
+        <button class="sb-item" onclick="document.getElementById('settingsModal').classList.add('show')">Phone Settings</button>
+        <a class="sb-item signout" href="/logout.php">Sign Out</a>
     </div>
 </div>
-<div id="agentSideMenuBackdrop" onclick="toggleAgentSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
+
+<!-- Mobile backdrop -->
+<div id="sidebarBackdrop" onclick="toggleAgentSideMenu()"></div>
+
 
 <!-- ?? MAIN ?? -->
 <div class="main">
@@ -2459,11 +2628,6 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                     <tr><td colspan="6" class="rec-empty">No recordings found for today.</td></tr>
                 </tbody>
             </table>
-            <div id="recPlayerWrap" style="display:none;align-items:center;gap:8px;margin-top:12px;">
-                <button class="rec-stop" onclick="stopRecording()">&#9632; Stop</button>
-                <span id="recPlayingName" style="font-size:11px;color:#888;flex:1;"></span>
-            </div>
-            <audio id="recPlayer" controls style="width:100%;margin-top:8px;display:none"></audio>
         </div>
 
         <!-- ACW History Tab -->
@@ -2776,6 +2940,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="sip-dot" id="sipDot"></div>
             <span id="sipStatusText">Not Connected</span>
         </div>
+        <div id="sipCertHint" style="display:none"></div>
         <div class="pp-header-actions">
             <button class="btn-settings-header" onclick="document.getElementById('settingsModal').classList.add('show')" title="Phone settings" aria-label="Phone settings">&#9881;</button>
             <button class="pp-close" onclick="togglePhonePopup()" title="Close phone panel">&#x2715;</button>
@@ -3185,15 +3350,60 @@ document.getElementById('leaveRequestModal')?.addEventListener('click', function
     if (e.target === this) closeLeaveRequestModal();
 });
 
-// ?? Side menu ??????????????????????????????????????
+// ── Sidebar toggle & navigation ─────────────────────────────
 function toggleAgentSideMenu() {
-    const menu     = document.getElementById('agentSideMenu');
-    const backdrop = document.getElementById('agentSideMenuBackdrop');
-    if (!menu) return;
-    const isOpen = menu.style.left === '0px';
-    menu.style.left = isOpen ? '-260px' : '0px';
-    if (backdrop) backdrop.style.display = isOpen ? 'none' : 'block';
+    const sidebar  = document.getElementById('sidebarMenu');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    const main     = document.querySelector('.main');
+    if (!sidebar) return;
+
+    const isMobile = window.innerWidth <= 768;
+    if (isMobile) {
+        const isOpen = sidebar.classList.contains('mobile-open');
+        sidebar.classList.toggle('mobile-open', !isOpen);
+        if (backdrop) backdrop.style.display = isOpen ? 'none' : 'block';
+    } else {
+        const isCollapsed = sidebar.classList.contains('collapsed');
+        sidebar.classList.toggle('collapsed', !isCollapsed);
+        if (main) main.classList.toggle('sidebar-collapsed', !isCollapsed);
+        try { localStorage.setItem('sidebarState', isCollapsed ? 'expanded' : 'collapsed'); } catch(e) {}
+    }
 }
+
+function sidebarNav(tab) {
+    // Activate tab content
+    switchTab(tab);
+    // Update sidebar active state
+    const tabToSb = {
+        dashboard: 'sbDashboardBtn', callHistory: 'sbCallHistoryBtn',
+        recordings: 'sbRecordingsBtn', acw: 'sbAcwBtn',
+        escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn',
+        callbacks: 'sbCallbacksBtn', ahununu: 'sbAhununuBtn'
+    };
+    document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
+    const activeBtn = document.getElementById(tabToSb[tab]);
+    if (activeBtn) activeBtn.classList.add('active');
+    // On mobile close sidebar after navigation
+    if (window.innerWidth <= 768) {
+        const sidebar  = document.getElementById('sidebarMenu');
+        const backdrop = document.getElementById('sidebarBackdrop');
+        if (sidebar)  sidebar.classList.remove('mobile-open');
+        if (backdrop) backdrop.style.display = 'none';
+    }
+}
+
+// Restore sidebar state on page load
+(function initSidebar() {
+    try {
+        const saved = localStorage.getItem('sidebarState');
+        if (saved === 'collapsed') {
+            const sidebar = document.getElementById('sidebarMenu');
+            const main    = document.querySelector('.main');
+            if (sidebar) sidebar.classList.add('collapsed');
+            if (main)    main.classList.add('sidebar-collapsed');
+        }
+    } catch(e) {}
+})();
 
 // ?? Customer info panel (ahununu.com) ??????????????
 // Slides in over the dashboard during a call; the Ahununu tab is the
@@ -3380,8 +3590,8 @@ function updateRecordings(recs) {
             <td><span class="badge ${badge}">${dir}</span></td>
             <td style="font-size:11px;color:#888;">${r.filename}</td>
             <td>
-                <button class="rec-play" onclick="playRecording('${r.filepath}', '${r.filename}')">&#9654; Play</button>
-                <button class="rec-stop" onclick="stopRecording()">&#9632; Stop</button>
+                <button class="rec-play" data-rec="${encodeURIComponent(r.filepath)}" onclick="toggleRecording(this)">&#9654; Play</button>
+                <button class="rec-stop" onclick="stopRecording()" title="Stop">&#9632; Stop</button>
                 <a href="${r.filepath}" download>
                     <button class="rec-download">&#8595; Save</button>
                 </a>
@@ -3391,38 +3601,44 @@ function updateRecordings(recs) {
     document.getElementById('recordingsBody').innerHTML = html;
 }
 
-function playRecording(path, filename) {
-    const player = document.getElementById('recPlayer');
-    const wrap   = document.getElementById('recPlayerWrap');
-    const label  = document.getElementById('recPlayingName');
-    if (!player) return;
-
-    player.onerror = () => {
-        const code = player.error ? player.error.code : 0;
-        toast(code === 4 ? 'Recording file is missing or unreadable' : 'Playback failed (code ' + code + ')', '#c62828');
-    };
-    player.onended = () => stopRecording();
-
-    player.src = path;
-    player.style.display = 'block';
-    if (wrap)  wrap.style.display = 'flex';
-    if (label) label.textContent = filename ? 'Playing: ' + filename : '';
-    player.play().catch(e => toast('Playback blocked: ' + (e.name || e.message), '#c62828'));
-}
+let recAudio = null;
+let recPlayBtn = null;
 
 function stopRecording() {
-    const player = document.getElementById('recPlayer');
-    const wrap   = document.getElementById('recPlayerWrap');
-    const label  = document.getElementById('recPlayingName');
-    if (player) {
-        player.pause();
-        player.currentTime = 0;
-        player.removeAttribute('src');
-        player.load();
-        player.style.display = 'none';
+    if (recAudio) {
+        try { recAudio.pause(); recAudio.currentTime = 0; } catch (e) {}
+        recAudio = null;
     }
-    if (wrap)  wrap.style.display = 'none';
-    if (label) label.textContent = '';
+    recPlayBtn = null;
+}
+
+function toggleRecording(btn) {
+    const path = decodeURIComponent(btn.getAttribute('data-rec') || '');
+    stopRecording();
+    if (!path) return;
+    recPlayBtn = btn;
+    recAudio = new Audio(path);
+    recAudio.addEventListener('ended', stopRecording);
+    recAudio.addEventListener('error', function() {
+        const code = recAudio && recAudio.error ? recAudio.error.code : 0;
+        showToast(code === 4 ? 'Recording file is missing or unreadable' : 'Playback failed');
+        stopRecording();
+    });
+    recAudio.play().catch(function(e) {
+        showToast('Playback blocked: ' + (e.name || e.message));
+        stopRecording();
+    });
+}
+
+function playRecording(path) {
+    const btn = document.querySelector('.rec-play[data-rec="' + encodeURIComponent(path) + '"]');
+    if (btn) { toggleRecording(btn); return; }
+    stopRecording();
+    recAudio = new Audio(path);
+    recAudio.addEventListener('ended', stopRecording);
+    recAudio.play().catch(function(e) {
+        showToast('Playback blocked: ' + (e.name || e.message));
+    });
 }
 
 // ?? Empty data (no calls / API error) ?????????????
@@ -3675,39 +3891,57 @@ let acwCallerId = '', acwDuration = 0, acwCallType = 'Outbound', acwRecordingFil
 // SIP.js module will populate window.sipBridge when loaded
 window.sipBridge = {}; var sipBridge = window.sipBridge;
 
-// On HTTPS the socket is routed through the nginx /wss/ proxy on the page's own
-// port, so it reuses the certificate the browser already accepted for the
-// dashboard. FreeSWITCH's self-signed cert on 7443 has no SAN, and a browser
-// cannot prompt to accept a cert for a WebSocket, so it aborts with code 1006.
+// Same-origin /wss/ so the browser reuses the dashboard certificate.
+// Chrome refuses WSS on :5060 (ERR_UNSAFE_PORT).
 function buildSipWsUrl(host, port) {
     const cleanHost = String(host || location.hostname)
         .replace(/^wss?:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
-    if (location.protocol === 'https:') {
-        return 'wss://' + cleanHost + (location.port ? ':' + location.port : '') + '/wss/';
+    const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const pagePort = location.port ? (':' + location.port) : '';
+    return scheme + (cleanHost || location.hostname) + pagePort + '/wss/';
+}
+
+function resolveSipDomain() {
+    const serverDom = ('<?php echo $domain; ?>' || '').trim();
+    const saved     = (localStorage.getItem('sip_domain') || '').trim();
+    const isIp = s => /^\d{1,3}(\.\d{1,3}){3}$/.test(s);
+    // Extensions live under the SIP domain (FQDN). A bare IP saved from an
+    // earlier attempt causes 403 (sip:ext@IP has no such user), so prefer the
+    // server-provided FQDN and discard a stale IP / host-only value.
+    let dom = serverDom;
+    if (isIp(serverDom) || serverDom === '') {
+        dom = (saved && !isIp(saved) && saved !== location.hostname) ? saved : (serverDom || saved || location.hostname);
     }
-    return 'ws://' + cleanHost + ':' + (port || '5066');
+    if (dom && dom !== saved) localStorage.setItem('sip_domain', dom);
+    return dom;
 }
 
 function loadSipSettings() {
     const ext  = localStorage.getItem('sip_ext')  || serverExt  || '';
     const pass = localStorage.getItem('sip_pass') || serverPass || '';
-    const dom  = localStorage.getItem('sip_domain') || '<?php echo $domain; ?>';
+    const dom  = resolveSipDomain();
     
     // Retrieve stored server or default to hostname
     const rawServer = localStorage.getItem('sip_server') || location.hostname;
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/\/.*$/,'').replace(/:\d+$/,'');
     
-    const isHttps = location.protocol === 'https:';
-    const port    = localStorage.getItem('sip_port') || '5066';
-    const wsUrl   = buildSipWsUrl(cleanHost, port);
+    const port  = location.port || (location.protocol === 'https:' ? '443' : '80');
+    const wsUrl = buildSipWsUrl(cleanHost, port);
 
     document.getElementById('sipExt').value    = ext;
     document.getElementById('sipPass').value   = pass;
     document.getElementById('sipServer').value = cleanHost;
-    document.getElementById('sipPort').value   = isHttps ? (location.port || '443') : port;
+    document.getElementById('sipPort').value   = port;
     document.getElementById('sipDomain').value = dom;
     
     if (ext && pass) waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState !== 'visible') return;
+        const text = (document.getElementById('sipStatusText') || {}).textContent || '';
+        if (/Connecting|Failed|Not Registered|accept the warning/i.test(text) && ext && pass) {
+            waitForSipBridge(() => initSIP(ext, pass, wsUrl, '', dom));
+        }
+    });
 }
 
 function waitForSipBridge(cb, tries) {
@@ -3724,23 +3958,25 @@ function saveSipSettings() {
     if (!ext || !pass) { alert('Please enter extension and password'); return; }
     const rawServer = document.getElementById('sipServer').value.trim() || '<?php echo $_SERVER["HTTP_HOST"]; ?>';
     const cleanHost = rawServer.replace(/^wss?:\/\//i,'').replace(/:\d+$/,'');
-    const isHttps   = location.protocol === 'https:';
-    // The port field only applies to plain ws; HTTPS always goes via the /wss/ proxy
-    const port      = isHttps ? '' : (document.getElementById('sipPort').value.trim() || '5066');
+    const port      = document.getElementById('sipPort').value.trim() || location.port || '';
     const wsUrl     = buildSipWsUrl(cleanHost, port);
     localStorage.setItem('sip_ext',    ext);
     localStorage.setItem('sip_pass',   pass);
     localStorage.setItem('sip_server', cleanHost);
-    if (port) localStorage.setItem('sip_port', port); else localStorage.removeItem('sip_port');
+    localStorage.setItem('sip_port',   port || location.port || '');
     localStorage.setItem('sip_domain', dom);
     document.getElementById('settingsModal').classList.remove('show');
     waitForSipBridge(() => initSIP(ext, pass, wsUrl, port, dom));
 }
 
 function initSIP(ext, pass, server, port, dom) {
-    setSipStatus('connecting', 'Connecting...');
+    setSipStatus('connecting', 'Connecting to phone…');
     if (sipBridge.init) {
-        sipBridge.init(ext, pass, server, port, dom);
+        try {
+            sipBridge.init(ext, pass, server, port, dom);
+        } catch (e) {
+            setSipStatus('failed', 'Phone error: ' + (e && e.message ? e.message : e));
+        }
     } else {
         setSipStatus('failed', 'SIP library not loaded');
     }
@@ -3774,6 +4010,8 @@ function setSipStatus(state, text) {
         dot.classList.add('registered'); badge.classList.add('show');
         document.getElementById('btnCall').disabled = false;
         setAgentStatus('ready');
+        const hintOk = document.getElementById('sipCertHint');
+        if (hintOk) hintOk.style.display = 'none';
     } else if (state === 'calling') {
         dot.classList.add('calling'); badge.classList.add('show','calling');
         fab.classList.add('ringing'); openPhonePopup();
@@ -3790,12 +4028,17 @@ function setSipStatus(state, text) {
     } else if (state === 'unregistered' || state === 'failed') {
         dot.classList.add('failed'); badge.classList.add('show','unreg');
         document.getElementById('btnCall').disabled = true;
+        if (currentAgentStatus !== 'logout') {
+            syncStatusToFpbx('Logged Out');
+        }
     }
     document.getElementById('sipStatusText').textContent = text;
 }
 
 function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
+    window._callEnded = false;
+    try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
     document.getElementById('incomingNumber').textContent = callerNumber;
     // Show incoming screen inside the phone panel, hide dial pad
     document.getElementById('incomingScreen').style.display = 'block';
@@ -3804,6 +4047,17 @@ function handleIncoming(callerNumber) {
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
     startRingtone();
 }
+
+// A cancelled / missed ring must not open ACW or hide a newer incoming call.
+function resetMissedRing() {
+    try {
+        document.getElementById('incomingScreen').style.display = 'none';
+        document.getElementById('dpPanel').style.display = '';
+        const ext = localStorage.getItem('sip_ext') || '';
+        setSipStatus('registered', 'Registered (' + ext + ')');
+    } catch (e) {}
+}
+window.resetMissedRing = resetMissedRing;
 
 function answerCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
@@ -3832,9 +4086,18 @@ function makeCall(number) {
 let _ringCtx = null, _ringNode = null, _ringInterval = null;
 function startRingtone() {
     stopRingtone();
+    // One context for the whole ring. Opening a fresh AudioContext per beep hit
+    // the browser's per-page limit after a few cycles and the ringing went
+    // silent partway through the call.
+    try {
+        _ringCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Autoplay policy parks a new context in "suspended" until the page has
+        // been interacted with; without this the ringtone is silent.
+        if (_ringCtx.state === 'suspended') { _ringCtx.resume(); }
+    } catch (e) { return; }
     function _ring() {
+        if (!_ringCtx) return;
         try {
-            _ringCtx = new (window.AudioContext || window.webkitAudioContext)();
             // Two short beeps: ring pattern
             [0, 0.15].forEach(offset => {
                 const o = _ringCtx.createOscillator();
@@ -3854,6 +4117,44 @@ function startRingtone() {
 function stopRingtone() {
     if (_ringInterval) { clearInterval(_ringInterval); _ringInterval = null; }
     if (_ringCtx) { try { _ringCtx.close(); } catch(e) {} _ringCtx = null; }
+}
+
+// ?? Ringback ? what the *caller* hears while the far end rings ???????????????
+// FreeSWITCH does send ringback, but as early media on the 183 response, and
+// attachAudio() only routes the remote stream to a speaker once the call is
+// Established. So early media is never audible and the agent heard dead silence
+// while waiting. Generate the tone locally instead, driven by the 180 Ringing.
+let _rbCtx = null, _rbInterval = null;
+function startRingback() {
+    stopRingback();
+    try {
+        _rbCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (_rbCtx.state === 'suspended') { _rbCtx.resume(); }
+    } catch (e) { return; }
+    // One AudioContext reused for every pulse: browsers cap how many a page may
+    // open, and a call can ring for 30s.
+    function pulse() {
+        if (!_rbCtx) return;
+        try {
+            const o = _rbCtx.createOscillator();
+            const g = _rbCtx.createGain();
+            o.connect(g); g.connect(_rbCtx.destination);
+            o.type = 'sine'; o.frequency.value = 425;
+            const t = _rbCtx.currentTime;
+            // ~1s of tone, ramped at both ends so it does not click.
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(0.22, t + 0.05);
+            g.gain.setValueAtTime(0.22, t + 0.95);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 1.0);
+            o.start(t); o.stop(t + 1.05);
+        } catch (e) {}
+    }
+    pulse();
+    _rbInterval = setInterval(pulse, 3000);
+}
+function stopRingback() {
+    if (_rbInterval) { clearInterval(_rbInterval); _rbInterval = null; }
+    if (_rbCtx) { try { _rbCtx.close(); } catch(e) {} _rbCtx = null; }
 }
 
 function startCallUI(number) {
@@ -3950,6 +4251,7 @@ function endCall() {
     window._callEnded = true;
 
     try { stopRingtone(); } catch(e) {}
+    try { stopRingback(); } catch(e) {}
     // closeCrmPanel may not always be defined — guard it
     if (typeof closeCrmPanel === 'function') { try { closeCrmPanel(); } catch(e) {} }
 
@@ -4764,7 +5066,7 @@ if (document.getElementById('caseIssueType')) {
 </div>
 
 <!-- SIP.js 0.21 local bundle (built from /opt/call_center node_modules) -->
-<script src="/app/agent_dashboard/js/sipjs.bundle.js"></script>
+<script src="/app/agent_dashboard/js/sipjs.bundle.js?v=20260813m"></script>
 <script>
 (function() {
 'use strict';
@@ -4778,6 +5080,71 @@ const {
 } = SIPjs;
 
 let ua = null, reg = null, session = null;
+
+// Chrome gathers ICE candidates from every network interface, and the agent PCs
+// carry several virtual adapters (VMware/WSL/Hyper-V) whose STUN queries are
+// never answered. SIP.js will not send an offer or an answer until gathering
+// finishes, so those dead adapters stall the call for the full default timeout
+// (5s) — once before the callee rings, and again after Answer is clicked.
+// FreeSWITCH's default ICE ACL (wan.auto) rejects RFC1918 host candidates, so
+// the offer must include a STUN srflx address or the answer is 488.
+const ICE_GATHERING_TIMEOUT_MS = 3000;
+const ICE_SERVERS = [
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    { urls: 'stun:stun.l.google.com:19302' }
+];
+const ICE_PC_CONFIG = { iceServers: ICE_SERVERS };
+
+function isVirtualHostIp(ip) {
+    const p = ip.split('.').map(Number);
+    if (p.length !== 4 || p.some(n => Number.isNaN(n))) return false;
+    if (p[0] === 169 && p[1] === 254) return true;
+    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
+    if (p[0] === 192 && p[1] === 168 && (p[2] === 56 || p[2] === 59 || p[2] === 137 || p[2] === 211 || p[2] === 215 || p[2] === 221 || p[2] === 243)) return true;
+    return false;
+}
+
+function stripVirtualNicModifier(description) {
+    if (!description || !description.sdp) return Promise.resolve(description);
+    const lines = description.sdp.split(/\r?\n/);
+    const kept = lines.filter(function(line) {
+        if (line.indexOf('a=candidate:') !== 0) return true;
+        if (/\stcp\s/.test(line)) return false;
+        const m = line.match(/\s(\d{1,3}(?:\.\d{1,3}){3})\s/);
+        if (m && isVirtualHostIp(m[1])) return false;
+        return true;
+    });
+    if (!kept.some(function(line) { return line.indexOf('a=candidate:') === 0; })) {
+        return Promise.resolve(description);
+    }
+    description.sdp = kept.join('\r\n');
+    if (!/\r\n$/.test(description.sdp)) description.sdp += '\r\n';
+    return Promise.resolve(description);
+}
+
+// Keep rtpmap opus/48000/2 (Chrome rejects a /1 rewrite) but force mono in
+// fmtp so FreeSWITCH's 1-channel Opus decoder actually gets frames.
+function opusMonoFmtpModifier(description) {
+    if (!description || !description.sdp) return Promise.resolve(description);
+    description.sdp = description.sdp.replace(
+        /^a=fmtp:(\d+) (.*)$/gm,
+        function(line, pt, params) {
+            if (!/minptime|useinbandfec|stereo/.test(params)) return line;
+            if (/stereo=/.test(params)) {
+                params = params.replace(/sprop-stereo=\d+/g, 'sprop-stereo=0')
+                    .replace(/stereo=\d+/g, 'stereo=0');
+                if (!/sprop-stereo=/.test(params)) params += ';sprop-stereo=0';
+                if (!/(^|;)stereo=/.test(params)) params += ';stereo=0';
+                return 'a=fmtp:' + pt + ' ' + params;
+            }
+            return 'a=fmtp:' + pt + ' ' + params + ';stereo=0;sprop-stereo=0';
+        }
+    );
+    return Promise.resolve(description);
+}
+
+const MIC_CONSTRAINTS = { audio: { channelCount: 1, echoCancellation: true }, video: false };
+const SDP_MODIFIERS = [stripVirtualNicModifier, opusMonoFmtpModifier];
 const pbxDomain = () => localStorage.getItem('sip_domain') || (window.SKYKIN && SKYKIN.domain) || location.hostname;
 
 function startRec(stream) {
@@ -4834,34 +5201,51 @@ function stopRec() {
     window.mediaRecorderRef = null;
 }
 
+function enableSenders(s) {
+    const pc = s && s.sessionDescriptionHandler && s.sessionDescriptionHandler.peerConnection;
+    if (!pc) return;
+    pc.getTransceivers().forEach(function(t) {
+        try { if (t.direction && t.direction !== 'sendrecv') t.direction = 'sendrecv'; } catch (e) {}
+        if (t.sender && t.sender.track) t.sender.track.enabled = true;
+        try {
+            const p = t.sender && t.sender.getParameters();
+            if (p && p.encodings && p.encodings.length) {
+                p.encodings.forEach(function(e) { e.active = true; });
+                t.sender.setParameters(p);
+            }
+        } catch (e) {}
+    });
+}
+
 function attachAudio(s) {
     const sdh = s.sessionDescriptionHandler;
     if (!sdh?.peerConnection) return;
+    enableSenders(s);
+    if (s._skykinAudioAttached) return;
+    s._skykinAudioAttached = true;
     const pc = sdh.peerConnection;
     const remote = new MediaStream();
-    pc.getReceivers().forEach(r => { if (r.track) remote.addTrack(r.track); });
     const el = document.getElementById('remoteAudio');
-    if (el) { el.srcObject = remote; el.play().catch(()=>{}); }
-
-    // Mix local mic + remote audio so the saved file contains both sides.
-    const mix = new MediaStream();
-    remote.getAudioTracks().forEach(t => mix.addTrack(t));
-    const addLocal = function(stream) {
-        if (stream) stream.getAudioTracks().forEach(t => mix.addTrack(t.clone()));
-        startRec(mix);
+    const hook = function(track) {
+        if (!track || track.kind !== 'audio') return;
+        if (remote.getTracks().indexOf(track) >= 0) return;
+        remote.addTrack(track);
+        if (el) { el.srcObject = remote; el.play().catch(function(){}); }
     };
-    if (window._micStream) {
-        addLocal(window._micStream);
-    } else if (window.ensureMic) {
-        window.ensureMic().then(addLocal).catch(function() { startRec(remote); });
-    } else {
-        startRec(remote);
-    }
+    pc.getReceivers().forEach(r => hook(r.track));
+    pc.ontrack = function(ev) { hook(ev.track); };
+    if (el) { el.srcObject = remote; el.play().catch(function(){}); }
 }
 
 function bindSession(s) {
     s.stateChange.addListener(state => {
+        if (state === SessionState.Established || state === SessionState.Terminated
+            || state === SessionState.Terminating) {
+            window.stopRingback && window.stopRingback();
+        }
         if (state === SessionState.Established) {
+            s._skykinEstablished = true;
+            window._callEnded = false;
             const num = s instanceof Invitation
                 ? (s.remoteIdentity?.uri?.user || window.lastDialedNumber || '')
                 : (window.lastDialedNumber || '');
@@ -4874,7 +5258,19 @@ function bindSession(s) {
         }
         if (state === SessionState.Terminated || state === SessionState.Terminating) {
             stopRec();
-            if (window.endCall) window.endCall();
+            // A lose-race / re-ring must not hang up a newer invite or open ACW.
+            if (session && session !== s) {
+                return;
+            }
+            if (session === s) {
+                session = null;
+            }
+            if (s._skykinEstablished) {
+                if (window.endCall) window.endCall();
+            } else {
+                window.stopRingtone && window.stopRingtone();
+                if (window.resetMissedRing) window.resetMissedRing();
+            }
         }
     });
 }
@@ -4882,53 +5278,61 @@ function bindSession(s) {
 window.sipBridge.init = function(ext, pass, server, port, dom) {
     if (ua) { try { reg?.unregister(); ua.stop(); } catch(e) {} }
 
-    // Build WebSocket URI properly
-    let wsUri = server;
-    if (!wsUri.startsWith('wss://') && !wsUri.startsWith('ws://')) {
-        const isHttps = location.protocol === 'https:';
-        wsUri = (isHttps ? 'wss://' : 'ws://') + wsUri;
-    }
-    
-    // If the WebSocket URI does not specify a port or sub-path, add one.
-    // HTTPS gets the nginx /wss/ proxy path so the socket shares the page cert.
-    const hostPart = wsUri.replace(/^wss?:\/\//i, '');
-    if (!hostPart.includes('/') && !hostPart.includes(':')) {
-        wsUri = location.protocol === 'https:'
-            ? wsUri + '/wss/'
-            : wsUri + ':' + (port || '5066');
+    let wsUri = (location.protocol === 'https:' ? 'wss://' : 'ws://')
+        + location.hostname + (location.port ? ':' + location.port : '') + '/wss/';
+
+    const sipUri = UserAgent.makeURI('sip:' + ext + '@' + dom);
+    if (!sipUri) {
+        window.setSipStatus('failed', 'Bad SIP address: ' + ext + '@' + dom);
+        return;
     }
 
-    // SIP.js defaults dump every SIP packet to the console; keep it to errors
-    // so the agent console stays readable in production.
     ua = new UserAgent({
-        uri: UserAgent.makeURI('sip:' + ext + '@' + dom),
+        uri: sipUri,
         transportOptions: {
             server: wsUri,
+            connectionTimeout: 8,
             traceSip: false
         },
         authorizationUsername: ext,
         authorizationPassword: pass,
+        contactParams: { transport: 'wss' },
         logLevel: 'error',
-        logConfiguration: false
+        logConfiguration: false,
+        sessionDescriptionHandlerFactoryOptions: {
+            iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
+            peerConnectionConfiguration: ICE_PC_CONFIG,
+            modifiers: SDP_MODIFIERS
+        }
     });
 
-    reg = new Registerer(ua, { logConfiguration: false });
+    reg = new Registerer(ua, { expires: 300, logConfiguration: false });
+    const armFail = setTimeout(function() {
+        window.setSipStatus('failed', 'Phone sign-in timed out. Refresh the page.');
+    }, 20000);
     reg.stateChange.addListener(state => {
         if (state === 'Registered') {
+            clearTimeout(armFail);
             window.setSipStatus('registered', 'Registered (' + ext + ')');
-            // Warm up the mic so answering never waits on a permission prompt
             window.ensureMic && window.ensureMic().catch(function(){});
         } else if (state === 'Unregistered') {
             window.setSipStatus('unregistered', 'Not Registered');
         } else if (state === 'Terminated') {
+            clearTimeout(armFail);
             window.setSipStatus('failed', 'Registration Failed');
         }
     });
 
     ua.delegate = {
         onInvite(inv) {
+            if (session && session !== inv
+                && session.state !== SessionState.Established
+                && session.state !== SessionState.Terminated) {
+                try { session.reject(); } catch (e) {}
+            }
             session = inv;
-            // Try multiple places in SIP.js to get the caller number
+            window._callEnded = false;
+            try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
             const num = inv.remoteIdentity?.uri?.user
                 || inv.remoteIdentity?.displayName
                 || inv.request?.from?.uri?.user
@@ -4937,18 +5341,15 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
-
-            // Tell the PBX we are ringing. Without a 180 the caller only hears
-            // local ringback and the leg dies on the 30s originate timeout.
             try { inv.progress(); } catch (e) { console.warn('progress failed', e); }
-
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }
     };
 
     ua.start().then(() => reg.register()).catch(err => {
-        window.setSipStatus('failed', 'Error: ' + err.message);
+        clearTimeout(armFail);
+        window.setSipStatus('failed', 'Error: ' + (err && err.message ? err.message : 'WebSocket failed'));
     });
 };
 
@@ -4968,12 +5369,31 @@ window.sipBridge.makeCall = function(number) {
     // before any INVITE is sent — surface that instead of a generic failure.
     window.ensureMic().then(function() {
         const inv = new Inviter(ua, uri, {
-            sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
+            sessionDescriptionHandlerOptions: {
+                constraints: MIC_CONSTRAINTS,
+                iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
+                peerConnectionConfiguration: ICE_PC_CONFIG
+            },
+            sessionDescriptionHandlerModifiers: SDP_MODIFIERS
         });
         session = inv;
         window.setSipStatus && window.setSipStatus('calling', 'Calling ' + number);
         bindSession(inv);
-        return inv.invite().catch(function(err) {
+        return inv.invite({
+            // 180/183 means the far end is actually alerting, so only start the
+            // ringback then rather than the moment Call is pressed.
+            requestDelegate: {
+                onProgress: function() {
+                    window.setSipStatus && window.setSipStatus('calling', 'Ringing ' + number);
+                    window.startRingback && window.startRingback();
+                },
+                onAccept: function() {
+                    window.stopRingback && window.stopRingback();
+                    window.startCallUI && window.startCallUI(number);
+                }
+            }
+        }).catch(function(err) {
+            window.stopRingback && window.stopRingback();
             window.sipReport('invite_failed', err, 'to=' + number + ' state=' + inv.state);
             window.setSipStatus && window.setSipStatus('failed', 'Call failed: ' + err.message);
             window.showToast && window.showToast('Call failed: ' + (err.message || err.name));
@@ -5027,7 +5447,7 @@ window.ensureMic = function() {
         window.sipReport('mic_unavailable', e, 'protocol=' + location.protocol);
         return Promise.reject(e);
     }
-    return navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+    return navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS)
         .then(function(stream) {
             window._micStream = stream;
             return stream;
@@ -5062,9 +5482,16 @@ window.sipBridge.answer = function() {
     }
     const inv = session;
     window.ensureMic()
-        .then(function() {
+        .then(function(stream) {
+            const el = document.getElementById('remoteAudio');
+            if (el) el.play().catch(function(){});
             return inv.accept({
-                sessionDescriptionHandlerOptions: { constraints: { audio: true, video: false } }
+                sessionDescriptionHandlerOptions: {
+                    constraints: MIC_CONSTRAINTS,
+                    iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
+                    peerConnectionConfiguration: ICE_PC_CONFIG
+                },
+                sessionDescriptionHandlerModifiers: SDP_MODIFIERS
             });
         })
         .catch(function(e) {

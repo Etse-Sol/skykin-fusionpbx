@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzip-dev \
         unzip \
         curl \
+        openssl \
     && docker-php-ext-install pdo pdo_pgsql pdo_sqlite zip \
     && rm -rf /var/lib/apt/lists/* \
     && rm -f /etc/nginx/sites-enabled/default
@@ -30,7 +31,7 @@ RUN mkdir -p /etc/fusionpbx /var/log/nginx \
     && touch /var/www/fusionpbx/app/agent_dashboard/skykin_local.db \
     && chown www-data:www-data /var/www/fusionpbx/app/agent_dashboard/skykin_local.db
 
-EXPOSE 80
+EXPOSE 80 443
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["web"]

@@ -17,8 +17,6 @@ require_once __DIR__ . '/session_bootstrap.php';
 require_once __DIR__ . '/skykin_config.php';
 skykin_require_login(false);
 
-const SKYKIN_RECORDINGS_ROOT = '/var/lib/freeswitch/recordings';
-
 $types = [
 	'webm' => 'audio/webm',
 	'wav'  => 'audio/wav',
@@ -45,45 +43,13 @@ if (!isset($types[$ext])) {
 	skykin_fail(400, 'Unsupported recording type');
 }
 
-// Build the candidate locations, most specific first.
+// Softphone uploads, FreeSWITCH archive paths and legacy flat recordings are all
+// resolved by the shared helper, so the Recordings tab and this streamer can
+// never disagree about which files exist.
 $domain = skykin_domain_param($_GET['d'] ?? null);
-$candidates = [];
-$requested_dir = (string)($_GET['path'] ?? '');
-if ($requested_dir !== '') {
-	$candidates[] = rtrim($requested_dir, '/') . '/' . $file;
-}
-$candidates[] = SKYKIN_RECORDINGS_ROOT . '/' . $domain . '/agent/' . $file;
-$candidates[] = SKYKIN_RECORDINGS_ROOT . '/' . $domain . '/' . $file;
+$path = skykin_recording_path($file, $domain, (string)($_GET['path'] ?? ''));
 
-$path = null;
-foreach ($candidates as $candidate) {
-	$real = realpath($candidate);
-	if ($real === false || !is_file($real)) {
-		continue;
-	}
-	// Never serve anything outside the recordings root.
-	if (strpos($real, SKYKIN_RECORDINGS_ROOT . '/') !== 0) {
-		continue;
-	}
-	$path = $real;
-	break;
-}
-
-// Archive recordings are nested by year/month/day, so search as a last resort.
-if ($path === null) {
-	$archive = SKYKIN_RECORDINGS_ROOT . '/' . $domain . '/archive';
-	if (is_dir($archive)) {
-		$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($archive, FilesystemIterator::SKIP_DOTS));
-		foreach ($it as $entry) {
-			if ($entry->isFile() && $entry->getFilename() === $file) {
-				$path = $entry->getRealPath();
-				break;
-			}
-		}
-	}
-}
-
-if ($path === null) {
+if ($path === '') {
 	skykin_fail(404, 'Recording not found');
 }
 
