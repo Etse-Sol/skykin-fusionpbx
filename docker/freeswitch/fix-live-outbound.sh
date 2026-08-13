@@ -32,7 +32,7 @@ docker exec -i "$CONTAINER" tee /etc/freeswitch/dialplan/default/00_webrtc_local
     <condition field="destination_number" expression="^(101|102)$">
       <action application="set" data="hangup_after_bridge=true"/>
       <action application="set" data="rtp_secure_media=optional"/>
-      <action application="bridge" data="{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/$1@client1.skykin.local"/>
+      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS}${sofia_contact(*/$1@client1.skykin.local)}"/>
     </condition>
   </extension>
 </include>
@@ -67,12 +67,13 @@ docker exec -i "$CONTAINER" sh -c '
   fi
   rm -f /etc/freeswitch/dialplan/client1.skykin.local.xml
   # skykin_local_extension still matches 101 in context default and was
-  # advertising the public IP then bridging user/101 (STUN 488/503).
-  # Strip those even if webrtc_local somehow does not win first.
+  # advertising the public IP (STUN 488). Strip that; leave user/ so the
+  # directory dial-string / sofia_contact (WSS fs_path) is used if this
+  # extension ever wins. Do not rewrite user/ → sofia/internal/user@domain
+  # — that skips the registered WSS contact and 503s in ~300ms.
   find /etc/freeswitch/dialplan -name "*.xml" | while read -r f; do
     grep -q "skykin_local_extension" "$f" || continue
     sed -i "/rtp_advertise_ip/d; /include_external_ip/d" "$f"
-    sed -i "s#bridge\" data=\"user/#bridge\" data=\"{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/#" "$f"
     echo "patched skykin_local_extension in $f"
   done
 '

@@ -186,7 +186,7 @@ cat > /etc/freeswitch/dialplan/default/00_webrtc_local.xml <<'EOF'
     <condition field="destination_number" expression="^(101|102)$">
       <action application="set" data="hangup_after_bridge=true"/>
       <action application="set" data="rtp_secure_media=optional"/>
-      <action application="bridge" data="{rtp_secure_media=optional,absolute_codec_string=OPUS,PCMU,PCMA}sofia/internal/$1@client1.skykin.local"/>
+      <action application="bridge" data="{media_webrtc=true,rtp_secure_media=optional,absolute_codec_string=OPUS}${sofia_contact(*/$1@client1.skykin.local)}"/>
     </condition>
   </extension>
 </include>
