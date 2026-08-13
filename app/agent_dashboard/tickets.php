@@ -13,13 +13,8 @@ $today = date('Y-m-d');
 
 function getDB() {
     static $db = null;
-    if ($db) return $db;
-    $db = skykin_pdo_fusionpbx();
-    if ($db) return $db;
-    // SQLite fallback for local development
-    $sqliteFile = __DIR__ . '/skykin_local.db';
-    $db = new PDO('sqlite:' . $sqliteFile, null, null, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
-    $db->exec('PRAGMA journal_mode=WAL');
+    if ($db !== null) return $db;
+    $db = skykin_pdo_fusionpbx(); // throws RuntimeException on failure
     return $db;
 }
 

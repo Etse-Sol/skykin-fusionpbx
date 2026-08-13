@@ -193,56 +193,61 @@ function skykin_config(): array {
 }
 
 /**
- * FusionPBX Postgres from /etc/fusionpbx/config.conf only (no LAN password fallbacks).
+ * FusionPBX PostgreSQL connection — reads from resources/config.php.
+ *
+ * FIX (2026-08-07): Previously read from /etc/fusionpbx/config.conf which
+ * only exists on the Linux VM, not on Windows/WSL dev machines. This caused
+ * a silent fallback to SQLite, meaning the Agent Dashboard wrote tickets to
+ * a local SQLite file while the Department Ticket Portal read from the real
+ * PostgreSQL database — tickets were invisible across apps.
+ *
+ * Now reads credentials from resources/config.php (the same file the ticket
+ * portal uses) and throws a visible RuntimeException if the connection fails,
+ * rather than silently returning null (which triggered the SQLite fallback).
  */
-function skykin_pdo_fusionpbx(): ?PDO {
+function skykin_pdo_fusionpbx(): PDO {
 	static $db = null;
-	static $tried = false;
-	if ($tried) {
-		return $db;
-	}
-	$tried = true;
+	if ($db !== null) return $db;
 
-	$h = '127.0.0.1';
-	$p = '5432';
-	$n = 'fusionpbx';
-	$u = 'fusionpbx';
+	// ── Read from resources/config.php (single source of truth) ──────────────
+	// Defaults to the known production host so the app works even if config.php
+	// is temporarily absent (a misconfiguration should be loud, not silent).
+	$h  = '192.168.1.10';
+	$p  = '5432';
+	$n  = 'fusionpbx';
+	$u  = 'fusionpbx';
 	$pw = '';
-	$conf = '/etc/fusionpbx/config.conf';
-	if (is_file($conf)) {
-		foreach (file($conf) as $ln) {
-			$ln = trim($ln);
-			if ($ln === '' || $ln[0] === '#' || strpos($ln, '=') === false) {
-				continue;
-			}
-			[$k, $v] = array_map('trim', explode('=', $ln, 2));
-			if ($k === 'database.0.host') {
-				$h = $v;
-			} elseif ($k === 'database.0.port') {
-				$p = $v;
-			} elseif ($k === 'database.0.name') {
-				$n = $v;
-			} elseif ($k === 'database.0.username') {
-				$u = $v;
-			} elseif ($k === 'database.0.password') {
-				$pw = $v;
-			}
-		}
+
+	$fpbxConfig = dirname(__DIR__, 2) . '/resources/config.php';
+	if (is_file($fpbxConfig)) {
+		// resources/config.php defines $db_host, $db_port, $db_name,
+		// $db_username, $db_password — same variables read by the ticket portal.
+		@include $fpbxConfig;
+		if (!empty($db_host))     $h  = $db_host;
+		if (!empty($db_port))     $p  = $db_port;
+		if (!empty($db_name))     $n  = $db_name;
+		if (!empty($db_username)) $u  = $db_username;
+		if (isset($db_password))  $pw = $db_password;
 	}
 
-	$dsns = [
-		"pgsql:host={$h};port={$p};dbname={$n};connect_timeout=3",
-		"pgsql:host=/var/run/postgresql;dbname={$n}",
-	];
-	foreach ($dsns as $dsn) {
-		try {
-			$db = new PDO($dsn, $u, $pw, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-			return $db;
-		} catch (Exception $ignored) {
-		}
+	// ── Single direct connection attempt ─────────────────────────────────────
+	try {
+		$db = new PDO(
+			"pgsql:host={$h};port={$p};dbname={$n};connect_timeout=5",
+			$u, $pw,
+			[PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]
+		);
+		return $db;
+	} catch (Exception $e) {
+		// LOUD failure — do NOT silently fall back to a different database.
+		// A hidden SQLite fallback caused tickets to be written to the wrong
+		// database and disappear from the ticket portal entirely.
+		throw new RuntimeException(
+			"[SkyKin DB] Cannot connect to PostgreSQL at {$h}:{$p}/{$n}. " .
+			"Check resources/config.php credentials. Original error: " .
+			$e->getMessage()
+		);
 	}
-	$db = null;
-	return null;
 }
 
 /**

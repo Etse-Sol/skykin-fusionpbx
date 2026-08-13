@@ -14,18 +14,8 @@ $today   = date('Y-m-d');
 // ── DB helper ──────────────────────────────────────────────────────────────
 function getDB() {
     static $db = null;
-    if ($db) return $db;
-    $h='127.0.0.1';$p='5432';$n='fusionpbx';$u='fusionpbx';$pw='';
-    $conf='/etc/fusionpbx/config.conf';
-    if (file_exists($conf)) foreach(file($conf) as $ln) {
-        $ln=trim($ln);
-        if(strpos($ln,'database.0.host')!==false)     $h=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.port')!==false)     $p=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.name')!==false)     $n=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.username')!==false) $u=trim(explode('=',$ln,2)[1]);
-        if(strpos($ln,'database.0.password')!==false) $pw=trim(explode('=',$ln,2)[1]);
-    }
-    $db = new PDO("pgsql:host={$h};port={$p};dbname={$n}",$u,$pw,[PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION]);
+    if ($db !== null) return $db;
+    $db = skykin_pdo_fusionpbx(); // throws RuntimeException on failure
     return $db;
 }
 
@@ -541,6 +531,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
       <a href="/app/agent_dashboard/reports.php" class="active">Reports</a>
       <a href="/app/agent_dashboard/evaluation.php">Evaluation</a>
       <a href="/app/agent_dashboard/crm.php">CRM</a>
+      <a href="/app/agent_dashboard/billing.php">Billing</a>
       <a href="/app/agent_dashboard/index.php">Agent View</a>
     </nav>
   </div>
