@@ -7,6 +7,11 @@
 #
 # Hybrid (FreeSWITCH on host/VM) — use:
 #   docker compose -f docker-compose.yml -f docker-compose.hybrid.yml up --build -d
+#
+# Production ecs-cc (host-network FreeSWITCH, HTTPS 8188) — use:
+#   docker compose -f docker-compose.ecs-cc.yml up --build -d
+# Copy .env.ecs-cc.example to .env first. Do not recreate skykin-freeswitch
+# until docker/freeswitch has been rebuilt with the current entrypoint.
 
 services:
   db:
@@ -56,7 +61,8 @@ services:
       FS_QUEUE_EXT: ${FS_QUEUE_EXT:-8000}
       FS_QUEUE_STRATEGY: ${FS_QUEUE_STRATEGY:-longest-idle-agent}
       FS_QUEUE_AGENTS: ${FS_QUEUE_AGENTS:-}
-      # Ethio Telecom IP trunk (register=false). Source IP for whitelist: host LAN IP.
+      # Ethio Telecom IMS trunk. register=true. SIP whitelist is not enough:
+      # they must also allow FS_LAN_RTP_IP as a media/RTP source.
       FS_OUTBOUND_GATEWAY: ${FS_OUTBOUND_GATEWAY:-SIP}
       FS_OUTBOUND_PROXY: ${FS_OUTBOUND_PROXY:-}
       FS_OUTBOUND_USERNAME: ${FS_OUTBOUND_USERNAME:-}
@@ -129,6 +135,7 @@ services:
       SERVER_NAME: ${TLS_CN:-skykin.local}
       TLS_CN: ${TLS_CN:-skykin.local}
       TLS_SAN_IP: ${TLS_SAN_IP:-}
+      WEB_HTTPS_PORT: ${WEB_HTTPS_PORT:-8443}
     ports:
       - "${WEB_PORT:-8080}:80"
       - "${WEB_HTTPS_PORT:-8443}:443"

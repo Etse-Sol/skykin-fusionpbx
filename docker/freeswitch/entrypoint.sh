@@ -460,6 +460,17 @@ if [ -n "$FS_OUTBOUND_PROXY" ] && [ -n "$FS_OUTBOUND_GATEWAY" ]; then
     else
       sed -i 's#</settings>#    <param name="enable-100rel" value="true"/>\n  </settings>#' "$EXT_PROF" || true
     fi
+    # Carrier (Ethio IMS) is on the LAN. Advertising the public NAT IP in
+    # Contact/Via makes REGISTER FAIL_WAIT: the IMS replies to the WAN IP,
+    # which is not this VM. Pin sip-ip/rtp-ip and ext-* to the host NIC.
+    # Internal/WebRTC keeps $${external_sip_ip} for browsers.
+    if [ -n "$FS_LAN_RTP_IP" ]; then
+      sed -i "s#name=\"sip-ip\" value=\"[^\"]*\"#name=\"sip-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      sed -i "s#name=\"rtp-ip\" value=\"[^\"]*\"#name=\"rtp-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      sed -i "s#name=\"ext-sip-ip\" value=\"[^\"]*\"#name=\"ext-sip-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      sed -i "s#name=\"ext-rtp-ip\" value=\"[^\"]*\"#name=\"ext-rtp-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      echo "  External profile Contact/RTP advertised as ${FS_LAN_RTP_IP}"
+    fi
   fi
   if [ -n "$FS_OUTBOUND_REALM" ] && [ -n "$FS_OUTBOUND_PROXY" ]; then
     if ! grep -q "[[:space:]]${FS_OUTBOUND_REALM}$" /etc/hosts 2>/dev/null; then
@@ -477,8 +488,18 @@ if [ -n "$FS_DOMAIN" ]; then
   # channel-variable counterpart to local-network-acl=none on the profile.
   RTP_ADV=""
   if [ -n "$EXTERNAL_RTP_IP" ]; then
+    # Plain export (not nolocal:). Agent-to-agent WebRTC needs the public NAT
+    # IP in SDP. The Ethio b-leg overrides this in the sofia/gateway {} string
+    # with FS_LAN_RTP_IP. nolocal: stripped the public IP from callee WebRTC
+    # and made agent-to-agent silent.
     RTP_ADV="      <action application=\"export\" data=\"rtp_advertise_ip=${EXTERNAL_RTP_IP}\"/>
       <action application=\"export\" data=\"include_external_ip=true\"/>"
+  fi
+  # Local/queue bridges to user/<ext> must enable DTLS (media_webrtc) or
+  # Chrome answers with "SDP without DTLS fingerprint" and the call dies.
+  USER_BRIDGE="{rtp_secure_media=optional,media_webrtc=true}"
+  if [ -n "$EXTERNAL_RTP_IP" ]; then
+    USER_BRIDGE="{rtp_secure_media=optional,media_webrtc=true,rtp_advertise_ip=${EXTERNAL_RTP_IP},include_external_ip=true}"
   fi
   # The dashboards look recordings up through the CDR, so the call record has to
   # carry domain_name plus record_path/record_name. Use the FusionPBX archive
@@ -515,7 +536,7 @@ ${RTP_ADV}
       <action application="set" data="record_stereo=true"/>
 ${CDR_VARS}
       <action application="record_session" data="\${record_path}/\${record_name}"/>
-      <action application="bridge" data="{rtp_secure_media=optional}user/\$1@${FS_DOMAIN}"/>
+      <action application="bridge" data="${USER_BRIDGE}user/\$1@${FS_DOMAIN}"/>
     </condition>
   </extension>
 
@@ -533,11 +554,14 @@ DPEOF
   # dialling is never stolen. Ethiopian mobiles dialled as 09xxxxxxxx are
   # rewritten to +2519xxxxxxxx; bare/E.164 251… forms are accepted as-is.
   if [ -n "$FS_OUTBOUND_GATEWAY" ]; then
-    # Answer the WebRTC a-leg first so DTLS is up before the mobile answers.
-    # Keep PCMA (AMR negotiated but the handset path was silent). Cut through
-    # early media so the carrier RTP SSRC does not restart on 200. No RTCP —
-    # Ethio's 183 does not mux it. Pin LAN RTP toward the carrier.
-    BLEG_RTP="origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU,rtcp_audio_interval_msec=-1,rtcp_mux=false,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,send_silence_when_idle=100,sip_session_expires=180,sip_force_session_timer=true"
+    # pre_answer (not answer): talk timer starts when the mobile answers.
+    # Do not uuid_media_reneg on this trunk — it drops the call immediately.
+    # Pin LAN RTP toward Ethio (SIP whitelist ≠ RTP/media ACL). Keep AMR in
+    # the list (PT 102); order matches the last working ecs-cc runtime.
+    # Carrier later asked SDP 8 0 101 (PCMA,PCMU,telephone-event) with AMR
+    # still offered — switch the string to ^^:PCMA:PCMU:AMR@8000h@20i if they
+    # require that order. No send_silence_when_idle (it blocked agent audio).
+    BLEG_RTP="origination_uuid=\${bleg_uuid},absolute_codec_string=^^:AMR@8000h@20i:PCMA:PCMU,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,sip_session_expires=180,sip_force_session_timer=true"
     if [ -n "$FS_LAN_RTP_IP" ]; then
       BLEG_RTP="${BLEG_RTP},rtp_advertise_ip=${FS_LAN_RTP_IP},include_external_ip=false"
     fi
@@ -603,7 +627,7 @@ ${OUT_PRE}
       <action application="set" data="call_timeout=30"/>
       <action application="set" data="rtp_secure_media=optional"/>
 ${RTP_ADV}
-      <action application="bridge" data="{rtp_secure_media=optional}user/\$1@${FS_DOMAIN}"/>
+      <action application="bridge" data="${USER_BRIDGE}user/\$1@${FS_DOMAIN}"/>
     </condition>
   </extension>
 </include>
@@ -626,7 +650,7 @@ if [ -n "$FS_INBOUND_DID_REGEX" ] && [ -n "$FS_DOMAIN" ]; then
     <condition field="destination_number" expression="${FS_INBOUND_DID_REGEX}">
       <action application="set" data="rtcp_audio_interval_msec=0"/>
       <action application="set" data="send_silence_when_idle=100"/>
-      <action application="set" data="rtp_advertise_ip=${FS_LAN_RTP_IP:-10.0.0.93}"/>
+      <action application="set" data="rtp_advertise_ip=${FS_LAN_RTP_IP}"/>
       <action application="set" data="include_external_ip=false"/>
       <action application="set" data="rtp_secure_media=false"/>
       <action application="set" data="media_webrtc=false"/>

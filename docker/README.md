@@ -60,6 +60,7 @@ On Linux, allow Docker → host ESL/WS, or set the VM IP explicitly.
 3. **HTTPS** — browsers need a trusted cert for mic/WSS. Put nginx/Caddy or a cloud LB in front with Let’s Encrypt; keep `/wss/` proxied to the web container (or directly to FreeSWITCH WS).  
 4. **Full Docker ≠ zero FreeSWITCH ops** — dialplan, gateways, NAT, and codecs still need FusionPBX/FreeSWITCH tuning after DB restore.  
 5. Do **not** expose ESL (`8021`) on a public interface.
+6. **ecs-cc backup compose** — `docker-compose.ecs-cc.yml` + `.env.ecs-cc.example` freeze the working host-network layout (HTTPS 8188, WS-SIP on 18081, Ethio on `FS_LAN_RTP_IP`). Rebuild the FreeSWITCH image before recreating that container or the runtime dialplan is wiped.
 
 ### Linux host-network FreeSWITCH (best call quality)
 

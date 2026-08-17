@@ -1,0 +1,18 @@
+[Unit]
+Description=SkyKin WS-SIP UDP gateway
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=SKYKIN_FS_SIP_HOST=127.0.0.1
+Environment=SKYKIN_FS_SIP_PORT=5060
+Environment=SKYKIN_FS_UDP_BIND=127.0.0.1
+Environment=SKYKIN_WS_SIP_HOST=0.0.0.0
+Environment=SKYKIN_WS_SIP_PORT=18081
+ExecStart=/usr/bin/python3 /opt/skykin/app/docker/ws-sip/skykin_ws_sip.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

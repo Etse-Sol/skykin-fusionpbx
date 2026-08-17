@@ -5386,10 +5386,13 @@ window.sipBridge.makeCall = function(number) {
                 onProgress: function() {
                     window.setSipStatus && window.setSipStatus('calling', 'Ringing ' + number);
                     window.startRingback && window.startRingback();
+                    enableSenders(inv);
                 },
                 onAccept: function() {
                     window.stopRingback && window.stopRingback();
                     window.startCallUI && window.startCallUI(number);
+                    enableSenders(inv);
+                    attachAudio(inv);
                 }
             }
         }).catch(function(err) {

@@ -209,25 +209,59 @@ function skykin_pdo_fusionpbx(): PDO {
 	static $db = null;
 	if ($db !== null) return $db;
 
-	// ── Read from resources/config.php (single source of truth) ──────────────
-	// Defaults to the known production host so the app works even if config.php
-	// is temporarily absent (a misconfiguration should be loud, not silent).
-	$h  = '192.168.1.10';
-	$p  = '5432';
-	$n  = 'fusionpbx';
-	$u  = 'fusionpbx';
-	$pw = '';
+	$h  = getenv('DB_HOST') ?: 'db';
+	$p  = getenv('DB_PORT') ?: '5432';
+	$n  = getenv('DB_NAME') ?: 'fusionpbx';
+	$u  = getenv('DB_USER') ?: 'fusionpbx';
+	$pw = getenv('DB_PASSWORD') !== false ? (string)getenv('DB_PASSWORD') : '';
 
-	$fpbxConfig = dirname(__DIR__, 2) . '/resources/config.php';
-	if (is_file($fpbxConfig)) {
-		// resources/config.php defines $db_host, $db_port, $db_name,
-		// $db_username, $db_password — same variables read by the ticket portal.
-		@include $fpbxConfig;
-		if (!empty($db_host))     $h  = $db_host;
-		if (!empty($db_port))     $p  = $db_port;
-		if (!empty($db_name))     $n  = $db_name;
-		if (!empty($db_username)) $u  = $db_username;
-		if (isset($db_password))  $pw = $db_password;
+	$conf = '/etc/fusionpbx/config.conf';
+	if (is_file($conf)) {
+		foreach (file($conf) as $line) {
+			$line = trim($line);
+			if ($line === '' || $line[0] === '#') {
+				continue;
+			}
+			if (strpos($line, '=') === false) {
+				continue;
+			}
+			[$k, $v] = array_map('trim', explode('=', $line, 2));
+			if ($k === 'database.0.host') {
+				$h = $v;
+			}
+			if ($k === 'database.0.port') {
+				$p = $v;
+			}
+			if ($k === 'database.0.name') {
+				$n = $v;
+			}
+			if ($k === 'database.0.username') {
+				$u = $v;
+			}
+			if ($k === 'database.0.password') {
+				$pw = $v;
+			}
+		}
+	} else {
+		$fpbxConfig = dirname(__DIR__, 2) . '/resources/config.php';
+		if (is_file($fpbxConfig)) {
+			@include $fpbxConfig;
+			if (!empty($db_host)) {
+				$h = $db_host;
+			}
+			if (!empty($db_port)) {
+				$p = $db_port;
+			}
+			if (!empty($db_name)) {
+				$n = $db_name;
+			}
+			if (!empty($db_username)) {
+				$u = $db_username;
+			}
+			if (isset($db_password)) {
+				$pw = $db_password;
+			}
+		}
 	}
 
 	// ── Single direct connection attempt ─────────────────────────────────────
