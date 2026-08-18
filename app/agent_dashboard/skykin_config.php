@@ -675,20 +675,105 @@ function skykin_log_path(string $name): string {
 	return sys_get_temp_dir() . '/skykin_' . $name;
 }
 
+function skykin_ensure_settings_table(PDO $db): void {
+	$db->exec("CREATE TABLE IF NOT EXISTS skykin_settings (
+		setting_key VARCHAR(64) PRIMARY KEY,
+		setting_value TEXT NOT NULL,
+		updated_at TIMESTAMP DEFAULT NOW(),
+		updated_by VARCHAR(255)
+	)");
+}
+
+function skykin_setting_get(string $key, string $default = ''): string {
+	static $cache = [];
+	if (array_key_exists($key, $cache)) {
+		return $cache[$key];
+	}
+	try {
+		$db = skykin_pdo_fusionpbx();
+		skykin_ensure_settings_table($db);
+		$s = $db->prepare('SELECT setting_value FROM skykin_settings WHERE setting_key = :k');
+		$s->execute([':k' => $key]);
+		$v = $s->fetchColumn();
+		$cache[$key] = ($v === false) ? $default : (string) $v;
+	} catch (Throwable $e) {
+		$cache[$key] = $default;
+	}
+	return $cache[$key];
+}
+
+function skykin_setting_set(string $key, string $value, string $by = ''): void {
+	$db = skykin_pdo_fusionpbx();
+	skykin_ensure_settings_table($db);
+	$s = $db->prepare(
+		"INSERT INTO skykin_settings (setting_key, setting_value, updated_at, updated_by)
+		 VALUES (:k, :v, NOW(), :by)
+		 ON CONFLICT (setting_key) DO UPDATE
+		 SET setting_value = EXCLUDED.setting_value,
+		     updated_at = NOW(),
+		     updated_by = EXCLUDED.updated_by"
+	);
+	$s->execute([':k' => $key, ':v' => $value, ':by' => $by]);
+}
+
+/** Minutes of no mouse/keyboard/call before logout. 0 = disabled. */
+function skykin_idle_timeout_minutes(): int {
+	$n = (int) skykin_setting_get('session_idle_minutes', '30');
+	if ($n < 0) {
+		$n = 0;
+	}
+	if ($n > 1440) {
+		$n = 1440;
+	}
+	return $n;
+}
+
+function skykin_session_clear_auth(): void {
+	$_SESSION['authorized'] = false;
+	unset($_SESSION['user_uuid'], $_SESSION['authorized'], $_SESSION['user']);
+}
+
+function skykin_session_enforce_idle(): void {
+	if (empty($_SESSION['authorized']) && empty($_SESSION['user_uuid'])) {
+		return;
+	}
+	$minutes = skykin_idle_timeout_minutes();
+	if ($minutes <= 0) {
+		return;
+	}
+	$last = (int) ($_SESSION['session']['last_activity'] ?? 0);
+	if ($last <= 0) {
+		$_SESSION['session']['last_activity'] = time();
+		return;
+	}
+	if ((time() - $last) > ($minutes * 60)) {
+		skykin_session_clear_auth();
+	}
+}
+
+function skykin_session_touch(): void {
+	if (empty($_SESSION['authorized']) && empty($_SESSION['user_uuid'])) {
+		return;
+	}
+	$_SESSION['session']['last_activity'] = time();
+}
+
 /**
  * Emit window.SKYKIN = {...} for dashboard JS.
  */
 function skykin_js_bootstrap(): string {
 	$c = skykin_config();
 	$payload = [
-		'domain'            => $c['domain'],
-		'httpHost'          => $c['http_host'],
-		'sipServer'         => $c['sip_server'],
-		'ahununuUrl'        => $c['ahununu_url'],
-		'recordingsApiBase' => rtrim((string)$c['recordings_api_base'], '/'),
-		'socketIoUrl'       => rtrim((string)$c['socket_io_url'], '/'),
-		'smsEnabled'        => !empty($c['sms_enabled']),
-		'wssPath'           => $c['wss_path'],
+		'domain'              => $c['domain'],
+		'httpHost'            => $c['http_host'],
+		'sipServer'           => $c['sip_server'],
+		'ahununuUrl'          => $c['ahununu_url'],
+		'recordingsApiBase'   => rtrim((string)$c['recordings_api_base'], '/'),
+		'socketIoUrl'         => rtrim((string)$c['socket_io_url'], '/'),
+		'smsEnabled'          => !empty($c['sms_enabled']),
+		'wssPath'             => $c['wss_path'],
+		'idleTimeoutMinutes'  => skykin_idle_timeout_minutes(),
+		'idlePingUrl'         => 'session_ping.php',
 	];
 	return 'window.SKYKIN=' . json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS) . ';';
 }
@@ -722,7 +807,11 @@ function skykin_user_in_groups(array $allowed): bool {
  * @param bool $json  API-style JSON 401 instead of redirect
  */
 function skykin_require_login(bool $json = false): void {
+	skykin_session_enforce_idle();
 	if (!empty($_SESSION['user_uuid']) && !empty($_SESSION['authorized'])) {
+		if (!$json) {
+			skykin_session_touch();
+		}
 		return;
 	}
 	if ($json) {

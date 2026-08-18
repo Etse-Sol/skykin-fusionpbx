@@ -840,5 +840,9 @@ async function loadAll() {
 // Initial load
 loadAll();
 </script>
+<script>
+<?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
 </body>
 </html>

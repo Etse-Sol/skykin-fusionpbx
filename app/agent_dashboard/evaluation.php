@@ -466,7 +466,9 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 
 <script>
 <?php echo skykin_js_bootstrap(); ?>
-
+</script>
+<script src="idle_watch.js?v=20260818"></script>
+<script>
 const DOMAIN = '<?php echo $domain; ?>';
 const EVALUATOR = '<?php echo htmlspecialchars($logged_in_user); ?>';
 const scores = { greeting:0, knowledge:0, resolution:0, tone:0, procedure:0, closing:0 };

@@ -45,6 +45,9 @@ FS_OUTBOUND_PROXY="${FS_OUTBOUND_PROXY:-}"
 FS_OUTBOUND_USERNAME="${FS_OUTBOUND_USERNAME:-}"
 FS_OUTBOUND_PASSWORD="${FS_OUTBOUND_PASSWORD:-}"
 FS_OUTBOUND_CID="${FS_OUTBOUND_CID:-${FS_OUTBOUND_USERNAME}}"
+# Second Ethio identity (DID 756). Agents prefix the number with 756 to use it.
+FS_OUTBOUND_GATEWAY2="${FS_OUTBOUND_GATEWAY2:-SIP2}"
+FS_OUTBOUND_CID2="${FS_OUTBOUND_CID2:-+251111138756}"
 # true only if the carrier requires REGISTER; IP trunks must stay false.
 FS_OUTBOUND_REGISTER="${FS_OUTBOUND_REGISTER:-false}"
 # IMS / digest extras. Leave empty for a plain IP trunk (proxy-only).
@@ -561,12 +564,20 @@ DPEOF
     # Carrier later asked SDP 8 0 101 (PCMA,PCMU,telephone-event) with AMR
     # still offered — switch the string to ^^:PCMA:PCMU:AMR@8000h@20i if they
     # require that order. No send_silence_when_idle (it blocked agent audio).
-    BLEG_RTP="origination_uuid=\${bleg_uuid},absolute_codec_string=^^:AMR@8000h@20i:PCMA:PCMU,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,sip_session_expires=180,sip_force_session_timer=true"
+    # Ethio SDP order 8 0 101, keep AMR (PT 102) but not first.
+    BLEG_RTP="origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,sip_session_expires=180,sip_force_session_timer=true"
     if [ -n "$FS_LAN_RTP_IP" ]; then
       BLEG_RTP="${BLEG_RTP},rtp_advertise_ip=${FS_LAN_RTP_IP},include_external_ip=false"
     fi
     if [ -n "$FS_OUTBOUND_CID" ]; then
       BLEG_RTP="${BLEG_RTP},origination_caller_id_number=${FS_OUTBOUND_CID},origination_caller_id_name=${FS_OUTBOUND_CID}"
+    fi
+    BLEG_RTP2="${BLEG_RTP}"
+    if [ -n "$FS_OUTBOUND_CID2" ]; then
+      BLEG_RTP2="$(printf '%s' "$BLEG_RTP" | sed "s/origination_caller_id_number=[^,]*/origination_caller_id_number=${FS_OUTBOUND_CID2}/;s/origination_caller_id_name=[^,]*/origination_caller_id_name=${FS_OUTBOUND_CID2}/")"
+      if ! printf '%s' "$BLEG_RTP2" | grep -q origination_caller_id_number; then
+        BLEG_RTP2="${BLEG_RTP2},origination_caller_id_number=${FS_OUTBOUND_CID2},origination_caller_id_name=${FS_OUTBOUND_CID2}"
+      fi
     fi
     OUT_PRE="${RTP_ADV}
       <action application=\"set\" data=\"hangup_after_bridge=true\"/>
@@ -578,6 +589,20 @@ ${CDR_VARS}
       <action application=\"record_session\" data=\"\${record_path}/\${record_name}\"/>
       <action application=\"set\" data=\"bleg_uuid=\${create_uuid()}\"/>"
     SKYKIN_EXTENSIONS="${SKYKIN_EXTENSIONS}
+
+  <extension name=\"skykin_outbound_756_zero\">
+    <condition field=\"destination_number\" expression=\"^7560([0-9]{9})\$\">
+${OUT_PRE}
+      <action application=\"bridge\" data=\"{${BLEG_RTP2}}sofia/gateway/${FS_OUTBOUND_GATEWAY2}/+251\$1\"/>
+    </condition>
+  </extension>
+
+  <extension name=\"skykin_outbound_756_nozero\">
+    <condition field=\"destination_number\" expression=\"^756(9[0-9]{8})\$\">
+${OUT_PRE}
+      <action application=\"bridge\" data=\"{${BLEG_RTP2}}sofia/gateway/${FS_OUTBOUND_GATEWAY2}/+251\$1\"/>
+    </condition>
+  </extension>
 
   <extension name=\"skykin_outbound_et_zero\">
     <condition field=\"destination_number\" expression=\"^0([0-9]{9})\$\">
@@ -649,7 +674,6 @@ if [ -n "$FS_INBOUND_DID_REGEX" ] && [ -n "$FS_DOMAIN" ]; then
   <extension name="skykin_inbound_did">
     <condition field="destination_number" expression="${FS_INBOUND_DID_REGEX}">
       <action application="set" data="rtcp_audio_interval_msec=0"/>
-      <action application="set" data="send_silence_when_idle=100"/>
       <action application="set" data="rtp_advertise_ip=${FS_LAN_RTP_IP}"/>
       <action application="set" data="include_external_ip=false"/>
       <action application="set" data="rtp_secure_media=false"/>
@@ -663,6 +687,10 @@ if [ -n "$FS_INBOUND_DID_REGEX" ] && [ -n "$FS_DOMAIN" ]; then
       <action application="set" data="record_path=/var/lib/freeswitch/recordings/${FS_DOMAIN}/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
       <action application="set" data="record_name=\${uuid}.wav"/>
       <action application="set" data="execute_on_answer=record_session \${record_path}/\${record_name}"/>
+      <action application="set" data="ringback=\${us-ring}"/>
+      <action application="set" data="transfer_ringback=\${us-ring}"/>
+      <action application="set" data="instant_ringback=true"/>
+      <action application="ring_ready"/>
       <action application="callcenter" data="${FS_QUEUE_EXT}@${FS_DOMAIN}"/>
     </condition>
   </extension>

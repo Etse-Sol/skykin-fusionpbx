@@ -3,6 +3,8 @@
 require_once __DIR__ . '/session_bootstrap.php';
 require_once __DIR__ . '/skykin_config.php';
 
+skykin_session_enforce_idle();
+
 // Session expired / not logged in → login page (not a 404)
 // API calls get JSON 401 so the browser can redirect cleanly
 if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
@@ -18,6 +20,10 @@ if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
     }
     header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/index.php'));
     exit;
+}
+
+if (!isset($_GET['action'])) {
+    skykin_session_touch();
 }
 
 // Release session lock so background polls / other tabs are not blocked
@@ -125,11 +131,27 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
             foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
                 $dest = (string)$r['destination_number'];
-                $in   = ($dest === $extension || $dest === '8000' || strpos($dest, '+') === 0);
+                $dir  = strtolower((string)($r['direction'] ?? ''));
+                $digits = preg_replace('/\D+/', '', $dest);
+                $in = $dir === 'inbound'
+                    || $dest === $extension
+                    || $dest === '8000'
+                    || strpos($dest, '+') === 0
+                    || (bool)preg_match('/11113875\d$/', (string)$digits);
                 $bill = (int)$r['billsec'];
-                $raw_num = $in
-                    ? ($r['caller_id_number'] ?: $r['caller_destination'] ?: $dest)
-                    : $dest;
+                if ($in) {
+                    $cid = (string)($r['caller_id_number'] ?? '');
+                    $cid_digits = preg_replace('/\D+/', '', $cid);
+                    // Until Ethio sends CLIP, inbound From/RPID is anonymous or our DID/ext.
+                    // Only show a number that looks like a customer mobile.
+                    if (preg_match('/^(0?9\d{8}|2519\d{8})$/', (string)$cid_digits)) {
+                        $raw_num = $cid;
+                    } else {
+                        $raw_num = 'Unknown';
+                    }
+                } else {
+                    $raw_num = $dest;
+                }
                 $clean_num = preg_replace('/@.*$/', '', (string)$raw_num);
                 if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean_num)) {
                     $clean_num = $clean_num !== '' ? $clean_num : 'Unknown';
@@ -3005,6 +3027,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
 <?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
+<script>
 const agentName  = '<?php echo $agent_name; ?>';
 const domain     = '<?php echo $domain; ?>';
 const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB

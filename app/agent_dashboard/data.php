@@ -195,9 +195,24 @@ try {
         $recent_rows = $recent_stmt->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($recent_rows as $r) {
-            $is_inbound = ($r['destination_number'] == $extension);
+            $digits = preg_replace('/\D+/', '', (string)$r['destination_number']);
+            $is_inbound = (strtolower((string)($r['direction'] ?? '')) === 'inbound')
+                || ($r['destination_number'] == $extension)
+                || ($r['destination_number'] == '8000')
+                || (strpos((string)$r['destination_number'], '+') === 0)
+                || (bool)preg_match('/11113875\d$/', (string)$digits);
             $type = $is_inbound ? 'Inbound' : 'Outbound';
-            $number = $is_inbound ? $r['caller_id_number'] : $r['destination_number'];
+            if ($is_inbound) {
+                $cid = (string)($r['caller_id_number'] ?? '');
+                $cid_digits = preg_replace('/\D+/', '', $cid);
+                if (preg_match('/^(0?9\d{8}|2519\d{8})$/', (string)$cid_digits)) {
+                    $number = $cid;
+                } else {
+                    $number = 'Unknown';
+                }
+            } else {
+                $number = $r['destination_number'];
+            }
             $answered = $r['billsec'] > 0;
             $mins = floor($r['billsec'] / 60);
             $secs = $r['billsec'] % 60;

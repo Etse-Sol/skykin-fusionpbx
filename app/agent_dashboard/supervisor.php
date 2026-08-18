@@ -298,11 +298,9 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             $ac   = $activeCalls[$ext] ?? null;
 
             // Determine live status:
-            // 1) Active channel  → incall
-            // 2) FreeSWITCH CC  → status + state (authoritative while agent is in queue)
-            // 3) DB CC status   → Available / On Break / Logged Out
-            // 4) SIP registered → ready
-            // 5) else offline
+            // Not SIP-registered → Offline (ignore stale CC "Available").
+            // Registered + CC Available / Waiting → Ready
+            // Active channel → In Call
             $status = 'offline';
             $cc_label = $cc['agent_status'] ?? 'Unknown';
             $s_map = [
@@ -311,24 +309,29 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 'Idle' => 'ready', 'Waiting' => 'ready', 'Receiving' => 'incall',
                 'In a queue call' => 'incall',
             ];
+            $is_reg = isset($registered[$ext]);
 
-            if ($fsCc) {
+            if ($ac) {
+                $status = 'incall';
+            } elseif (!$is_reg) {
+                $status = 'offline';
+            } elseif ($fsCc) {
                 $fs_status = trim((string)($fsCc['status'] ?? ''));
                 $fs_state  = trim((string)($fsCc['state'] ?? ''));
                 if ($fs_status !== '') $cc_label = $fs_status;
-                // FreeSWITCH state overrides status for in-call / receiving
                 if (stripos($fs_state, 'In a queue call') !== false || stripos($fs_state, 'Receiving') !== false) {
                     $status = 'incall';
                 } elseif ($fs_status !== '') {
                     $status = $s_map[$fs_status] ?? strtolower(str_replace(' ', '_', $fs_status));
+                } else {
+                    $status = 'ready';
                 }
             } elseif ($cc) {
                 $status = $s_map[$cc['agent_status']] ?? strtolower(str_replace(' ', '_', $cc['agent_status']));
-            } elseif (isset($registered[$ext])) {
+            } else {
                 $status = 'ready';
                 $cc_label = 'Registered';
             }
-            if ($ac) $status = 'incall';
 
             $call_duration = 0;
             if ($ac && $ac['start_epoch']) {
@@ -830,6 +833,35 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
     exit;
 }
 
+if (isset($_GET['action']) && $_GET['action'] === 'get_settings') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'ok' => true,
+        'session_idle_minutes' => skykin_idle_timeout_minutes(),
+    ]);
+    exit;
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'save_settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $minutes = (int) ($body['session_idle_minutes'] ?? 0);
+    if ($minutes < 0) {
+        $minutes = 0;
+    }
+    if ($minutes > 1440) {
+        $minutes = 1440;
+    }
+    try {
+        $who = (string) ($_SESSION['username'] ?? '');
+        skykin_setting_set('session_idle_minutes', (string) $minutes, $who);
+        echo json_encode(['ok' => true, 'session_idle_minutes' => $minutes]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1033,6 +1065,25 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 .btn-hangup{grid-column:3 / span 8;background:#c92a3d;border:1px solid #c92a3d;color:#fff;padding:11px 0;border-radius:9px;cursor:pointer;font-size:13px;font-weight:650;display:none}
 .btn-hold,.btn-mute,.btn-keypad{grid-column:span 4;min-height:54px;background:#fff;border:1px solid #dfe5ec;color:#334155;padding:8px 4px;border-radius:9px;cursor:pointer;font-size:11px;font-weight:600;display:none;align-items:center;justify-content:center;flex-direction:column;gap:4px}
 .btn-hold.active,.btn-mute.muted,.btn-keypad.active{background:#eef6ff;border-color:#8eb9e6;color:#0047ab}
+.btn-transfer{grid-column:span 12;min-height:38px;background:#fff;border:1px solid #dfe5ec;color:#334155;border-radius:9px;padding:9px 8px;cursor:pointer;display:none;font-size:12px;font-weight:700}
+.btn-transfer.visible,.btn-transfer.show-xfer{display:block}
+.btn-transfer:hover{background:#eef6ff;border-color:#8eb9e6;color:#0047ab}
+.transfer-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.65);z-index:1100;align-items:center;justify-content:center}
+.transfer-overlay.show{display:flex}
+.transfer-modal{background:#fff;border-radius:14px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}
+.transfer-hdr{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#6366f1,#4f46e5)}
+.transfer-hdr h3{font-size:14px;font-weight:700;color:#fff;margin:0}
+.transfer-hdr button{background:rgba(255,255,255,.2);border:none;cursor:pointer;font-size:16px;color:#fff;width:26px;height:26px;border-radius:50%}
+.transfer-body{padding:16px;display:flex;flex-direction:column;gap:12px;max-height:400px;overflow-y:auto}
+.transfer-ext-row{display:flex;gap:8px;align-items:center}
+.transfer-ext-row input{flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:14px}
+.transfer-ext-row button{background:#6366f1;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700}
+.transfer-agent-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #e9ecef;border-radius:8px;cursor:pointer}
+.transfer-agent-item:hover{background:#f5f3ff;border-color:#6366f1}
+.transfer-agent-name{font-size:13px;font-weight:600;color:#1e293b;display:block}
+.transfer-agent-ext{font-size:11px;color:#64748b}
+.transfer-agent-badge{background:#d1fae5;color:#059669;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px}
+.transfer-loading{text-align:center;color:#888;font-size:13px;padding:20px}
 .call-timer{text-align:center;font-size:22px;font-weight:bold;color:#0047AB;display:none;padding:4px 0}
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:700;align-items:center;justify-content:center}
 .modal-overlay.show{display:flex}
@@ -1122,6 +1173,9 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
         </a>
         <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128100;</span> CRM
+        </a>
+        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('settings');" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+            <span style="font-size:18px">&#9881;</span> Settings
         </a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
@@ -1385,6 +1439,22 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                 </div>
             </div>
         </div>
+
+        <div class="tab-content" id="tab-settings" style="padding:24px;max-width:560px">
+            <h4 style="margin:0 0 8px;color:#333;font-size:16px">Login session</h4>
+            <p style="font-size:13px;color:#666;margin:0 0 18px;line-height:1.5">
+                Agents and supervisors are logged out after this many minutes with no mouse, keyboard, or active call.
+                Background dashboard refresh does not count as activity. Set <strong>0</strong> to disable auto-logout.
+                Closing the browser still ends the session.
+            </p>
+            <label style="display:block;font-size:12px;font-weight:700;color:#555;margin-bottom:6px">Idle logout (minutes)</label>
+            <input type="number" id="idleMinutes" min="0" max="1440" step="1" value="<?php echo (int) skykin_idle_timeout_minutes(); ?>"
+                   style="width:160px;padding:10px 12px;border:1px solid #d0d5dd;border-radius:8px;font-size:14px">
+            <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+                <button class="btn-save-settings" style="width:auto;margin:0;padding:10px 22px" onclick="saveIdleSettings()">Save</button>
+                <span id="idleSaveMsg" style="font-size:12px;color:#64748b"></span>
+            </div>
+        </div>
     </div>
         <div class="tab-content" id="tab-ahununu" style="padding:0;height:700px">
             <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
@@ -1431,6 +1501,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
             <button class="btn-mute" id="btnMute" onclick="toggleMute()">Mute</button>
             <button class="btn-keypad" id="btnKeypad" onclick="toggleCallKeypad()">Keypad</button>
+            <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">Transfer call</button>
         </div>
     </div>
     <div class="dp-panel" id="dpPanel">
@@ -1458,10 +1529,39 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 </div>
 <audio id="remoteAudio" autoplay style="display:none"></audio>
 
+<div id="transferModal" class="transfer-overlay">
+    <div class="transfer-modal">
+        <div class="transfer-hdr">
+            <h3>&#x21AA; Transfer Call</h3>
+            <button type="button" onclick="closeTransferModal()">&#x2715;</button>
+        </div>
+        <div class="transfer-body">
+            <div>
+                <label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:6px">Transfer to Extension</label>
+                <div class="transfer-ext-row">
+                    <input type="tel" id="transferExtInput" placeholder="e.g. 102" maxlength="6"
+                           onkeypress="if(event.key==='Enter') executeManualTransfer()">
+                    <button type="button" onclick="executeManualTransfer()">Transfer</button>
+                </div>
+            </div>
+            <div style="border-top:1px solid #f0f0f0;padding-top:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase">Available Agents</label>
+                    <button type="button" onclick="loadAvailableAgents()" style="font-size:10px;background:none;border:1px solid #ddd;border-radius:4px;padding:2px 8px;cursor:pointer;color:#555">Refresh</button>
+                </div>
+                <div id="transferAgentsList"><div class="transfer-loading">Loading...</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="supToast"></div>
 
 <script>
 <?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
+<script>
 const domain   = '<?php echo $domain; ?>';
 const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') || '';
 const serverExt  = <?php echo json_encode($sup_ext); ?>;
@@ -1836,13 +1936,14 @@ function showTab(name){
     if (panel) panel.classList.add('active');
     const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
     if (btn) btn.classList.add('active');
-    else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+    else if (typeof event !== 'undefined' && event && event.target && event.target.classList) event.target.classList.add('active');
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='settings') loadIdleSettings();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -1862,10 +1963,48 @@ function showTabDirect(name){
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='settings') loadIdleSettings();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
     }
+}
+
+function loadIdleSettings(){
+    fetch('supervisor.php?action=get_settings', {credentials:'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (!d || !d.ok) return;
+            var el = document.getElementById('idleMinutes');
+            if (el) el.value = d.session_idle_minutes;
+        }).catch(function(){});
+}
+
+function saveIdleSettings(){
+    var el = document.getElementById('idleMinutes');
+    var msg = document.getElementById('idleSaveMsg');
+    var minutes = parseInt(el && el.value, 10);
+    if (isNaN(minutes) || minutes < 0) minutes = 0;
+    if (minutes > 1440) minutes = 1440;
+    if (msg) msg.textContent = 'Saving...';
+    fetch('supervisor.php?action=save_settings', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({session_idle_minutes: minutes})
+    }).then(function(r){ return r.json(); }).then(function(d){
+        if (!d || !d.ok) {
+            if (msg) msg.textContent = (d && d.error) ? d.error : 'Save failed';
+            return;
+        }
+        if (el) el.value = d.session_idle_minutes;
+        if (window.SKYKIN) SKYKIN.idleTimeoutMinutes = d.session_idle_minutes;
+        if (msg) msg.textContent = d.session_idle_minutes === 0
+            ? 'Saved. Auto-logout is off.'
+            : 'Saved. Logout after ' + d.session_idle_minutes + ' minutes idle.';
+    }).catch(function(){
+        if (msg) msg.textContent = 'Save failed';
+    });
 }
 
 // ── Init & auto-refresh ────────────────────────────────────────────────────
@@ -2193,6 +2332,8 @@ function startCallUI(number) {
     document.getElementById('btnHold').style.display = 'flex';
     document.getElementById('btnMute').style.display = 'flex';
     document.getElementById('btnKeypad').style.display = 'flex';
+    const btnTransfer = document.getElementById('btnTransfer');
+    if (btnTransfer) { btnTransfer.style.display = 'block'; btnTransfer.classList.add('visible'); }
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number || '';
     document.getElementById('incomingScreen').style.display = 'none';
@@ -2245,6 +2386,8 @@ function endCall() {
     document.getElementById('btnMute').classList.remove('muted');
     document.getElementById('btnKeypad').style.display = 'none';
     document.getElementById('btnKeypad').classList.remove('active');
+    const btnTransferEnd = document.getElementById('btnTransfer');
+    if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
     document.getElementById('btnHold').textContent = 'Hold';
     document.getElementById('btnHold').classList.remove('active');
     document.getElementById('callTimer').style.display = 'none';
@@ -2276,6 +2419,57 @@ function toggleCallKeypad() {
     const panel = document.getElementById('dpPanel');
     const active = btn.classList.toggle('active');
     panel.style.display = active ? 'block' : 'none';
+}
+function openTransferModal() {
+    const modal = document.getElementById('transferModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    const inp = document.getElementById('transferExtInput');
+    if (inp) inp.value = '';
+    loadAvailableAgents();
+}
+function closeTransferModal() {
+    const modal = document.getElementById('transferModal');
+    if (modal) modal.classList.remove('show');
+}
+function loadAvailableAgents() {
+    const myExt = localStorage.getItem('sup_sip_ext') || serverExt || '';
+    const list = document.getElementById('transferAgentsList');
+    if (!list) return;
+    list.innerHTML = '<div class="transfer-loading">Loading available agents...</div>';
+    fetch('index.php?action=get_available_agents&domain=' + encodeURIComponent(domain) + '&my_ext=' + encodeURIComponent(myExt), {credentials:'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(data) {
+            const agents = (data && data.agents) || [];
+            if (!agents.length) {
+                list.innerHTML = '<div class="transfer-loading">No available agents found.</div>';
+                return;
+            }
+            list.innerHTML = agents.map(function(a) {
+                const name = String(a.name || '').replace(/'/g, '\\u0027');
+                return '<div class="transfer-agent-item" onclick="executeTransfer(\'' + a.extension + '\',\'' + name + '\')">'
+                    + '<div><span class="transfer-agent-name">' + (a.name || a.extension) + '</span>'
+                    + '<span class="transfer-agent-ext">Ext. ' + a.extension + '</span></div>'
+                    + '<span class="transfer-agent-badge">Available</span></div>';
+            }).join('');
+        })
+        .catch(function() {
+            list.innerHTML = '<div class="transfer-loading" style="color:#ef4444">Failed to load agents.</div>';
+        });
+}
+function executeTransfer(ext, name) {
+    if (!ext) return;
+    const displayName = name ? name + ' (Ext. ' + ext + ')' : 'Ext. ' + ext;
+    if (!confirm('Transfer current call to ' + displayName + '?')) return;
+    closeTransferModal();
+    if (window.sipBridge && window.sipBridge.transfer) window.sipBridge.transfer(ext);
+    else showToast('Transfer not available: SIP not connected.');
+}
+function executeManualTransfer() {
+    const ext = (document.getElementById('transferExtInput').value || '').trim();
+    if (!ext) { alert('Enter an extension number.'); return; }
+    if (!/^\d{2,6}$/.test(ext)) { alert('Extension must be 2-6 digits.'); return; }
+    executeTransfer(ext, '');
 }
 window.startCallUI = startCallUI;
 window.endCall = endCall;
@@ -2455,6 +2649,26 @@ window.sipBridge.unmute = function() {
 window.sipBridge.sendDtmf = function(tone) {
     if (!session) return;
     try { session.sendDTMF(tone, {duration:100, interToneGap:500}); } catch(e) {}
+};
+window.sipBridge.transfer = function(targetExt) {
+    if (!session) {
+        window.showToast && window.showToast('No active call to transfer.');
+        return;
+    }
+    const targetURI = UserAgent.makeURI('sip:' + targetExt + '@' + pbxDomain());
+    if (!targetURI) {
+        window.showToast && window.showToast('Invalid transfer target: ' + targetExt);
+        return;
+    }
+    session.refer(targetURI)
+        .then(function() {
+            window.showToast && window.showToast('Call transferred to ext. ' + targetExt);
+            session = null;
+            if (window.endCall) window.endCall();
+        })
+        .catch(function(err) {
+            window.showToast && window.showToast('Transfer failed: ' + (err && err.message ? err.message : err));
+        });
 };
 })();
 </script>
