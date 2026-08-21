@@ -62,7 +62,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
              'interceptions'=>0,'internal_help'=>0,'login_count'=>1,'force_signout'=>0,
              'listening_count'=>0,'third_party_count'=>0,'force_advisor_count'=>0,'handle_on_behalf'=>0,
              'ask_help_count'=>0,'call_reason_count'=>0,'queue_waiting'=>0,'agents_online'=>0,
-             'avg_wait'=>0,'sla_rate'=>0,'recent_calls'=>[]];
+             'avg_wait'=>0,'sla_rate'=>0,'recent_calls'=>[],'waiting_callers'=>[]];
 
     try {
         $db = getSkykinDB();
@@ -206,6 +206,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                 $sq->execute([':pat' => $pat]);
                 $data['agent_queues'] = $sq->fetchAll(PDO::FETCH_ASSOC) ?: [];
             } catch(Exception $e){ $data['agent_queues_err'] = $e->getMessage(); }
+        }
+
+        $queue_exts = [];
+        foreach (($data['agent_queues'] ?? []) as $q) {
+            if (!empty($q['queue_extension'])) {
+                $queue_exts[] = (string)$q['queue_extension'];
+            }
+        }
+        try {
+            $data['waiting_callers'] = skykin_cc_waiting_callers($domain, $queue_exts);
+            $data['queue_waiting'] = count($data['waiting_callers']);
+        } catch (Throwable $ignored) {
+            $data['waiting_callers'] = [];
         }
     } catch (Exception $e) { $data['db_error']=$e->getMessage(); }
 
@@ -1066,6 +1079,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
                 $res2 = $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
                 $esl_state_resp = is_array($res2) ? ($res2['$'] ?? implode(' | ', $res2)) : (string)$res2;
             }
+            // A leftover reject/busy delay leaves ready_time in the future, so
+            // longest-idle skips this agent even after they click Ready.
+            if ($new_status === 'Available') {
+                $esl->request('api callcenter_config agent set wrap_up_time ' . $agent_uuid . ' 0');
+                $esl->request('api callcenter_config agent set ready_time ' . $agent_uuid . ' 0');
+            }
         }
 
         echo json_encode([
@@ -1217,6 +1236,74 @@ if (isset($_GET['action']) && $_GET['action'] === 'cancel_leave_request' && $_SE
         echo json_encode(['ok' => true, 'updated' => $s->rowCount()]);
     } catch (Exception $e) {
         echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
+// ── API: Agent blacklist (block unwanted callers) ──────────────────────────
+if (isset($_GET['action']) && in_array($_GET['action'], ['blacklist_list', 'blacklist_add', 'blacklist_del'], true)) {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $domain_ = skykin_domain_param($_GET['domain'] ?? ($_POST['domain'] ?? null));
+    $agent_  = trim((string)($_SESSION['username'] ?? ($_GET['agent'] ?? '')));
+    if ($_GET['action'] === 'blacklist_list') {
+        $rows = [];
+        foreach (skykin_blacklist_load() as $r) {
+            if (strcasecmp((string)($r['domain'] ?? ''), $domain_) === 0) {
+                $rows[] = $r;
+            }
+        }
+        echo json_encode(['ok' => true, 'rows' => $rows]);
+        exit;
+    }
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    if ($_GET['action'] === 'blacklist_add') {
+        $number = trim((string)($body['number'] ?? $_GET['number'] ?? ''));
+        $reason = trim((string)($body['reason'] ?? 'blocked by agent'));
+        $digits = skykin_blacklist_digits($number);
+        if (strlen($digits) < 7) {
+            echo json_encode(['ok' => false, 'error' => 'Enter a valid phone number']);
+            exit;
+        }
+        if (skykin_blacklist_match($number, $domain_)) {
+            $rows = [];
+            foreach (skykin_blacklist_load() as $r) {
+                if (strcasecmp((string)($r['domain'] ?? ''), $domain_) === 0) {
+                    $rows[] = $r;
+                }
+            }
+            echo json_encode(['ok' => true, 'already' => true, 'rows' => $rows]);
+            exit;
+        }
+        $rows = skykin_blacklist_load();
+        $rows[] = [
+            'domain' => $domain_,
+            'digits' => $digits,
+            'display' => $number,
+            'reason' => $reason,
+            'agent' => $agent_,
+            'ts' => time(),
+        ];
+        $saved = skykin_blacklist_save($rows);
+        echo json_encode([
+            'ok' => $saved,
+            'digits' => $digits,
+            'rows' => $saved ? skykin_blacklist_load() : [],
+            'error' => $saved ? '' : 'Could not save blacklist',
+        ]);
+        exit;
+    }
+    if ($_GET['action'] === 'blacklist_del') {
+        $digits = skykin_blacklist_digits((string)($body['number'] ?? $_GET['number'] ?? ''));
+        $kept = [];
+        foreach (skykin_blacklist_load() as $r) {
+            if (($r['digits'] ?? '') === $digits && (strcasecmp((string)($r['domain'] ?? ''), $domain_) === 0 || ($r['domain'] ?? '') === '*')) {
+                continue;
+            }
+            $kept[] = $r;
+        }
+        echo json_encode(['ok' => skykin_blacklist_save($kept)]);
+        exit;
     }
     exit;
 }
@@ -1449,7 +1536,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUES
     exit;
 }
 
-$agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
+$agent_name = trim((string)($_GET['agent'] ?? ''));
+if ($agent_name === '') {
+    $agent_name = trim((string)($_SESSION['username'] ?? 'Agent'));
+}
+$agent_name = htmlspecialchars($agent_name);
 $domain = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 
 // Detect if logged-in user is supervisor/admin
@@ -1641,7 +1732,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ?? Layout ?? */
-.main { margin-top: 64px; margin-left: 240px; padding: 20px; margin-bottom: 20px; transition: margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+.main { margin-top: 64px; margin-left: 240px; padding: 20px; margin-bottom: 20px; transition: margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1), margin-right 0.3s ease; }
 .main.sidebar-collapsed { margin-left: 0; }
 @media (max-width: 768px) {
     .main { margin-left: 0 !important; }
@@ -1729,6 +1820,18 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .metric-val.good { color: #28a745; }
 .metric-val.warn { color: #fd7e14; }
 .metric-val.bad  { color: #dc3545; }
+
+.wait-list { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #eee; }
+.wait-list-title { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; }
+.wait-empty { font-size: 12px; color: #aaa; padding: 6px 0; }
+.wait-note { font-size: 11px; color: #aaa; margin-top: 8px; }
+.wait-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f5f5f5; font-size: 13px; }
+.wait-row:last-child { border-bottom: none; }
+.wait-pos { width: 20px; height: 20px; border-radius: 50%; background: #fff4e5; color: #fd7e14; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.wait-num { font-weight: 700; color: #333; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wait-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.wait-time { color: #fd7e14; font-weight: 700; font-size: 12px; }
+.wait-state { font-size: 10px; font-weight: 700; color: #888; background: #f4f6f8; border-radius: 10px; padding: 2px 7px; }
 
 /* ?? Progress bars ?? */
 .progress-wrap { margin-top: 6px; }
@@ -1839,8 +1942,9 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .pp-body { flex-shrink: 0; padding: 0; }
 .phone-popup.call-active .pp-body { padding: 12px 16px; }
 .dp-panel { flex-shrink: 0; }
-/* Shift main content when panel is open */
-body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
+/* Shift dashboard content when the dial pad is open (same as supervisor). */
+body.phone-open .main,
+body.phone-open .footer { margin-right: 300px; transition: margin-right 0.3s ease; }
 .pp-header {
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     color: white; padding: 14px 16px;
@@ -2425,6 +2529,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <button class="sb-item"        id="sbEscalationBtn"  onclick="sidebarNav('escalation')">New Ticket</button>
         <button class="sb-item"        id="sbLookupBtn"      onclick="sidebarNav('lookup')">Customer Lookup</button>
         <button class="sb-item"        id="sbCallbacksBtn"   onclick="sidebarNav('callbacks')">Callbacks</button>
+        <button class="sb-item"        id="sbBlacklistBtn"   onclick="sidebarNav('blacklist')">Blacklist</button>
         <button class="sb-item"        id="sbAhununuBtn"     onclick="sidebarNav('ahununu')">Ahununu.com</button>
 
         <?php if ($is_supervisor): ?>
@@ -2456,6 +2561,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
             <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
             <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
+            <button class="tab-btn" id="tabBlacklistBtn" onclick="switchTab('blacklist')">Blacklist</button>
             <button class="tab-btn" id="tabAhununuBtn" onclick="switchTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
@@ -2525,6 +2631,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="metric-row"><span class="metric-name">Avg Wait Time</span><span class="metric-val" id="avgWait">--</span></div>
             <div class="metric-row"><span class="metric-name">My Position</span><span class="metric-val" id="myPosition">Active</span></div>
             <div class="metric-row"><span class="metric-name">SLA (Target &lt;30s)</span><span class="metric-val good" id="slaRate">--%</span></div>
+            <div class="wait-list">
+                <div class="wait-list-title">Waiting customers</div>
+                <div id="waitingCallers"><div class="wait-empty">No callers waiting</div></div>
+                <div class="wait-note">Next caller is assigned automatically. This list is for visibility only.</div>
+            </div>
         </div>
     </div>
 
@@ -2787,6 +2898,23 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             </div>
         </div>
 
+        <!-- Blacklist Tab -->
+        <div class="tab-panel" id="tabBlacklist" style="display:none">
+            <div class="section-box" style="padding:16px">
+                <div class="section-title"><span class="dot" style="background:#c62828"></span> Blocked callers</div>
+                <p style="font-size:13px;color:#666;margin:0 0 12px">These numbers will not ring agents. Use Remove to allow them again.</p>
+                <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+                    <input type="tel" id="blAddNumber" placeholder="Number e.g. 0902925776" style="flex:1;min-width:180px;padding:8px;border:1px solid #ddd;border-radius:6px">
+                    <input type="text" id="blAddReason" placeholder="Reason" style="flex:1;min-width:140px;padding:8px;border:1px solid #ddd;border-radius:6px">
+                    <button type="button" class="btn-filter" onclick="addBlacklistManual()">Block number</button>
+                </div>
+                <table class="data-table" style="width:100%">
+                    <thead><tr><th>Number</th><th>Reason</th><th>Added by</th><th></th></tr></thead>
+                    <tbody id="blacklistBody"><tr><td colspan="4" class="rec-empty">Loading…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- New Ticket Tab -->
         <div class="tab-panel" id="tabEscalation" style="display:none">
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
@@ -2974,10 +3102,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">&#128222; Incoming Call</div>
             <div id="incomingNumber" style="font-size:28px;font-weight:bold;color:#0047AB;margin-bottom:8px">Unknown</div>
             <div style="font-size:12px;color:#666;margin-bottom:24px" id="incomingCidName"></div>
-            <div style="display:flex;gap:12px;justify-content:center;">
+            <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
                 <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Answer</button>
                 <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Decline</button>
             </div>
+            <button type="button" onclick="blockCurrentCaller()" style="margin-top:14px;background:#fff;color:#c62828;border:1px solid #ef9a9a;padding:8px 16px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer">Block this number</button>
         </div>
         <div id="callTimer" class="call-timer">00:00</div>
         <!-- Hidden input syncs with dial pad display -->
@@ -2993,6 +3122,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="btn-keypad" id="btnKeypad" onclick="toggleCallKeypad()">Keypad</button>
             <button class="btn-phone-action" id="btnPhoneSms" onclick="openSmsModalFromPhone()">Message</button>
             <button class="btn-phone-action" id="btnPhoneCallback" onclick="openCallbackModalFromPhone()">Callback</button>
+            <button class="btn-phone-action" id="btnBlockCaller" onclick="blockCurrentCaller()">Block</button>
             <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">Transfer call</button>
         </div>
     </div>
@@ -3403,7 +3533,7 @@ function sidebarNav(tab) {
         dashboard: 'sbDashboardBtn', callHistory: 'sbCallHistoryBtn',
         recordings: 'sbRecordingsBtn', acw: 'sbAcwBtn',
         escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn',
-        callbacks: 'sbCallbacksBtn', ahununu: 'sbAhununuBtn'
+        callbacks: 'sbCallbacksBtn', blacklist: 'sbBlacklistBtn', ahununu: 'sbAhununuBtn'
     };
     document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
     const activeBtn = document.getElementById(tabToSb[tab]);
@@ -3448,7 +3578,7 @@ function closeCrmPanel() {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks','ahununu'].forEach(t => {
+    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks','blacklist','ahununu'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
@@ -3462,6 +3592,7 @@ function switchTab(tab) {
     if (tab === 'acw')        fetchAcwHistory();
     if (tab === 'escalation') fetchCases();
     if (tab === 'callbacks')  fetchCallbacks();
+    if (tab === 'blacklist')  fetchBlacklist();
     if (tab === 'ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -3678,7 +3809,7 @@ function getEmptyData() {
         login_count:1, force_signout:0, listening_count:0, third_party_count:0,
         force_advisor_count:0, handle_on_behalf:0, ask_help_count:0, call_reason_count:0,
         queue_waiting:0, agents_online:0, avg_wait:0, sla_rate:0,
-        recent_calls:[]
+        recent_calls:[], waiting_callers:[]
     };
 }
 
@@ -3763,6 +3894,31 @@ function setTxt(id, val) {
     if (el) el.textContent = val;
 }
 
+function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+    });
+}
+
+function renderWaitingCallers(list) {
+    const el = document.getElementById('waitingCallers');
+    if (!el) return;
+    if (!list.length) {
+        el.innerHTML = '<div class="wait-empty">No callers waiting</div>';
+        return;
+    }
+    el.innerHTML = list.map(function(c, i) {
+        const number = escHtml(c.number || 'Unknown');
+        const wait = escHtml(c.wait_fmt || (c.wait_seconds || 0) + 's');
+        const state = escHtml(c.state || 'Waiting');
+        return '<div class="wait-row">'
+            + '<span class="wait-pos">' + (i + 1) + '</span>'
+            + '<span class="wait-num">' + number + '</span>'
+            + '<span class="wait-meta"><span class="wait-time">' + wait + '</span>'
+            + '<span class="wait-state">' + state + '</span></span></div>';
+    }).join('');
+}
+
 function updateDashboard(d) {
     setTxt('totalCalls', d.total_calls || 0);
     setTxt('avgDuration', formatDurationHMS(d.avg_duration || 0));
@@ -3800,6 +3956,7 @@ function updateDashboard(d) {
     setTxt('agentsOnline', d.agents_online || 0);
     setTxt('avgWait', (d.avg_wait || 0) + 's');
     setTxt('slaRate', (d.sla_rate || 0) + '%');
+    renderWaitingCallers(d.waiting_callers || []);
 
     const answerRate = d.total_calls > 0 ? Math.round((d.answered_calls / d.total_calls) * 100) : 0;
     const answerRateEl = document.getElementById('answerRate');
@@ -4062,6 +4219,7 @@ function setSipStatus(state, text) {
 
 function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
+    window.lastIncomingNumber = callerNumber || '';
     window._callEnded = false;
     try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
     document.getElementById('incomingNumber').textContent = callerNumber;
@@ -4072,6 +4230,7 @@ function handleIncoming(callerNumber) {
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
     startRingtone();
 }
+window.handleIncoming = handleIncoming;
 
 // A cancelled / missed ring must not open ACW or hide a newer incoming call.
 function resetMissedRing() {
@@ -4094,7 +4253,8 @@ function declineCall() {
     document.getElementById('incomingScreen').style.display = 'none';
     document.getElementById('dpPanel').style.display        = '';
     stopRingtone();
-    if (sipBridge.hangup) sipBridge.hangup();
+    if (sipBridge.decline) sipBridge.decline();
+    else if (sipBridge.hangup) sipBridge.hangup();
     currentSession = null;
 }
 
@@ -4231,6 +4391,116 @@ function hangupCall() {
     if (sipBridge.hangup) sipBridge.hangup();
     // Immediately reset the UI — do not wait for the async SIP Terminated event
     endCall();
+}
+
+function currentCallerNumber() {
+    const el = document.getElementById('incomingNumber');
+    const incoming = ((el && el.textContent) || '').trim();
+    if (incoming && incoming !== 'Unknown') return incoming;
+    const last = String(window.lastIncomingNumber || '').trim();
+    if (last && last !== 'Unknown') return last;
+    const st = ((document.getElementById('sipStatusText') || {}).textContent || '');
+    const m = st.match(/(\+?\d{7,15})/);
+    if (m) return m[1];
+    const wait = document.querySelector('.wait-num');
+    if (wait && (wait.textContent || '').trim()) return wait.textContent.trim();
+    return String(window.lastDialedNumber || '').trim();
+}
+
+function blockCurrentCaller() {
+    const number = currentCallerNumber();
+    if (!number) {
+        showToast('No caller number to block');
+        return;
+    }
+    if (!confirm('Block ' + number + '? They will not ring agents on this line again.')) return;
+    declineCall();
+    const fd = new FormData();
+    fd.append('action', 'add');
+    fd.append('ajax', '1');
+    fd.append('number', number);
+    fd.append('reason', 'blocked by agent');
+    fd.append('domain', domain);
+    fetch('block.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+    }).then(r => r.json()).then(d => {
+        if (d && d.ok) {
+            showToast('Blocked ' + number);
+            if (d.rows) renderBlacklist(d.rows);
+            else fetchBlacklist();
+        } else {
+            showToast((d && d.error) || 'Call declined; could not save block');
+        }
+    }).catch(() => showToast('Call declined; could not save block'));
+}
+
+function renderBlacklist(rows) {
+    const body = document.getElementById('blacklistBody');
+    if (!body) return;
+    rows = rows || [];
+    if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="4" class="rec-empty">No blocked numbers.</td></tr>';
+        return;
+    }
+    body.innerHTML = rows.map(r =>
+        '<tr><td>' + (r.display || r.digits) + '</td><td>' + (r.reason || '') + '</td><td>' + (r.agent || '') +
+        '</td><td><button type="button" class="btn-filter-clear" onclick="delBlacklist(\'' +
+        String(r.digits || '').replace(/'/g, '') + '\')">Remove</button></td></tr>'
+    ).join('');
+}
+
+function fetchBlacklist() {
+    fetch('blacklist.php?json=1&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' })
+        .then(r => r.json()).then(d => {
+            if (d && d.error && !(d.rows && d.rows.length)) {
+                const body = document.getElementById('blacklistBody');
+                if (body) body.innerHTML = '<tr><td colspan="4" class="rec-empty">' + d.error + '</td></tr>';
+                return;
+            }
+            renderBlacklist((d && d.rows) || []);
+        })
+        .catch(err => {
+            const body = document.getElementById('blacklistBody');
+            if (body) body.innerHTML = '<tr><td colspan="4" class="rec-empty">Could not load blacklist</td></tr>';
+        });
+}
+
+function addBlacklistManual() {
+    const number = (document.getElementById('blAddNumber') || {}).value || '';
+    const reason = (document.getElementById('blAddReason') || {}).value || 'blocked by agent';
+    const fd = new FormData();
+    fd.append('action', 'add');
+    fd.append('ajax', '1');
+    fd.append('number', number);
+    fd.append('reason', reason);
+    fd.append('domain', domain);
+    fetch('blacklist.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+    }).then(r => r.json()).then(d => {
+        if (d && d.ok) {
+            document.getElementById('blAddNumber').value = '';
+            renderBlacklist((d && d.rows) || []);
+            fetchBlacklist();
+            showToast('Number blocked');
+        } else showToast((d && d.error) || 'Could not block');
+    });
+}
+
+function delBlacklist(number) {
+    const fd = new FormData();
+    fd.append('action', 'del');
+    fd.append('ajax', '1');
+    fd.append('number', number);
+    fd.append('domain', domain);
+    fetch('blacklist.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+    }).then(r => r.json()).then(() => fetchBlacklist());
 }
 
 function toggleHold() {
@@ -5350,6 +5620,15 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
     ua.delegate = {
         onInvite(inv) {
+            // Already talking (or outbound still connecting): 486 so the
+            // other Ready agent can take this inbound. Do not steal the live call.
+            if (session && session !== inv
+                && (session.state === SessionState.Established
+                    || (session.state === SessionState.Establishing
+                        && !(session instanceof Invitation)))) {
+                try { inv.reject({ statusCode: 486 }); } catch (e) {}
+                return;
+            }
             if (session && session !== inv
                 && session.state !== SessionState.Established
                 && session.state !== SessionState.Terminated) {
@@ -5366,7 +5645,13 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
-            try { inv.progress(); } catch (e) { console.warn('progress failed', e); }
+            // 180 without SDP. Do not attach WebRTC media (183/SDP) or Ethio
+            // starts the caller timer before Answer. Swallow progress errors:
+            // a failed 100rel/ICE path would 480 the INVITE and the incoming
+            // ring would vanish from the dashboard.
+            try {
+                inv.progress({ statusCode: 180 }).catch(function () {});
+            } catch (e) {}
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }
@@ -5443,6 +5728,23 @@ window.sipBridge.hangup = function() {
             session instanceof Invitation ? session.reject() : session.cancel?.();
         } else { session.bye(); }
     } catch(e) {}
+    session = null;
+};
+
+// Decline an inbound ring with 603 so FreeSWITCH aborts the whole caller
+// (does not roll the call to the other agent). 486 = already in a call.
+window.sipBridge.decline = function() {
+    if (!session) return;
+    try {
+        if (session instanceof Invitation
+            && (session.state === SessionState.Initial
+                || session.state === SessionState.Establishing)) {
+            session.reject({ statusCode: 603 });
+        } else if (window.sipBridge.hangup) {
+            window.sipBridge.hangup();
+            return;
+        }
+    } catch (e) {}
     session = null;
 };
 

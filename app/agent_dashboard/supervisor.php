@@ -374,6 +374,7 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
     try {
         $db = getDB();
         $queues = [];
+        $waiting_callers = [];
         try {
             // FusionPBX uses v_call_center_queues (not v_call_queues). Waiting
             // callers live in FreeSWITCH mod_callcenter, not a Postgres table.
@@ -387,29 +388,25 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             $s->execute([':d' => $domain]);
             $queue_rows = $s->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+            $queue_exts = [];
             foreach ($queue_rows as $qr) {
-                $waiting = 0;
-                $qkey = trim((string)($qr['extension'] ?? ''));
-                if ($qkey !== '') {
-                    $qkey .= '@' . $domain;
-                    $members = skykin_fs_api('callcenter_config queue list members ' . $qkey);
-                    foreach (preg_split("/\r\n|\n|\r/", $members) as $line) {
-                        $line = trim($line);
-                        if ($line === '' || stripos($line, '+OK') === 0) {
-                            continue;
-                        }
-                        if (stripos($line, 'queue|') === 0 || stripos($line, 'name|') === 0) {
-                            continue; // header
-                        }
-                        if (strpos($line, '|') !== false) {
-                            $waiting++;
-                        }
-                    }
+                $qext = trim((string)($qr['extension'] ?? ''));
+                if ($qext !== '') {
+                    $queue_exts[] = $qext;
                 }
+            }
+            $waiting_callers = skykin_cc_waiting_callers($domain, $queue_exts);
+            $by_queue = [];
+            foreach ($waiting_callers as $c) {
+                $qe = (string)($c['queue'] ?? '');
+                $by_queue[$qe] = ($by_queue[$qe] ?? 0) + 1;
+            }
+            foreach ($queue_rows as $qr) {
+                $qext = (string)($qr['extension'] ?? '');
                 $queues[] = [
                     'name' => (string)($qr['name'] ?? ''),
-                    'extension' => (string)($qr['extension'] ?? ''),
-                    'waiting' => $waiting,
+                    'extension' => $qext,
+                    'waiting' => (int)($by_queue[$qext] ?? 0),
                 ];
             }
         } catch(Exception $ignored){}
@@ -436,14 +433,15 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $online = ['cnt' => $online_count];
 
         echo json_encode([
-            'queues'         => $queues,
-            'total_today'    => $total,
-            'answered_today' => $answered,
-            'missed_today'   => $total - $answered,
-            'avg_talk'       => (int)($totals['avg_talk']??0),
-            'avg_wait'       => (int)($totals['avg_wait']??0),
-            'sla'            => $sla,
-            'agents_online'  => (int)($online['cnt']??0),
+            'queues'           => $queues,
+            'waiting_callers'  => $waiting_callers ?? [],
+            'total_today'      => $total,
+            'answered_today'   => $answered,
+            'missed_today'     => $total - $answered,
+            'avg_talk'         => (int)($totals['avg_talk']??0),
+            'avg_wait'         => (int)($totals['avg_wait']??0),
+            'sla'              => $sla,
+            'agents_online'    => (int)($online['cnt']??0),
         ]);
     } catch(Exception $e) { echo json_encode(['error'=>$e->getMessage()]); }
     exit;
@@ -707,25 +705,138 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 $uname_ext[strtolower($um['username'])] = $um['extension'];
         } catch (Exception $ignore) {}
 
-        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
+        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND (leg IS NULL OR LOWER(TRIM(leg::text)) <> 'b')";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
-        if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
-        $s = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
-            caller_id_number, destination_number, direction, billsec, duration, hangup_cause
+        if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q OR caller_destination LIKE :q OR last_arg LIKE :q)"; $params[':q']='%'.$search.'%'; }
+        $s = $db->prepare("SELECT start_epoch,
+            to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+            caller_id_number, destination_number, caller_destination, direction, billsec, duration,
+            hangup_cause, last_arg, cc_agent, cc_agent_bridged
             FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 500");
-        $s->execute($params);
+        try {
+            $s->execute($params);
+        } catch (Exception $legErr) {
+            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
+            $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
+            if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
+            $s = $db->prepare("SELECT start_epoch,
+                to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+                caller_id_number, destination_number, caller_destination, direction, billsec, duration,
+                hangup_cause, last_arg, cc_agent, cc_agent_bridged
+                FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 500");
+            $s->execute($params);
+        }
         $rows = [];
-        foreach($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $b=(int)$r['billsec'];
-            // Resolve SIP usernames to extension numbers
-            $caller = preg_replace('/@.*$/', '', $r['caller_id_number']);
-            $dest   = preg_replace('/@.*$/', '', $r['destination_number']);
+        $agent_label = [];
+        try {
+            $sa = $db->prepare("SELECT agent_name, agent_id, agent_contact FROM v_call_center_agents ca
+                JOIN v_domains d ON d.domain_uuid=ca.domain_uuid WHERE d.domain_name=:d");
+            $sa->execute([':d'=>$domain_]);
+            foreach ($sa->fetchAll(PDO::FETCH_ASSOC) as $ag) {
+                $lab = trim((string)($ag['agent_name'] ?? ''));
+                if ($ag['agent_id'] !== '' && $ag['agent_id'] !== null) {
+                    $agent_label[(string)$ag['agent_id']] = $lab !== '' ? $lab : (string)$ag['agent_id'];
+                }
+                if (preg_match('/(?:user\/)?(\d+)@/i', (string)($ag['agent_contact'] ?? ''), $m)) {
+                    $agent_label[$m[1]] = $lab !== '' ? $lab.' ('.$m[1].')' : $m[1];
+                }
+            }
+        } catch (Exception $ignore) {}
+        $raw = $s->fetchAll(PDO::FETCH_ASSOC);
+        $agent_guess = [];
+        $parsed = [];
+        foreach ($raw as $r) {
+            $b = (int)$r['billsec'];
+            $caller = preg_replace('/@.*$/', '', (string)$r['caller_id_number']);
+            $dest   = trim(preg_replace('/@.*$/', '', (string)$r['destination_number']));
+            $cdest  = preg_replace('/@.*$/', '', (string)($r['caller_destination'] ?? ''));
+            $arg    = (string)($r['last_arg'] ?? '');
+            $cc     = (string)($r['cc_agent'] ?? '');
+            $uuid_map = [
+                '64c5f323-cd40-48ef-a97f-22d546be8b57'=>'101',
+                '031ab55a-74f4-4c4a-9252-faaa4a1f4e5e'=>'102',
+            ];
+            if (isset($uuid_map[strtolower($cc)])) $cc = $uuid_map[strtolower($cc)];
+            if (preg_match('/(?:user\/)?(\d{2,4})@/', $cc, $m)) $cc = $m[1];
             if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $caller))
-                $caller = $uname_ext[strtolower($caller)] ?? 'Unknown';
-            if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $dest))
-                $dest   = $uname_ext[strtolower($dest)]   ?? 'Unknown';
-            $rows[] = ['time'=>$r['call_time'],'caller'=>$caller,
-                'destination'=>$dest,'direction'=>$r['direction'],
+                $caller = $uname_ext[strtolower($caller)] ?? $caller;
+            $dest_digits = preg_replace('/\D+/', '', $dest);
+            $agent_ext = '';
+            if (preg_match('/user\/(\d{2,4})@/', $arg, $m)) $agent_ext = $m[1];
+            elseif (preg_match('/^1\d{2}$/', $cc)) $agent_ext = $cc;
+            elseif (preg_match('/^(101|102)$/', $dest_digits)) $agent_ext = $dest_digits;
+            elseif (preg_match('/^1\d{2}$/', $dest)) $agent_ext = $dest;
+            elseif (preg_match('/^1\d{2}$/', $caller)) $agent_ext = $caller;
+            elseif (preg_match('/(?:user\/)?(\d{2,4})@/', (string)($r['cc_agent_bridged'] ?? ''), $m)) $agent_ext = $m[1];
+            $ck = preg_replace('/\D+/', '', $caller);
+            if (strlen($ck) >= 9) $ck = substr($ck, -9);
+            $bucket = (string)intdiv((int)($r['start_epoch'] ?? 0), 60);
+            if ($agent_ext !== '') {
+                $didk = preg_replace('/\D+/', '', $cdest);
+                if ($didk === '' && preg_match('/11113875[56]$/', $dest_digits)) $didk = $dest_digits;
+                if (strlen($didk) >= 9) $didk = substr($didk, -9);
+                if ($ck !== '') {
+                    $agent_guess[$ck.'|'.$bucket] = $agent_ext;
+                    $agent_guess[$ck.'|'.(string)($r['call_time'] ?? '')] = $agent_ext;
+                }
+                if ($didk !== '') {
+                    $agent_guess['did|'.$didk.'|'.$bucket] = $agent_ext;
+                    $agent_guess['did|'.$didk.'|'.(string)($r['call_time'] ?? '')] = $agent_ext;
+                }
+                $agent_guess['t|'.$bucket] = $agent_ext;
+                $agent_guess['t|'.(string)($r['call_time'] ?? '')] = $agent_ext;
+            }
+            $parsed[] = [
+                'r'=>$r,'b'=>$b,'caller'=>$caller,'dest'=>$dest,'cdest'=>$cdest,
+                'agent_ext'=>$agent_ext,'dest_digits'=>$dest_digits,'ck'=>$ck,'bucket'=>$bucket,
+            ];
+        }
+        foreach ($parsed as $p) {
+            $r = $p['r']; $b = $p['b']; $caller = $p['caller']; $dest = $p['dest'];
+            $cdest = $p['cdest']; $agent_ext = $p['agent_ext'];
+            $dest_digits = $p['dest_digits'];
+            if (preg_match('/^(101|102)$/', $dest_digits)) {
+                $cdest_digits = preg_replace('/\D+/', '', $cdest);
+                if (preg_match('/^[\+\d\(\)\-\s#\*]{3,}$/', $cdest) && !preg_match('/^(101|102)$/', $cdest_digits))
+                    $dest = $cdest;
+                else
+                    continue;
+            }
+            if ($agent_ext === '') {
+                $didk = $dest_digits;
+                if (strlen($didk) >= 9) $didk = substr($didk, -9);
+                $agent_ext = $agent_guess[$p['ck'].'|'.$p['bucket']]
+                    ?? $agent_guess[$p['ck'].'|'.(string)($r['call_time'] ?? '')]
+                    ?? $agent_guess['did|'.$didk.'|'.$p['bucket']]
+                    ?? $agent_guess['did|'.$didk.'|'.(string)($r['call_time'] ?? '')]
+                    ?? $agent_guess['t|'.$p['bucket']]
+                    ?? $agent_guess['t|'.(string)($r['call_time'] ?? '')]
+                    ?? '';
+            }
+            $dir = strtolower(trim((string)($r['direction'] ?? '')));
+            $is_did = (bool)preg_match('/11113875[56]$/', $dest_digits)
+                || (bool)preg_match('/11113875[56]$/', preg_replace('/\D+/', '', $cdest));
+            if ($dir === '' || $dir === 'null') {
+                if ($is_did || $dest === '8000') $dir = 'inbound';
+                elseif (preg_match('/^1\d{2}$/', $caller) && !preg_match('/^1\d{2}$/', $dest)) $dir = 'outbound';
+                else $dir = 'inbound';
+            }
+            if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $dest)) {
+                if (preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $cdest)) $dest = $cdest;
+                else continue;
+            }
+            if (strcasecmp($dest, 'unknown') === 0) {
+                if (preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $cdest)) $dest = $cdest;
+                else continue;
+            }
+            $agent = '';
+            if ($agent_ext !== '') {
+                $agent = trim((string)($agent_label[$agent_ext] ?? ''));
+                if ($agent === '') $agent = $agent_ext;
+            }
+            $rows[] = ['time'=>$r['call_time'],'caller'=>$caller !== '' ? $caller : '—',
+                'destination'=>$dest,'agent'=>$agent !== '' ? $agent : '—',
+                'direction'=>$dir,
                 'duration'=>floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
                 'status'=>$b>0?'Answered':'Missed','cause'=>$r['hangup_cause']??''];
         }
@@ -972,6 +1083,12 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .queue-health-value{display:block;font-size:16px;font-weight:700;color:#333}
 .queue-health-label{display:block;font-size:9px;color:#999;margin-top:3px}
 .live-agents-panel{background:#fff;border:1px solid #edf0f5;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.06);overflow:hidden}
+.wait-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f5f5f5;font-size:13px}
+.wait-row:last-child{border-bottom:none}
+.wait-pos{width:22px;height:22px;border-radius:50%;background:#fff4e5;color:#fd7e14;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.wait-num{font-weight:700;color:#333;flex:1}
+.wait-time{color:#fd7e14;font-weight:700;font-size:12px}
+.wait-state{font-size:10px;font-weight:700;color:#888;background:#f4f6f8;border-radius:10px;padding:2px 7px}
 .live-agents-header{padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .live-agents-tools{display:flex;align-items:center;gap:10px}
 
@@ -1198,6 +1315,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             <button class="tab-btn" data-tab="recordings" onclick="showTab('recordings')">Call Recordings</button>
             <button class="tab-btn" data-tab="voicequality" onclick="showTab('voicequality')">Voice Quality</button>
             <button class="tab-btn" data-tab="skills" onclick="showTab('skills')">Agent Skills</button>
+            <button class="tab-btn" data-tab="blacklist" onclick="showTab('blacklist')">Blacklist</button>
             <button class="tab-btn" data-tab="ahununu" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
@@ -1239,6 +1357,17 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <div class="live-agents-panel" id="waitingCallersPanel" style="margin-bottom:14px">
+                    <div class="live-agents-header">
+                        <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
+                            Waiting Customers
+                            <span id="waitingCallerCount" style="background:#fd7e14;color:#fff;font-size:11px;border-radius:10px;padding:1px 8px;display:none">0</span>
+                        </div>
+                        <span style="font-size:11px;color:#aaa">Longest wait is offered next</span>
+                    </div>
+                    <div id="waitingCallersList" style="padding:12px 16px;color:#aaa;font-size:13px">No callers waiting.</div>
                 </div>
 
                 <!-- Leave requests awaiting supervisor approval -->
@@ -1319,10 +1448,10 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             </div>
             <table class="data-table">
                 <thead><tr>
-                    <th>Time</th><th>Caller</th><th>Destination</th>
+                    <th>Time</th><th>Caller</th><th>Destination</th><th>Agent</th>
                     <th>Direction</th><th>Duration</th><th>Status</th><th>Cause</th>
                 </tr></thead>
-                <tbody id="chBody"><tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
+                <tbody id="chBody"><tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
             </table>
         </div>
 
@@ -1456,6 +1585,21 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             </div>
         </div>
     </div>
+        <div class="tab-content" id="tab-blacklist" style="padding:16px">
+            <div class="section-box" style="padding:16px">
+                <div class="section-title">Blocked callers</div>
+                <p style="font-size:13px;color:#666">Agents can block a caller from the phone. Those numbers never ring the queue.</p>
+                <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+                    <input type="tel" id="supBlNumber" placeholder="Phone number" style="padding:8px;border:1px solid #ddd;border-radius:6px">
+                    <input type="text" id="supBlReason" placeholder="Reason" style="padding:8px;border:1px solid #ddd;border-radius:6px">
+                    <button class="btn-filter" type="button" onclick="supAddBlacklist()">Block</button>
+                </div>
+                <table class="data-table">
+                    <thead><tr><th>Number</th><th>Reason</th><th>Agent</th><th></th></tr></thead>
+                    <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
         <div class="tab-content" id="tab-ahununu" style="padding:0;height:700px">
             <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
         </div>
@@ -1618,7 +1762,33 @@ function fetchQueue(){
             document.getElementById('qs-avgtalk').textContent = fmtDur(d.avg_talk);
             document.getElementById('qs-avgwait').textContent = fmtDur(d.avg_wait);
             document.getElementById('qs-sla').textContent     = (d.sla??100)+'%';
+            renderWaitingCallers(d.waiting_callers||[]);
         }).catch(()=>{});
+}
+
+function renderWaitingCallers(list){
+    const box = document.getElementById('waitingCallersList');
+    const badge = document.getElementById('waitingCallerCount');
+    if (!box) return;
+    const n = (list||[]).length;
+    if (badge) {
+        badge.textContent = String(n);
+        badge.style.display = n ? 'inline-block' : 'none';
+    }
+    if (!n) {
+        box.innerHTML = 'No callers waiting.';
+        box.style.color = '#aaa';
+        return;
+    }
+    box.style.color = '#333';
+    box.innerHTML = list.map((c,i)=>{
+        const number = String(c.number||'Unknown').replace(/[&<>"']/g, ch=>({
+            '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        }[ch]));
+        const wait = String(c.wait_fmt||((c.wait_seconds||0)+'s'));
+        const state = String(c.state||'Waiting');
+        return `<div class="wait-row"><span class="wait-pos">${i+1}</span><span class="wait-num">${number}</span><span class="wait-time">${wait}</span><span class="wait-state">${state}</span></div>`;
+    }).join('');
 }
 
 // ── Agent Cards ────────────────────────────────────────────────────────────
@@ -1703,6 +1873,34 @@ function renderLeaveRequests(requests){
 
 function escHtml(s){
     return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fetchSupBlacklist(){
+    const body = document.getElementById('supBlacklistBody');
+    if (!body) return;
+    fetch('index.php?action=blacklist_list&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' })
+        .then(r => r.json()).then(d => {
+            const rows = (d && d.rows) || [];
+            if (!rows.length) { body.innerHTML = '<tr><td colspan="4">No blocked numbers.</td></tr>'; return; }
+            body.innerHTML = rows.map(r => '<tr><td>'+escHtml(r.display||r.digits)+'</td><td>'+escHtml(r.reason||'')+'</td><td>'+escHtml(r.agent||'')+
+                '</td><td><button type="button" onclick="supDelBlacklist(\''+escHtml(r.digits||'')+'\')">Remove</button></td></tr>').join('');
+        }).catch(() => { body.innerHTML = '<tr><td colspan="4">Could not load.</td></tr>'; });
+}
+function supAddBlacklist(){
+    const number = (document.getElementById('supBlNumber')||{}).value || '';
+    const reason = (document.getElementById('supBlReason')||{}).value || 'blocked by supervisor';
+    fetch('index.php?action=blacklist_add&domain=' + encodeURIComponent(domain), {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ number: number, reason: reason })
+    }).then(r => r.json()).then(d => { if (d && d.ok) fetchSupBlacklist(); else alert((d && d.error) || 'Failed'); });
+}
+function supDelBlacklist(number){
+    fetch('index.php?action=blacklist_del&domain=' + encodeURIComponent(domain), {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ number: number })
+    }).then(r => r.json()).then(() => fetchSupBlacklist());
 }
 
 function resolveLeave(id, decision){
@@ -1891,14 +2089,15 @@ function fetchCallHistory(){
     const q=document.getElementById('chSearch').value;
     fetch('supervisor.php?action=call_history_all&domain='+encodeURIComponent(domain)+'&from='+from+'&to='+to+'&search='+encodeURIComponent(q))
         .then(r=>r.json()).then(d=>{
-            const rows=d.rows||[];
+            const rows=(d.rows||[]).filter(r=>!/^(101|102)$/.test(String(r.destination||'').trim()));
             document.getElementById('chCount').textContent=rows.length+' records';
-            if(!rows.length){document.getElementById('chBody').innerHTML='<tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">No calls found.</td></tr>';return;}
+            if(!rows.length){document.getElementById('chBody').innerHTML='<tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">No calls found.</td></tr>';return;}
             document.getElementById('chBody').innerHTML=rows.map(r=>`<tr>
                 <td>${r.time}</td>
                 <td>${r.caller}</td>
                 <td>${r.destination}</td>
-                <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction}</span></td>
+                <td>${r.agent||'—'}</td>
+                <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction||'—'}</span></td>
                 <td>${r.duration}</td>
                 <td><span class="badge-${r.status==='Answered'?'answered':'missed'}">${r.status}</span></td>
                 <td style="font-size:11px;color:#888">${r.cause}</td>
@@ -1943,6 +2142,7 @@ function showTab(name){
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='blacklist') fetchSupBlacklist();
     if(name==='settings') loadIdleSettings();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
@@ -1963,6 +2163,7 @@ function showTabDirect(name){
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='blacklist') fetchSupBlacklist();
     if(name==='settings') loadIdleSettings();
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
@@ -2291,7 +2492,8 @@ function declineCall() {
     document.getElementById('incomingScreen').style.display = 'none';
     document.getElementById('dpPanel').style.display = '';
     stopRingtone();
-    if (sipBridge.hangup) sipBridge.hangup();
+    if (sipBridge.decline) sipBridge.decline();
+    else if (sipBridge.hangup) sipBridge.hangup();
 }
 function makeCall(number) {
     number = number || document.getElementById('dialInput').value.trim() || dpNumber;
@@ -2564,7 +2766,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || (inv.remoteIdentity && inv.remoteIdentity.displayName)
                 || 'Unknown';
             window.lastDialedNumber = num;
-            try { inv.progress(); } catch (e) {}
+            try { inv.progress({ statusCode: 180 }); } catch (e) {}
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }

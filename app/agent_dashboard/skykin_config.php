@@ -469,11 +469,19 @@ function skykin_cc_ensure_agent(string $agent, string $extension, string $domain
 	}
 
 	skykin_fs_api('callcenter_config agent add ' . $agent . ' callback');
-	// Matches the contact format written into callcenter.conf.xml at startup.
+	// Keep this contact identical to the live ringing originate. Do not put
+	// api_hangup_hook here: a space in that value breaks the agent ring.
+	// Decline is attached on the inbound DID via cc_export_vars instead.
 	skykin_fs_api('callcenter_config agent set contact ' . $agent
-		. " '[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=196.189.236.140,include_external_ip=true]user/"
+		. " '{ignore_early_media=true,bridge_early_media=false,originate_timeout=45}[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=196.189.236.140,include_external_ip=true]user/"
 		. $extension . '@' . $domain . "'");
 	skykin_fs_api('callcenter_config agent set max_no_answer ' . $agent . ' 999');
+	skykin_fs_api('callcenter_config agent set wrap_up_time ' . $agent . ' 0');
+	skykin_fs_api('callcenter_config agent set ready_time ' . $agent . ' 0');
+	// Stop Decline from re-ringing the same agent instantly (reject_delay 0
+	// plus max-wait-time 0 made the inbound call never end).
+	skykin_fs_api('callcenter_config agent set reject_delay_time ' . $agent . ' 15');
+	skykin_fs_api('callcenter_config agent set busy_delay_time ' . $agent . ' 15');
 
 	foreach ($queues as $queue) {
 		$queue = trim($queue);
@@ -540,6 +548,139 @@ function skykin_fs_registrations(string $domain = '', string $profile = 'interna
 	}
 
 	return $registered;
+}
+
+/**
+ * Format a wait duration for the queue waiting-caller lists.
+ */
+function skykin_cc_wait_fmt(int $seconds): string {
+	$seconds = max(0, $seconds);
+	if ($seconds < 60) {
+		return $seconds . 's';
+	}
+	return ((int)floor($seconds / 60)) . 'm ' . ($seconds % 60) . 's';
+}
+
+/**
+ * Live callers waiting in mod_callcenter, plus inbound still ringing.
+ *
+ * Waiting customers live in FreeSWITCH, not Postgres. This is view-only:
+ * the dashboards list who is in line; longest-idle-agent still assigns the
+ * next call. $queue_exts is the queue numbers (e.g. 8000); 8000 is always
+ * included so a missing FusionPBX queue row does not hide the live line.
+ */
+function skykin_cc_waiting_callers(string $domain, array $queue_exts = []): array {
+	$now = time();
+	$seen = [];
+	$out = [];
+	$exts = [];
+	foreach ($queue_exts as $e) {
+		$e = trim((string)$e);
+		if ($e !== '' && preg_match('/^\d{3,8}$/', $e)) {
+			$exts[$e] = true;
+		}
+	}
+	$exts['8000'] = true;
+
+	$cell = static function (array $cols, array $header, string $key, string $alt = ''): string {
+		$i = $header[$key] ?? ($alt !== '' ? ($header[$alt] ?? null) : null);
+		if ($i === null || !isset($cols[$i])) {
+			return '';
+		}
+		return trim((string)$cols[$i]);
+	};
+
+	foreach (array_keys($exts) as $qext) {
+		$raw = skykin_fs_api('callcenter_config queue list members ' . $qext . '@' . $domain);
+		$header = null;
+		foreach (preg_split("/\r\n|\n|\r/", $raw) ?: [] as $line) {
+			$line = trim($line);
+			if ($line === '' || strncmp($line, '+OK', 3) === 0 || strncmp($line, '-ERR', 4) === 0) {
+				continue;
+			}
+			$cols = explode('|', $line);
+			if ($header === null) {
+				$joined = strtolower(implode('|', $cols));
+				if (strpos($joined, 'cid_number') !== false || strpos($joined, 'session_uuid') !== false) {
+					$header = [];
+					foreach ($cols as $i => $name) {
+						$header[strtolower(trim((string)$name))] = $i;
+					}
+					continue;
+				}
+				$header = [
+					'queue' => 0, 'name' => 1, 'session_uuid' => 2, 'cid_number' => 3,
+					'cid_name' => 4, 'system_epoch' => 5, 'joined_epoch' => 6,
+					'rejoined_epoch' => 7, 'bridge_epoch' => 8, 'abandoned_epoch' => 9,
+					'base_score' => 10, 'skill_score' => 11, 'serving_agent' => 12,
+					'serving_system' => 13, 'state' => 14,
+				];
+			}
+			$state = strtolower($cell($cols, $header, 'state'));
+			if ($state === '' || in_array($state, ['abandoned', 'answered'], true)) {
+				continue;
+			}
+			$uuid = $cell($cols, $header, 'session_uuid', 'uuid');
+			$joined = (int)$cell($cols, $header, 'joined_epoch', 'system_epoch');
+			$wait = max(0, $now - ($joined > 0 ? $joined : $now));
+			$cid = $cell($cols, $header, 'cid_number');
+			if ($uuid !== '') {
+				$seen[$uuid] = true;
+			}
+			$out[] = [
+				'number' => $cid !== '' ? $cid : 'Unknown',
+				'name' => $cell($cols, $header, 'cid_name'),
+				'queue' => $qext,
+				'state' => ($state === 'trying') ? 'Offering' : 'Waiting',
+				'wait_seconds' => $wait,
+				'wait_fmt' => skykin_cc_wait_fmt($wait),
+			];
+		}
+	}
+
+	// DID hunt rings 101/102 without entering queue 8000. Surface those too.
+	$json = json_decode(skykin_fs_api('show channels as json'), true);
+	foreach ((is_array($json) ? ($json['rows'] ?? []) : []) as $row) {
+		if (!is_array($row)) {
+			continue;
+		}
+		$uuid = (string)($row['uuid'] ?? '');
+		if ($uuid !== '' && isset($seen[$uuid])) {
+			continue;
+		}
+		if (strtolower((string)($row['direction'] ?? '')) !== 'inbound') {
+			continue;
+		}
+		$callstate = strtoupper((string)($row['callstate'] ?? ''));
+		if (!in_array($callstate, ['RINGING', 'EARLY', 'ACTIVE'], true)) {
+			continue;
+		}
+		if ($callstate === 'ACTIVE' && trim((string)($row['b_uuid'] ?? '')) !== '') {
+			continue;
+		}
+		$cid = trim((string)($row['cid_num'] ?? $row['cid_number'] ?? ''));
+		$dest = trim((string)($row['dest'] ?? ''));
+		$cid_digits = preg_replace('/\D+/', '', $cid);
+		$dest_digits = preg_replace('/\D+/', '', $dest);
+		if (preg_match('/^1\d{2}$/', (string)$cid_digits) && preg_match('/^1\d{2}$/', (string)$dest_digits)) {
+			continue;
+		}
+		$created = (int)($row['created_epoch'] ?? 0);
+		$wait = max(0, $now - ($created > 0 ? $created : $now));
+		$out[] = [
+			'number' => $cid !== '' ? $cid : 'Unknown',
+			'name' => (string)($row['cid_name'] ?? ''),
+			'queue' => $dest !== '' ? $dest : 'inbound',
+			'state' => ($callstate === 'ACTIVE') ? 'Connecting' : 'Ringing',
+			'wait_seconds' => $wait,
+			'wait_fmt' => skykin_cc_wait_fmt($wait),
+		];
+	}
+
+	usort($out, static function ($a, $b) {
+		return ((int)$b['wait_seconds'] <=> (int)$a['wait_seconds']);
+	});
+	return $out;
 }
 
 /**
@@ -850,5 +991,254 @@ h2{color:#c62828;margin:0 0 10px}p{color:#666;font-size:14px}a{color:#0047AB}</s
 }
 
 date_default_timezone_set(skykin_timezone());
+
+/**
+ * Blacklist: Postgres (dashboard list) + FreeSWITCH file/hash (inbound drop).
+ * Line format: domain|digits|display|reason|agent|unix
+ * Hash keys are domain-scoped (`domain~digits`); lists are not shared across domains.
+ */
+if (is_file(__DIR__ . '/skykin_bl_sync.php')) {
+	require_once __DIR__ . '/skykin_bl_sync.php';
+}
+
+function skykin_blacklist_path(): string {
+	return '/etc/freeswitch/scripts/skykin_blacklist.txt';
+}
+
+function skykin_blacklist_digits(string $number): string {
+	$d = preg_replace('/\D+/', '', $number) ?? '';
+	if (strlen($d) >= 12 && substr($d, 0, 3) === '251') {
+		$d = substr($d, 3);
+	}
+	if (strlen($d) === 10 && $d !== '' && $d[0] === '0') {
+		$d = substr($d, 1);
+	}
+	return $d;
+}
+
+function skykin_blacklist_parse(string $text): array {
+	$rows = [];
+	foreach (preg_split("/\r\n|\n|\r/", $text) ?: [] as $line) {
+		$line = trim($line);
+		if ($line === '' || $line[0] === '#') {
+			continue;
+		}
+		$p = explode('|', $line);
+		$digits = skykin_blacklist_digits((string)($p[1] ?? $p[0] ?? ''));
+		if ($digits === '') {
+			continue;
+		}
+		$rows[] = [
+			'domain'  => $p[0] ?? '*',
+			'digits'  => $digits,
+			'display' => $p[2] ?? $digits,
+			'reason'  => $p[3] ?? '',
+			'agent'   => $p[4] ?? '',
+			'ts'      => (int)($p[5] ?? 0),
+		];
+	}
+	return $rows;
+}
+
+function skykin_blacklist_buf(array $rows): string {
+	$buf = "# domain|digits|display|reason|agent|unix\n";
+	foreach ($rows as $r) {
+		$digits = skykin_blacklist_digits((string)($r['digits'] ?? ''));
+		if ($digits === '') {
+			continue;
+		}
+		$buf .= implode('|', [
+			str_replace('|', '', (string)($r['domain'] ?? '*')),
+			$digits,
+			str_replace('|', '', (string)($r['display'] ?? $digits)),
+			str_replace('|', '', (string)($r['reason'] ?? '')),
+			str_replace('|', '', (string)($r['agent'] ?? '')),
+			(string)((int)($r['ts'] ?? time())),
+		]) . "\n";
+	}
+	return $buf;
+}
+
+function skykin_blacklist_db(): ?PDO {
+	if (!function_exists('skykin_pdo_fusionpbx')) {
+		return null;
+	}
+	try {
+		$db = skykin_pdo_fusionpbx();
+		if (function_exists('skykin_bl_ensure_table')) {
+			skykin_bl_ensure_table($db);
+		} else {
+			$db->exec("CREATE TABLE IF NOT EXISTS skykin_blacklist (
+				digits text NOT NULL,
+				domain_name text NOT NULL DEFAULT '*',
+				display text,
+				reason text,
+				agent text,
+				ts bigint
+			)");
+			try {
+				$db->exec('ALTER TABLE skykin_blacklist DROP CONSTRAINT IF EXISTS skykin_blacklist_pkey');
+				$db->exec('ALTER TABLE skykin_blacklist ADD PRIMARY KEY (digits, domain_name)');
+			} catch (Throwable $e) {
+			}
+		}
+		return $db;
+	} catch (Throwable $e) {
+		return null;
+	}
+}
+
+function skykin_blacklist_load(): array {
+	$by = [];
+	$add = static function (array $rows) use (&$by): void {
+		foreach ($rows as $r) {
+			$d = skykin_blacklist_digits((string)($r['digits'] ?? ''));
+			if ($d === '') {
+				continue;
+			}
+			$r['digits'] = $d;
+			$dom = (string)($r['domain'] ?? $r['domain_name'] ?? '*');
+			$r['domain'] = $dom;
+			$by[$dom . '|' . $d] = $r;
+		}
+	};
+	$db = skykin_blacklist_db();
+	if ($db) {
+		try {
+			$got = [];
+			foreach ($db->query('SELECT digits, domain_name, display, reason, agent, ts FROM skykin_blacklist ORDER BY ts DESC') as $r) {
+				$got[] = [
+					'domain'  => (string)$r['domain_name'],
+					'digits'  => (string)$r['digits'],
+					'display' => (string)($r['display'] ?: $r['digits']),
+					'reason'  => (string)$r['reason'],
+					'agent'   => (string)$r['agent'],
+					'ts'      => (int)$r['ts'],
+				];
+			}
+			$add($got);
+		} catch (Throwable $e) {
+		}
+	}
+	foreach ([
+		'/var/lib/freeswitch/recordings/skykin_blacklist.txt',
+		'/etc/freeswitch/scripts/skykin_blacklist.txt',
+	] as $path) {
+		if (is_readable($path)) {
+			$add(skykin_blacklist_parse((string)@file_get_contents($path)));
+		}
+	}
+	if (function_exists('skykin_fs_api')) {
+		$add(skykin_blacklist_parse((string)skykin_fs_api('system cat /etc/freeswitch/scripts/skykin_blacklist.txt')));
+		$add(skykin_blacklist_parse((string)skykin_fs_api('system cat /var/lib/freeswitch/recordings/skykin_blacklist.txt')));
+	}
+	return array_values($by);
+}
+
+function skykin_blacklist_save(array $rows): bool {
+	$norm = [];
+	$seen = [];
+	foreach ($rows as $r) {
+		$digits = skykin_blacklist_digits((string)($r['digits'] ?? ''));
+		$dom = (string)($r['domain'] ?? $r['domain_name'] ?? '*');
+		if ($digits === '' || strlen($digits) < 7 || isset($seen[$dom . '|' . $digits])) {
+			continue;
+		}
+		$seen[$dom . '|' . $digits] = true;
+		$norm[] = [
+			'domain'  => $dom,
+			'digits'  => $digits,
+			'display' => (string)($r['display'] ?? $digits),
+			'reason'  => (string)($r['reason'] ?? ''),
+			'agent'   => (string)($r['agent'] ?? ''),
+			'ts'      => (int)($r['ts'] ?? time()),
+		];
+	}
+	$db_ok = false;
+	$db = skykin_blacklist_db();
+	if ($db) {
+		try {
+			$db->beginTransaction();
+			$db->exec('DELETE FROM skykin_blacklist');
+			$st = $db->prepare('INSERT INTO skykin_blacklist (digits, domain_name, display, reason, agent, ts) VALUES (?,?,?,?,?,?)');
+			foreach ($norm as $r) {
+				$st->execute([$r['digits'], $r['domain'], $r['display'], $r['reason'], $r['agent'], $r['ts']]);
+			}
+			$db->commit();
+			$db_ok = true;
+		} catch (Throwable $e) {
+			if ($db->inTransaction()) {
+				$db->rollBack();
+			}
+		}
+	}
+	$buf = skykin_blacklist_buf($norm);
+	foreach ([
+		'/etc/freeswitch/scripts/skykin_blacklist.txt',
+		'/var/lib/freeswitch/recordings/skykin_blacklist.txt',
+	] as $path) {
+		@file_put_contents($path, $buf, LOCK_EX);
+		@chmod($path, 0666);
+	}
+	$file_ok = false;
+	if (function_exists('skykin_fs_api')) {
+		$b64 = base64_encode($buf);
+		foreach ([
+			'/etc/freeswitch/scripts/skykin_blacklist.txt',
+			'/var/lib/freeswitch/recordings/skykin_blacklist.txt',
+		] as $path) {
+			skykin_fs_api('system sh -c "printf %s ' . $b64 . ' | base64 -d > ' . $path . ' && chmod 666 ' . $path . '"');
+		}
+		$got = (string)skykin_fs_api('system cat /etc/freeswitch/scripts/skykin_blacklist.txt');
+		foreach ($norm as $r) {
+			if (strpos($got, $r['digits']) !== false) {
+				$file_ok = true;
+				break;
+			}
+		}
+		if (!$norm) {
+			$file_ok = true;
+		}
+		foreach ($norm as $r) {
+			$d = $r['digits'];
+			$dom = str_replace(['/', ' ', '|', '~'], '', (string)$r['domain']);
+			if (function_exists('skykin_bl_hash_scope')) {
+				skykin_bl_hash_scope($dom, $d, true);
+			} else {
+				skykin_fs_api('hash delete/skykin_bl/' . $d);
+				if ($dom !== '') {
+					skykin_fs_api('hash insert/skykin_bl/' . $dom . '~' . $d . '/1');
+					if (strlen($d) >= 9) {
+						skykin_fs_api('hash insert/skykin_bl/' . $dom . '~' . substr($d, -9) . '/1');
+					}
+				}
+			}
+		}
+	}
+	return $db_ok || $file_ok || ($norm && skykin_blacklist_match($norm[0]['digits'], (string)($norm[0]['domain'] ?? '')));
+}
+
+function skykin_blacklist_match(string $number, string $domain = ''): bool {
+	$want = skykin_blacklist_digits($number);
+	$domain = trim($domain);
+	if ($want === '' || strlen($want) < 7 || $domain === '') {
+		return false;
+	}
+	foreach (skykin_blacklist_load() as $r) {
+		$row_dom = (string)($r['domain'] ?? $r['domain_name'] ?? '');
+		if (strcasecmp($row_dom, $domain) !== 0) {
+			continue;
+		}
+		$have = skykin_blacklist_digits((string)($r['digits'] ?? ''));
+		if ($have === '') {
+			continue;
+		}
+		$n = min(strlen($want), strlen($have), 12);
+		if ($n >= 7 && substr($want, -$n) === substr($have, -$n)) {
+			return true;
+		}
+	}
+	return false;
+}
 
 } // function_exists guard
