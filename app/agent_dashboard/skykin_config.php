@@ -21,6 +21,15 @@ function skykin_http_host(): string {
 	return preg_replace('/:\d+$/', '', $host);
 }
 
+/** Public IP FreeSWITCH puts in WebRTC SDP for agent legs. */
+function skykin_rtp_advertise_ip(): string {
+	$env = getenv('EXTERNAL_RTP_IP');
+	if ($env !== false && trim($env) !== '') {
+		return trim($env);
+	}
+	return '196.189.236.126';
+}
+
 function skykin_is_https(): bool {
 	return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
 		|| (isset($_SERVER['SERVER_PORT']) && (string)$_SERVER['SERVER_PORT'] === '443')
@@ -28,17 +37,17 @@ function skykin_is_https(): bool {
 }
 
 function skykin_default_domain(): string {
-	// Explicit override for deployments where the web host (often a bare IP)
-	// differs from the telephony SIP domain the extensions live in.
-	$env = getenv('SKYKIN_DOMAIN');
-	if ($env !== false && trim($env) !== '') {
-		return trim($env);
-	}
+	// Logged-in tenant first. SKYKIN_DOMAIN is only a fallback for IP logins
+	// that have no session domain yet — it must not pin every agent to client1.
 	if (!empty($_SESSION['domain_name'])) {
 		return (string)$_SESSION['domain_name'];
 	}
 	if (!empty($_SESSION['user_context'])) {
 		return (string)$_SESSION['user_context'];
+	}
+	$env = getenv('SKYKIN_DOMAIN');
+	if ($env !== false && trim($env) !== '') {
+		return trim($env);
 	}
 	return skykin_http_host();
 }
@@ -52,6 +61,126 @@ function skykin_domain_param($from_request = null): string {
 		return $d;
 	}
 	return skykin_default_domain();
+}
+
+/**
+ * Digits-only phone (for CRM / caller-ID matching).
+ */
+function skykin_phone_digits(string $phone): string {
+	return preg_replace('/\D+/', '', $phone);
+}
+
+/**
+ * Last 9 digits of an Ethiopian mobile (handles 09…, 2519…, +2519…).
+ */
+function skykin_phone_tail(string $phone, int $len = 9): string {
+	$d = skykin_phone_digits($phone);
+	if ($d === '') {
+		return '';
+	}
+	if (strlen($d) >= 12 && str_starts_with($d, '251')) {
+		$d = substr($d, 3);
+	}
+	if (strlen($d) >= 10 && $d[0] === '0') {
+		$d = substr($d, 1);
+	}
+	return strlen($d) >= $len ? substr($d, -$len) : $d;
+}
+
+/** Store mobiles as 09XXXXXXXX when possible. */
+function skykin_normalize_phone_storage(string $phone): string {
+	$d = skykin_phone_digits($phone);
+	if ($d === '') {
+		return trim($phone);
+	}
+	if (strlen($d) >= 12 && str_starts_with($d, '251')) {
+		return '0' . substr($d, 3);
+	}
+	if (strlen($d) === 9 && $d[0] === '9') {
+		return '0' . $d;
+	}
+	if ($d[0] !== '0' && strlen($d) >= 9) {
+		return '0' . substr($d, -9);
+	}
+	return $d;
+}
+
+/**
+ * Find a CRM contact by phone using tail-9 matching (09… vs +251…).
+ */
+function skykin_crm_ensure_contacts(PDO $db): void {
+	$isSqlite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+	if ($isSqlite) {
+		$db->exec("CREATE TABLE IF NOT EXISTS skykin_contacts (
+			contact_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+			phone         TEXT NOT NULL UNIQUE,
+			alt_phone     TEXT,
+			full_name     TEXT NOT NULL,
+			email         TEXT,
+			company       TEXT,
+			language      TEXT DEFAULT 'English',
+			account_type  TEXT DEFAULT 'Customer',
+			notes         TEXT,
+			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+		)");
+	} else {
+		$db->exec("CREATE TABLE IF NOT EXISTS skykin_contacts (
+			contact_id    SERIAL PRIMARY KEY,
+			phone         TEXT NOT NULL UNIQUE,
+			alt_phone     TEXT,
+			full_name     TEXT NOT NULL,
+			email         TEXT,
+			company       TEXT,
+			language      TEXT DEFAULT 'English',
+			account_type  TEXT DEFAULT 'Customer',
+			notes         TEXT,
+			created_at    TIMESTAMP DEFAULT NOW(),
+			updated_at    TIMESTAMP DEFAULT NOW()
+		)");
+	}
+}
+
+function skykin_crm_find_contact(PDO $db, string $phone): ?array {
+	$tail = skykin_phone_tail($phone);
+	if ($tail === '') {
+		return null;
+	}
+	try {
+		skykin_crm_ensure_contacts($db);
+	} catch (Throwable $e) {
+		return null;
+	}
+	$isSqlite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
+	if (!$isSqlite) {
+		$s = $db->prepare(
+			"SELECT * FROM skykin_contacts WHERE
+				RIGHT(regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g'), 9) = :tail
+				OR RIGHT(regexp_replace(COALESCE(alt_phone,''), '[^0-9]', '', 'g'), 9) = :tail
+			ORDER BY contact_id DESC LIMIT 1"
+		);
+		$s->execute([':tail' => $tail]);
+		$row = $s->fetch(PDO::FETCH_ASSOC);
+		if ($row) {
+			return $row;
+		}
+	}
+	$clean = preg_replace('/^(\+251|00251|0)/', '', $phone);
+	$s = $db->prepare(
+		"SELECT * FROM skykin_contacts
+			WHERE phone LIKE :q OR alt_phone LIKE :q
+			   OR phone LIKE :c OR alt_phone LIKE :c
+			ORDER BY contact_id DESC LIMIT 50"
+	);
+	$s->execute([':q' => '%' . $phone . '%', ':c' => '%' . $clean . '%']);
+	foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $row) {
+		foreach (['phone', 'alt_phone'] as $col) {
+			if (skykin_phone_tail((string)($row[$col] ?? '')) === $tail) {
+				return $row;
+			}
+		}
+	}
+	return null;
 }
 
 /**
@@ -472,8 +601,10 @@ function skykin_cc_ensure_agent(string $agent, string $extension, string $domain
 	// Keep this contact identical to the live ringing originate. Do not put
 	// api_hangup_hook here: a space in that value breaks the agent ring.
 	// Decline is attached on the inbound DID via cc_export_vars instead.
+	$rtp_ip = skykin_rtp_advertise_ip();
 	skykin_fs_api('callcenter_config agent set contact ' . $agent
-		. " '{ignore_early_media=true,bridge_early_media=false,originate_timeout=45}[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=196.189.236.140,include_external_ip=true]user/"
+		. " '{ignore_early_media=true,bridge_early_media=false,originate_timeout=45}[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip="
+		. $rtp_ip . ",include_external_ip=true]user/"
 		. $extension . '@' . $domain . "'");
 	skykin_fs_api('callcenter_config agent set max_no_answer ' . $agent . ' 999');
 	skykin_fs_api('callcenter_config agent set wrap_up_time ' . $agent . ' 0');
@@ -483,14 +614,19 @@ function skykin_cc_ensure_agent(string $agent, string $extension, string $domain
 	skykin_fs_api('callcenter_config agent set reject_delay_time ' . $agent . ' 15');
 	skykin_fs_api('callcenter_config agent set busy_delay_time ' . $agent . ' 15');
 
+	if (!$queues) {
+		$queues = [getenv('FS_QUEUE_EXT') ?: '8000'];
+	}
 	foreach ($queues as $queue) {
-		$queue = trim($queue);
+		$queue = trim((string)$queue);
 		if ($queue === '') {
 			continue;
 		}
 		if (strpos($queue, '@') === false) {
 			$queue .= '@' . $domain;
 		}
+		// New FusionPBX domains must not require .env / container recreate.
+		skykin_fs_api('callcenter_config queue load ' . $queue);
 		skykin_fs_api('callcenter_config tier add ' . $queue . ' ' . $agent . ' 1 1');
 	}
 
@@ -548,6 +684,39 @@ function skykin_fs_registrations(string $domain = '', string $profile = 'interna
 	}
 
 	return $registered;
+}
+
+/**
+ * Whether a FreeSWITCH channel belongs to this dashboard tenant.
+ * Public inbound is always context=public; classify 755/756 vs 757-759 by dest.
+ */
+function skykin_channel_for_domain(array $row, string $domain, string $dest_digits = ''): bool {
+	$domain = strtolower(trim($domain));
+	$want_ahununu = ($domain === 'ahununu');
+	$ctx = strtolower((string)($row['context'] ?? ''));
+	$presence = strtolower((string)($row['presence_id'] ?? '') . ' ' . (string)($row['name'] ?? ''));
+	if ($dest_digits === '') {
+		$dest_digits = preg_replace('/\D+/', '', (string)($row['dest'] ?? '')) ?? '';
+	}
+	$is_ahununu_did = (bool)preg_match('/11113875[789]$/', $dest_digits)
+		|| (bool)preg_match('/11619803[5-9]$/', $dest_digits);
+	$is_client1_did = (bool)preg_match('/11113875[56]$/', $dest_digits);
+	if ($is_ahununu_did) {
+		return $want_ahununu;
+	}
+	if ($is_client1_did) {
+		return !$want_ahununu;
+	}
+	if ($ctx === 'ahununu' || strpos($presence, '@ahununu') !== false) {
+		return $want_ahununu;
+	}
+	if (strpos($ctx, 'client1') !== false || strpos($presence, '@client1') !== false) {
+		return !$want_ahununu;
+	}
+	if ($ctx === 'public') {
+		return false;
+	}
+	return $ctx === $domain || strpos($presence, '@' . $domain) !== false;
 }
 
 /**
@@ -652,10 +821,10 @@ function skykin_cc_waiting_callers(string $domain, array $queue_exts = []): arra
 			continue;
 		}
 		$callstate = strtoupper((string)($row['callstate'] ?? ''));
-		if (!in_array($callstate, ['RINGING', 'EARLY', 'ACTIVE'], true)) {
-			continue;
-		}
-		if ($callstate === 'ACTIVE' && trim((string)($row['b_uuid'] ?? '')) !== '') {
+		// RINGING/EARLY = still offering an agent. ACTIVE is already in the
+		// call. Lua/WebRTC often leaves b_uuid empty, so treating ACTIVE as
+		// waiting showed the live call as "Connecting".
+		if (!in_array($callstate, ['RINGING', 'EARLY'], true)) {
 			continue;
 		}
 		$cid = trim((string)($row['cid_num'] ?? $row['cid_number'] ?? ''));
@@ -665,13 +834,18 @@ function skykin_cc_waiting_callers(string $domain, array $queue_exts = []): arra
 		if (preg_match('/^1\d{2}$/', (string)$cid_digits) && preg_match('/^1\d{2}$/', (string)$dest_digits)) {
 			continue;
 		}
+		// Public inbound is context=public for every DID. Classify by dest so
+		// 755/756 never appear on ahununu and 757-759 never appear on client1.
+		if (!skykin_channel_for_domain($row, $domain, (string)$dest_digits)) {
+			continue;
+		}
 		$created = (int)($row['created_epoch'] ?? 0);
 		$wait = max(0, $now - ($created > 0 ? $created : $now));
 		$out[] = [
 			'number' => $cid !== '' ? $cid : 'Unknown',
 			'name' => (string)($row['cid_name'] ?? ''),
 			'queue' => $dest !== '' ? $dest : 'inbound',
-			'state' => ($callstate === 'ACTIVE') ? 'Connecting' : 'Ringing',
+			'state' => 'Ringing',
 			'wait_seconds' => $wait,
 			'wait_fmt' => skykin_cc_wait_fmt($wait),
 		];
@@ -981,12 +1155,13 @@ function skykin_require_groups(array $allowed, bool $json = false): void {
 		exit;
 	}
 	http_response_code(403);
-	echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Access Denied – SkyKin</title>
+	echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Access Denied – Sky Connect</title>
 <style>body{font-family:Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}
 .box{background:#fff;padding:40px 48px;border-radius:14px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.1)}
 h2{color:#c62828;margin:0 0 10px}p{color:#666;font-size:14px}a{color:#0047AB}</style></head>
 <body><div class="box"><h2>Access Denied</h2><p>You do not have permission to open this page.</p>
-<p><a href="/app/agent_dashboard/index.php">Back to Agent Dashboard</a></p></div></body></html>';
+<p><a href="/app/agent_dashboard/index.php">Back to Agent Dashboard</a></p>
+<p style="margin-top:24px;font-size:11px;color:#aaa">Sky Connect | Powered by SkyKin Technology</p></div></body></html>';
 	exit;
 }
 

@@ -752,20 +752,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_customer') {
             $cleanPhone = preg_replace('/^(\+251|00251|0)/', '', $customerPhone);
             
             // Look up CRM contact profile
-            $hasContacts = false;
-            try {
-                $db->query("SELECT 1 FROM skykin_contacts LIMIT 1");
-                $hasContacts = true;
-            } catch (Exception $e) {}
-            
-            if ($hasContacts) {
-                $s_c = $db->prepare("SELECT * FROM skykin_contacts 
-                    WHERE phone LIKE :q OR alt_phone LIKE :q 
-                       OR phone LIKE :c OR alt_phone LIKE :c 
-                    ORDER BY contact_id LIMIT 1");
-                $s_c->execute([':q' => '%' . $customerPhone . '%', ':c' => '%' . $cleanPhone . '%']);
-                $data['contact'] = $s_c->fetch(PDO::FETCH_ASSOC) ?: null;
-            }
+            skykin_crm_ensure_contacts($db);
+            $data['contact'] = skykin_crm_find_contact($db, $customerPhone);
             
             // Create profile fallback if not found
             if (!$data['contact']) {
@@ -1348,6 +1336,178 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
     } catch (Exception $e) {
         echo json_encode(['agents' => [], 'error' => $e->getMessage()]);
     }
+    exit;
+}
+
+// ── Outbound: B-leg state for answer (ACTIVE) and decline detection ─────────
+// SKYKIN_SAFE_DECLINE_v3
+if (isset($_GET['action']) && $_GET['action'] === 'outbound_live') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $ext = preg_replace('/\D+/', '', (string)($_GET['ext'] ?? ''));
+    $dest = preg_replace('/\D+/', '', (string)($_GET['dest'] ?? ''));
+    $destTail = strlen($dest) >= 9 ? substr($dest, -9) : $dest;
+    $blegLive = false;
+    $agentLive = false;
+    $blegState = '';
+    $agentUuid = '';
+    $callUuid = '';
+    $partnerUuid = '';
+    $rows = [];
+    if ($ext !== '' || $destTail !== '') {
+        $json = json_decode(skykin_fs_api('show channels as json'), true);
+        $rows = (is_array($json) ? ($json['rows'] ?? []) : []);
+    }
+    $isAgentRow = static function (array $row) use ($ext): bool {
+        if ($ext === '') {
+            return false;
+        }
+        $name = strtolower((string)($row['name'] ?? ''));
+        $presence = strtolower((string)($row['presence_id'] ?? ''));
+        $cid = preg_replace('/\D+/', '', (string)($row['cid_num'] ?? $row['cid_number'] ?? ''));
+        $state = strtoupper((string)($row['callstate'] ?? ''));
+        if (in_array($state, ['HANGUP', 'DOWN'], true)) {
+            return false;
+        }
+        return (bool)preg_match('#(^|[/@])' . preg_quote($ext, '#') . '(@|$|-)#', $name)
+            || strpos($presence, $ext . '@') !== false
+            || $cid === $ext;
+    };
+    $isLiveRow = static function (array $row): bool {
+        $state = strtoupper((string)($row['callstate'] ?? ''));
+        return !in_array($state, ['HANGUP', 'DOWN'], true);
+    };
+    $markBleg = static function (array $row) use (&$blegLive, &$blegState): void {
+        $blegLive = true;
+        $blegState = strtoupper((string)($row['callstate'] ?? ''));
+    };
+    $destMatches = static function (array $row) use ($destTail): bool {
+        if ($destTail === '' || strlen($destTail) < 9) {
+            return false;
+        }
+        $fields = [
+            (string)($row['dest'] ?? ''),
+            (string)($row['callee_num'] ?? $row['callee_id_number'] ?? ''),
+            (string)($row['application_data'] ?? ''),
+            (string)($row['name'] ?? ''),
+        ];
+        foreach ($fields as $field) {
+            $digits = preg_replace('/\D+/', '', $field);
+            if ($digits === '') {
+                continue;
+            }
+            if (str_ends_with($digits, $destTail) || str_ends_with($destTail, substr($digits, -9))) {
+                return true;
+            }
+        }
+        return false;
+    };
+    foreach ($rows as $row) {
+        if (!is_array($row) || !$isLiveRow($row) || !$isAgentRow($row)) {
+            continue;
+        }
+        $agentLive = true;
+        $agentUuid = (string)($row['uuid'] ?? '');
+        $callUuid = trim((string)($row['call_uuid'] ?? $agentUuid));
+        $partnerUuid = trim((string)($row['b_uuid'] ?? $row['bridge_uuid'] ?? ''));
+    }
+    if ($partnerUuid !== '') {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !$isLiveRow($row)) {
+                continue;
+            }
+            if ((string)($row['uuid'] ?? '') === $partnerUuid) {
+                $markBleg($row);
+                break;
+            }
+        }
+    }
+    if (!$blegLive && $callUuid !== '') {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !$isLiveRow($row) || $isAgentRow($row)) {
+                continue;
+            }
+            if (trim((string)($row['call_uuid'] ?? '')) === $callUuid) {
+                $markBleg($row);
+                break;
+            }
+        }
+    }
+    if (!$blegLive) {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !$isLiveRow($row) || $isAgentRow($row)) {
+                continue;
+            }
+            $name = strtolower((string)($row['name'] ?? ''));
+            $dir = strtolower((string)($row['direction'] ?? ''));
+            $isGateway = (strpos($name, 'sofia/external/') !== false)
+                || (strpos($name, 'sofia/gateway/') !== false)
+                || (strpos($name, 'gateway/') !== false)
+                || $dir === 'outbound';
+            if ($isGateway && ($destTail === '' || $destMatches($row))) {
+                $markBleg($row);
+            }
+        }
+    }
+    echo json_encode([
+        'agent' => $agentLive,
+        'bleg' => $blegLive,
+        'bleg_state' => $blegState,
+        'channels' => count($rows),
+        'partner_uuid' => $partnerUuid,
+    ]);
+    exit;
+}
+
+// ── Kill FS legs when agent ends ring or mobile declined ────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'outbound_stop') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $ext = preg_replace('/\D+/', '', (string)($_GET['ext'] ?? ''));
+    $dest = preg_replace('/\D+/', '', (string)($_GET['dest'] ?? ''));
+    $destTail = strlen($dest) >= 9 ? substr($dest, -9) : $dest;
+    $killed = [];
+    $callUuid = '';
+    if ($ext !== '') {
+        $json = json_decode(skykin_fs_api('show channels as json'), true);
+        $rows = (is_array($json) ? ($json['rows'] ?? []) : []);
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $uuid = (string)($row['uuid'] ?? '');
+            $name = strtolower((string)($row['name'] ?? ''));
+            $presence = strtolower((string)($row['presence_id'] ?? ''));
+            $cid = preg_replace('/\D+/', '', (string)($row['cid_num'] ?? $row['cid_number'] ?? ''));
+            $isAgent = (bool)preg_match('#(^|[/@])' . preg_quote($ext, '#') . '(@|$|-)#', $name)
+                || strpos($presence, $ext . '@') !== false
+                || $cid === $ext;
+            if ($isAgent && $uuid !== '') {
+                $callUuid = trim((string)($row['call_uuid'] ?? $uuid));
+                skykin_fs_api('uuid_kill ' . $uuid);
+                $killed[] = $uuid;
+            }
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $uuid = (string)($row['uuid'] ?? '');
+            if ($uuid === '' || in_array($uuid, $killed, true)) {
+                continue;
+            }
+            $sameCall = ($callUuid !== '' && trim((string)($row['call_uuid'] ?? '')) === $callUuid);
+            $name = strtolower((string)($row['name'] ?? ''));
+            $blob = preg_replace('/\D+/', '', $name . ($row['dest'] ?? '') . ($row['callee_num'] ?? ''));
+            $isExternal = (strpos($name, 'external') !== false || strpos($name, 'gateway') !== false);
+            $numMatch = ($destTail !== '' && strlen($destTail) >= 9 && strpos($blob, $destTail) !== false);
+            if ($sameCall || ($isExternal && ($numMatch || $callUuid !== ''))) {
+                skykin_fs_api('uuid_kill ' . $uuid);
+                $killed[] = $uuid;
+            }
+        }
+    }
+    echo json_encode(['ok' => true, 'killed' => $killed]);
     exit;
 }
 
@@ -4229,6 +4389,10 @@ function handleIncoming(callerNumber) {
     openPhonePopup();
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
     startRingtone();
+    if (callerNumber && window.performLookup) {
+        performLookup(callerNumber);
+        switchTab('lookup');
+    }
 }
 window.handleIncoming = handleIncoming;
 
@@ -4263,6 +4427,10 @@ function makeCall(number) {
     if (!number) return;
     lastDialedNumber = number;
     lastCallType = 'Outbound';
+    if (window.performLookup) {
+        performLookup(number);
+        switchTab('lookup');
+    }
     if (sipBridge.makeCall) sipBridge.makeCall(number);
     else showToast('SIP not ready. Open Phone Settings to connect.');
 }
@@ -4341,6 +4509,8 @@ function stopRingback() {
     if (_rbInterval) { clearInterval(_rbInterval); _rbInterval = null; }
     if (_rbCtx) { try { _rbCtx.close(); } catch(e) {} _rbCtx = null; }
 }
+window.stopRingback = stopRingback;
+window.startRingback = startRingback;
 
 function startCallUI(number) {
     window._callEnded = false; // Reset so endCall() works for this new call
@@ -4388,6 +4558,10 @@ function updateCallTimer() {
 }
 
 function hangupCall() {
+    if (window._outboundRingPhase && window.endOutboundRing) {
+        window.endOutboundRing(true);
+        return;
+    }
     if (sipBridge.hangup) sipBridge.hangup();
     // Immediately reset the UI — do not wait for the async SIP Terminated event
     endCall();
@@ -4849,6 +5023,7 @@ function performLookup(query) {
             // 1. Render Contact Profile
             const contact = data.contact;
             if (contact) {
+                const cid = contact.contact_id ? Number(contact.contact_id) : 0;
                 document.getElementById('lookupProfileBox').innerHTML = `
                     <div class="profile-title">${contact.full_name || 'Unknown Customer'}</div>
                     <div class="profile-item"><span>Phone:</span><span>${contact.phone || '-'}</span></div>
@@ -4858,9 +5033,11 @@ function performLookup(query) {
                     <div class="profile-item"><span>Language:</span><span>${contact.language || 'English'}</span></div>
                     <div class="profile-item"><span>Account Type:</span><span>${contact.account_type || 'Customer'}</span></div>
                     <div style="font-size:12px; margin-top:8px; color:#555; line-height:1.4;"><strong>Notes:</strong><br>${contact.notes || 'None'}</div>
-                    <div style="display:flex; gap: 8px; margin-top: 12px;">
-                        <button class="btn-filter" onclick="openSmsModal('${contact.phone}')" style="flex:1; padding: 6px; font-size:11px;">SMS Update</button>
-                        <button class="btn-filter" onclick="openCallbackModal('${contact.phone}', '${contact.full_name}')" style="flex:1; padding: 6px; font-size:11px; background:#ffc107; color:#333;">Schedule Callback</button>
+                    <div style="display:flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
+                        <button class="btn-filter" onclick="openSmsModal('${contact.phone}')" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">SMS Update</button>
+                        <button class="btn-filter" onclick="openCallbackModal('${contact.phone}', '${(contact.full_name || '').replace(/'/g, "\\'")}')" style="flex:1; padding: 6px; font-size:11px; background:#ffc107; color:#333; min-width:90px;">Schedule Callback</button>
+                        ${cid ? `<button class="btn-filter" onclick="openCrmPanel('/app/agent_dashboard/crm.php')" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">Open CRM</button>
+                        <button class="btn-filter" onclick="deleteCrmContact(${cid})" style="flex:1; padding: 6px; font-size:11px; background:#fee2e2; color:#b91c1c; min-width:90px;">Delete Contact</button>` : ''}
                     </div>
                 `;
             } else {
@@ -4938,6 +5115,28 @@ function performLookup(query) {
             document.getElementById('lookupDeliveryBody').innerHTML = '<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:12px;">Error loading deliveries.</td></tr>';
             document.getElementById('lookupTicketsBody').innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444; padding:12px;">Error loading tickets.</td></tr>';
         });
+}
+window.performLookup = performLookup;
+
+function deleteCrmContact(contactId) {
+    if (!contactId) return;
+    if (!confirm('Delete this CRM contact?')) return;
+    const domain = (window.SKYKIN && SKYKIN.domain) ? SKYKIN.domain : '';
+    fetch('crm.php?api=delete&id=' + encodeURIComponent(contactId) + '&domain=' + encodeURIComponent(domain), {
+        credentials: 'same-origin'
+    })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            if (!res || !res.ok) {
+                showToast('Delete failed');
+                return;
+            }
+            showToast('Contact deleted');
+            const q = document.getElementById('lookupQuery').value.trim();
+            if (q) performLookup(q);
+            else clearLookup();
+        })
+        .catch(function() { showToast('Delete failed'); });
 }
 
 function clearLookup() {
@@ -5376,6 +5575,116 @@ const {
 
 let ua = null, reg = null, session = null;
 
+// SKYKIN_SAFE_DECLINE_v3
+function stopOutboundPoll() {
+    if (window._outboundPoll) { clearInterval(window._outboundPoll); window._outboundPoll = null; }
+}
+function resetOutboundRingUi() {
+    stopOutboundPoll();
+    window._outboundRingPhase = false;
+    window._outSawBlegRing = false;
+    window._outAnswerTicks = 0;
+    window._outDeclineTicks = 0;
+    window._outMaxCh = 0;
+    window.stopRingback && window.stopRingback();
+    window.stopRingtone && window.stopRingtone();
+    try {
+        document.getElementById('btnHangup').style.display = 'none';
+        document.getElementById('btnCall').style.display = 'block';
+        document.getElementById('phonePopup').classList.remove('call-active');
+        document.getElementById('callTimer').style.display = 'none';
+    } catch (e) {}
+    const ext = localStorage.getItem('sip_ext') || serverExt || '';
+    window.setSipStatus && window.setSipStatus('registered', 'Registered (' + ext + ')');
+}
+function endOutboundRing(agentHangup) {
+    const ext = localStorage.getItem('sip_ext') || serverExt || '';
+    const dest = window._outboundPollDest || window.lastDialedNumber || '';
+    fetch('index.php?action=outbound_stop&ext=' + encodeURIComponent(ext)
+        + '&dest=' + encodeURIComponent(dest)
+        + '&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' }).catch(function() {});
+    const s = session;
+    try {
+        if (s && !(s instanceof Invitation)
+            && s.state !== SessionState.Terminated
+            && s.state !== SessionState.Terminating) {
+            try { s.bye(); } catch (e) { try { s.cancel && s.cancel(); } catch (e2) {} }
+            try { s.dispose && s.dispose(); } catch (e) {}
+        }
+    } catch (e) {}
+    if (session === s) {
+        session = null;
+    }
+    if (agentHangup && callStartTime) {
+        if (window.endCall) window.endCall();
+    } else {
+        resetOutboundRingUi();
+    }
+}
+window.endOutboundRing = endOutboundRing;
+function startOutboundPoll(ext, dest) {
+    stopOutboundPoll();
+    ext = ext || localStorage.getItem('sip_ext') || serverExt || '';
+    dest = dest || window.lastDialedNumber || '';
+    window._outboundPollDest = dest;
+    window._outSawBlegRing = false;
+    window._outAnswerTicks = 0;
+    window._outDeclineTicks = 0;
+    window._outMaxCh = 0;
+    window._outboundPoll = setInterval(function() {
+        if (!session || session instanceof Invitation) { stopOutboundPoll(); return; }
+        if (session.state === SessionState.Terminated || session.state === SessionState.Terminating) {
+            stopOutboundPoll();
+            return;
+        }
+        if (!window._outboundRingPhase && callStartTime) { stopOutboundPoll(); return; }
+        fetch('index.php?action=outbound_live&ext=' + encodeURIComponent(ext)
+            + '&dest=' + encodeURIComponent(dest)
+            + '&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (!d || d.ok === false) return;
+                var bst = String(d.bleg_state || '').toUpperCase();
+                var ch = (typeof d.channels === 'number') ? d.channels : 0;
+                if (ch >= 2) {
+                    window._outMaxCh = Math.max(window._outMaxCh || 0, ch);
+                }
+                if (d.bleg) {
+                    window._outSawBlegRing = true;
+                }
+                var answered = !!(d.bleg && (bst === 'ACTIVE' || bst === 'ANSWER' || bst === 'EXECUTE'));
+                if (answered && !callStartTime) {
+                    window._outAnswerTicks = (window._outAnswerTicks || 0) + 1;
+                    if (window._outAnswerTicks >= 2) {
+                        window._outboundRingPhase = false;
+                        stopOutboundPoll();
+                        window.stopRingback && window.stopRingback();
+                        enableSenders(session);
+                        if (!session._skykinAudioAttached) {
+                            attachAudio(session);
+                        }
+                        window.startCallUI && window.startCallUI(dest || window.lastDialedNumber || '');
+                        window.showToast && window.showToast('Call connected');
+                    }
+                    return;
+                }
+                window._outAnswerTicks = 0;
+                var partnerGone = window._outboundRingPhase && !answered && (
+                    (window._outSawBlegRing && !d.bleg)
+                    || (window._outMaxCh >= 2 && ch <= 1 && d.agent && !d.bleg)
+                );
+                if (partnerGone) {
+                    window._outDeclineTicks = (window._outDeclineTicks || 0) + 1;
+                    if (window._outDeclineTicks >= 1) {
+                        endOutboundRing(false);
+                    }
+                } else if (!answered) {
+                    window._outDeclineTicks = 0;
+                }
+            }).catch(function() {});
+    }, 400);
+}
+
 // Chrome gathers ICE candidates from every network interface, and the agent PCs
 // carry several virtual adapters (VMware/WSL/Hyper-V) whose STUN queries are
 // never answered. SIP.js will not send an offer or an answer until gathering
@@ -5536,7 +5845,9 @@ function bindSession(s) {
     s.stateChange.addListener(state => {
         if (state === SessionState.Established || state === SessionState.Terminated
             || state === SessionState.Terminating) {
-            window.stopRingback && window.stopRingback();
+            if (s instanceof Invitation) {
+                window.stopRingback && window.stopRingback();
+            }
         }
         if (state === SessionState.Established) {
             s._skykinEstablished = true;
@@ -5544,6 +5855,11 @@ function bindSession(s) {
             const num = s instanceof Invitation
                 ? (s.remoteIdentity?.uri?.user || window.lastDialedNumber || '')
                 : (window.lastDialedNumber || '');
+            if (!(s instanceof Invitation)) {
+                window._outboundRingPhase = true;
+                startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, num);
+                return;
+            }
             window.startCallUI && window.startCallUI(num);
             attachAudio(s);
             window.showToast && window.showToast('Call connected');
@@ -5560,7 +5876,9 @@ function bindSession(s) {
             if (session === s) {
                 session = null;
             }
-            if (s._skykinEstablished) {
+            if (!(s instanceof Invitation) && !callStartTime) {
+                resetOutboundRingUi();
+            } else if (s._skykinEstablished) {
                 if (window.endCall) window.endCall();
             } else {
                 window.stopRingtone && window.stopRingtone();
@@ -5687,8 +6005,13 @@ window.sipBridge.makeCall = function(number) {
             sessionDescriptionHandlerModifiers: SDP_MODIFIERS
         });
         session = inv;
+        window.lastDialedNumber = number;
+        window.lastCallType = 'Outbound';
+        window._outboundRingPhase = true;
+        window._outMaxCh = 0;
         window.setSipStatus && window.setSipStatus('calling', 'Calling ' + number);
         bindSession(inv);
+        startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, number);
         return inv.invite({
             // 180/183 means the far end is actually alerting, so only start the
             // ringback then rather than the moment Call is pressed.
@@ -5697,12 +6020,15 @@ window.sipBridge.makeCall = function(number) {
                     window.setSipStatus && window.setSipStatus('calling', 'Ringing ' + number);
                     window.startRingback && window.startRingback();
                     enableSenders(inv);
+                    startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, number);
                 },
                 onAccept: function() {
-                    window.stopRingback && window.stopRingback();
-                    window.startCallUI && window.startCallUI(number);
+                    // pre_answer 200 — keep media; poll switches UI when B-leg ACTIVE.
                     enableSenders(inv);
-                    attachAudio(inv);
+                    if (!inv._skykinAudioAttached) {
+                        attachAudio(inv);
+                    }
+                    startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, number);
                 }
             }
         }).catch(function(err) {
