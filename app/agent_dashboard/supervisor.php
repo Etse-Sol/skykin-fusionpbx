@@ -1589,21 +1589,19 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                 <span id="idleSaveMsg" style="font-size:12px;color:#64748b"></span>
             </div>
         </div>
-    </div>
-        <div class="tab-content" id="tab-blacklist" style="padding:16px">
-            <div class="section-box" style="padding:16px">
-                <div class="section-title">Blocked callers</div>
-                <p style="font-size:13px;color:#666">Agents can block a caller from the phone. Those numbers never ring the queue.</p>
-                <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
-                    <input type="tel" id="supBlNumber" placeholder="Phone number" style="padding:8px;border:1px solid #ddd;border-radius:6px">
-                    <input type="text" id="supBlReason" placeholder="Reason" style="padding:8px;border:1px solid #ddd;border-radius:6px">
-                    <button class="btn-filter" type="button" onclick="supAddBlacklist()">Block</button>
-                </div>
-                <table class="data-table">
-                    <thead><tr><th>Number</th><th>Reason</th><th>Agent</th><th></th></tr></thead>
-                    <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
-                </table>
+
+        <div class="tab-content" id="tab-blacklist">
+            <h4 style="margin:0 0 6px;color:#333;font-size:15px">Blocked callers</h4>
+            <p style="font-size:12px;color:#666;margin:0 0 14px">Agents can block a caller from the phone. Those numbers never ring the queue.</p>
+            <div class="date-filter" style="margin-bottom:0">
+                <input type="tel" class="search-input" id="supBlNumber" placeholder="Phone number">
+                <input type="text" class="search-input" id="supBlReason" placeholder="Reason">
+                <button class="btn-filter" type="button" onclick="supAddBlacklist()">Block</button>
             </div>
+            <table class="data-table" style="margin-top:14px">
+                <thead><tr><th>Number</th><th>Reason</th><th>Agent</th><th></th></tr></thead>
+                <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
+            </table>
         </div>
         <div class="tab-content" id="tab-reports" style="padding:0;height:700px">
             <iframe src="about:blank" id="reportsFrame" title="Reports" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
@@ -1618,6 +1616,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
         </div>
 
+    </div>
 </div>
 
 <!-- Supervisor softphone -->
