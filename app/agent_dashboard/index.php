@@ -1843,6 +1843,7 @@ header('Pragma: no-cache');
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta http-equiv="Cache-Control" content="no-store">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">

@@ -63,6 +63,17 @@ function skykin_domain_param($from_request = null): string {
 	return skykin_default_domain();
 }
 
+/** Public URL for the SkyKin favicon used across Sky Connect pages. */
+function skykin_favicon_url(): string {
+	return '/app/agent_dashboard/assets/skykin-favicon.png';
+}
+
+/** HTML link tag for the SkyKin favicon. */
+function skykin_favicon_tag(): string {
+	$url = htmlspecialchars(skykin_favicon_url(), ENT_QUOTES, 'UTF-8');
+	return '<link rel="icon" type="image/png" href="' . $url . '">' . "\n";
+}
+
 /**
  * Digits-only phone (for CRM / caller-ID matching).
  */
@@ -1155,7 +1166,7 @@ function skykin_require_groups(array $allowed, bool $json = false): void {
 		exit;
 	}
 	http_response_code(403);
-	echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Access Denied – Sky Connect</title>
+	echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Access Denied – Sky Connect</title>' . skykin_favicon_tag() . '
 <style>body{font-family:Segoe UI,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;margin:0}
 .box{background:#fff;padding:40px 48px;border-radius:14px;text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.1)}
 h2{color:#c62828;margin:0 0 10px}p{color:#666;font-size:14px}a{color:#0047AB}</style></head>

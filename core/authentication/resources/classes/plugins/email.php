@@ -66,7 +66,7 @@ class plugin_email {
 	function email(authentication $auth, settings $settings) {
 
 		//pre-process some settings
-		$theme_favicon           = $settings->get('theme', 'favicon', PROJECT_PATH . '/themes/default/favicon.ico');
+		$theme_favicon           = $settings->get('theme', 'favicon', PROJECT_PATH . '/themes/skykin/images/favicon.png');
 		$theme_logo              = $settings->get('theme', 'logo', PROJECT_PATH . '/themes/default/images/logo_login.png');
 		$theme_login_type        = $settings->get('theme', 'login_brand_type', '');
 		$theme_login_image       = $settings->get('theme', 'login_brand_image', '');

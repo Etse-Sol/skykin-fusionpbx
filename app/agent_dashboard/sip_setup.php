@@ -11,7 +11,7 @@ $domain = skykin_domain_param($_GET['domain'] ?? null);
 $host   = $cfg['sip_server'];
 ?>
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>SIP setup</title></head>
+<html><head><?php echo skykin_favicon_tag(); ?><meta charset="utf-8"><title>SIP setup</title></head>
 <body>
 <script>
 localStorage.setItem('sip_server', <?php echo json_encode($host); ?>);

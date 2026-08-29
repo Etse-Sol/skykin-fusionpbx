@@ -977,6 +977,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_settings' && $_SERVER['R
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Sky Connect Supervisor – <?php echo $domain; ?></title>

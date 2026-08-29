@@ -424,6 +424,7 @@ if (isset($_GET['api'])) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sky Connect – Reports</title>

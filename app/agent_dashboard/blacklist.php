@@ -149,7 +149,7 @@ try {
 	$err = $e->getMessage();
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 	$raw_in = (string)file_get_contents('php://input');
 	$json_body = json_decode($raw_in, true);
 	if (!is_array($json_body)) {
@@ -159,35 +159,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
 	$raw = (string)($_POST['number'] ?? $json_body['number'] ?? '');
 	$reason = (string)($_POST['reason'] ?? $json_body['reason'] ?? 'blocked by agent');
 	$ajax = (string)($_POST['ajax'] ?? '') === '1' || isset($json_body['number']);
+	if (!$db) {
+		if ($ajax) {
+			header('Content-Type: application/json');
+			echo json_encode(['ok' => false, 'error' => $err !== '' ? $err : 'database']);
+			exit;
+		}
+	} else {
 	$domain = bl_active_domain();
 	if ($action === '' && strlen(bl_digits($raw)) >= 7) {
 		$action = 'add';
 	}
 	$num = bl_digits($raw);
-	if ($action === 'add' && strlen($num) >= 7 && $domain !== '') {
-		$st = $db->prepare('INSERT INTO skykin_blacklist (digits, domain_name, display, reason, agent, ts) VALUES (?,?,?,?,?,?) ON CONFLICT (digits, domain_name) DO NOTHING');
-		$st->execute([
-			$num,
-			$domain,
-			$raw !== '' ? $raw : $num,
-			$reason,
-			(string)($_SESSION['username'] ?? ''),
-			time(),
-		]);
-		if (function_exists('skykin_bl_push')) {
-			skykin_bl_push($db, $num, true, $domain);
-		} else {
-			bl_fs_hash($num, true, $domain);
-			bl_write_files($db);
+	if ($action === 'add' && strlen($num) < 7) {
+		if ($ajax) {
+			header('Content-Type: application/json');
+			echo json_encode(['ok' => false, 'error' => 'Enter a valid phone number']);
+			exit;
 		}
-		$msg = 'Blocked ' . $num;
-	} elseif ($action === 'del' && $num !== '' && $domain !== '') {
+		$err = 'Enter a valid phone number';
+	} elseif ($action === 'add' && $domain === '') {
+		if ($ajax) {
+			header('Content-Type: application/json');
+			echo json_encode(['ok' => false, 'error' => 'no domain']);
+			exit;
+		}
+		$err = 'no domain';
+	} elseif ($action === 'add' && strlen($num) >= 7 && $domain !== '') {
+		try {
+			if (function_exists('skykin_bl_upsert')) {
+				skykin_bl_upsert(
+					$db,
+					$num,
+					$domain,
+					$raw !== '' ? $raw : $num,
+					$reason,
+					(string)($_SESSION['username'] ?? '')
+				);
+			} else {
+				$st = $db->prepare('INSERT INTO skykin_blacklist (digits, domain_name, display, reason, agent, ts) VALUES (?,?,?,?,?,?)');
+				$st->execute([
+					$num,
+					$domain,
+					$raw !== '' ? $raw : $num,
+					$reason,
+					(string)($_SESSION['username'] ?? ''),
+					time(),
+				]);
+			}
+			if (function_exists('skykin_bl_push')) {
+				skykin_bl_push($db, $num, true, $domain);
+			} else {
+				bl_fs_hash($num, true, $domain);
+				bl_write_files($db);
+			}
+			$msg = 'Blocked ' . $num;
+		} catch (Throwable $e) {
+			$err = $e->getMessage();
+			if ($ajax) {
+				header('Content-Type: application/json');
+				echo json_encode(['ok' => false, 'error' => $err, 'digits' => $num, 'domain' => $domain]);
+				exit;
+			}
+		}
+	} elseif ($action === 'del' && $num !== '') {
+		$dom = $domain !== '' ? $domain : (string)($_SESSION['domain_name'] ?? '');
 		$st = $db->prepare('DELETE FROM skykin_blacklist WHERE digits=? AND domain_name=?');
-		$st->execute([$num, $domain]);
+		$st->execute([$num, $dom]);
+		if ($st->rowCount() < 1) {
+			$st = $db->prepare('DELETE FROM skykin_blacklist WHERE digits=?');
+			$st->execute([$num]);
+		}
 		if (function_exists('skykin_bl_push')) {
-			skykin_bl_push($db, $num, false, $domain);
+			skykin_bl_push($db, $num, false, $dom);
 		} else {
-			bl_fs_hash($num, false, $domain);
+			bl_fs_hash($num, false, $dom);
 			bl_write_files($db);
 		}
 		$msg = 'Removed ' . $num;
@@ -200,6 +246,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $db) {
 	}
 	header('Location: blacklist.php' . ($embed ? '?embed=1' : ''));
 	exit;
+	}
 }
 
 $domain = bl_active_domain();
@@ -238,9 +285,10 @@ $dash = 'index.php?agent=' . urlencode($_GET['agent'] ?? '') . '&domain=' . urle
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Blacklist - SkyKin</title>
+<title>Blacklist - Sky Connect</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: Segoe UI, system-ui, sans-serif; background: #f4f7fb; color: #0f172a; }
@@ -269,11 +317,13 @@ $dash = 'index.php?agent=' . urlencode($_GET['agent'] ?? '') . '&domain=' . urle
   .num { font-size: 18px; font-weight: 700; }
   .err { background: #fef2f2; color: #b91c1c; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
   .ok { background: #ecfdf5; color: #047857; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
+  .sk-footer { text-align: center; font-size: 11px; color: #94a3b8; padding: 20px; }
+  body.embed .sk-footer { display: none; }
 </style>
 </head>
 <body class="<?php echo $embed ? 'embed' : ''; ?>">
 <div class="header">
-  <div class="logo">SKY<span>KIN</span> Technologies</div>
+  <div class="logo">Sky <span>Connect</span></div>
   <div><?php echo $agent_name; ?> · <?php echo $domain; ?></div>
 </div>
 <div class="side">
@@ -291,7 +341,7 @@ $dash = 'index.php?agent=' . urlencode($_GET['agent'] ?? '') . '&domain=' . urle
     <form class="row" method="post">
       <input type="hidden" name="action" value="add">
       <?php if ($embed): ?><input type="hidden" name="embed" value="1"><?php endif; ?>
-      <input name="number" required placeholder="Number e.g. 0902925776">
+      <input name="number" required placeholder="Phone number" autocomplete="off">
       <input name="reason" placeholder="Reason">
       <button type="submit">Block number</button>
     </form>
@@ -319,5 +369,6 @@ $dash = 'index.php?agent=' . urlencode($_GET['agent'] ?? '') . '&domain=' . urle
     </table>
   </div>
 </div>
+<div class="sk-footer">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 </body>
 </html>

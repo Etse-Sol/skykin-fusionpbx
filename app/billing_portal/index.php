@@ -395,9 +395,10 @@ $resolved_domain = resolveDomain($db);
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <link rel="icon" type="image/png" href="/app/agent_dashboard/assets/skykin-favicon.png">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Call Billing Portal - SkyKin Technologies</title>
+    <title>Call Billing Portal - Sky Connect</title>
     <style>
         :root {
             /* ── Light theme matching Agent Dashboard & Department Portal ── */
@@ -906,7 +907,7 @@ $resolved_domain = resolveDomain($db);
     <!-- HEADER -->
     <header>
         <div class="header-container">
-            <div class="logo">SKY<span>KIN</span> Technologies</div>
+            <div class="logo">Sky <span>Connect</span></div>
             
             <div class="header-links">
                 <a href="/app/department_tickets/index.php" class="header-btn">Department Tickets</a>
@@ -1277,5 +1278,6 @@ $resolved_domain = resolveDomain($db);
             loadBillingSummary();
         });
     </script>
+    <div style="text-align:center;font-size:11px;color:#aaa;padding:20px">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 </body>
 </html>
