@@ -395,9 +395,10 @@ $resolved_domain = resolveDomain($db);
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
-    <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="apple-touch-icon" sizes="180x180" href="/app/agent_dashboard/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">
+    <link rel="shortcut icon" type="image/png" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">
+    <link rel="icon" href="/app/agent_dashboard/assets/favicon.ico?v=5">
+    <link rel="apple-touch-icon" sizes="180x180" href="/app/agent_dashboard/assets/apple-touch-icon.png?v=5">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Call Billing Portal - Sky Connect</title>

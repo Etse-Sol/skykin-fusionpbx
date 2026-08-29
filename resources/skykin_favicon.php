@@ -9,9 +9,13 @@ if (defined('SKYKIN_FAVICON_HOOK')) {
 define('SKYKIN_FAVICON_HOOK', true);
 
 function skykin_global_favicon_tags(): string {
-	return '<link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">' . "\n"
-		. '<link rel="shortcut icon" href="/favicon.ico">' . "\n"
-		. '<link rel="apple-touch-icon" sizes="180x180" href="/app/agent_dashboard/assets/apple-touch-icon.png">' . "\n";
+	$png = '/app/agent_dashboard/assets/skykin-favicon.png?v=5';
+	$ico = '/app/agent_dashboard/assets/favicon.ico?v=5';
+	$apple = '/app/agent_dashboard/assets/apple-touch-icon.png?v=5';
+	return '<link rel="icon" type="image/png" sizes="32x32" href="' . $png . '">' . "\n"
+		. '<link rel="shortcut icon" type="image/png" href="' . $png . '">' . "\n"
+		. '<link rel="icon" href="' . $ico . '">' . "\n"
+		. '<link rel="apple-touch-icon" sizes="180x180" href="' . $apple . '">' . "\n";
 }
 
 ob_start(static function ($html) {

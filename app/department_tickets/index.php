@@ -196,9 +196,10 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
-    <link rel="shortcut icon" href="/favicon.ico">
-    <link rel="apple-touch-icon" sizes="180x180" href="/app/agent_dashboard/assets/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">
+    <link rel="shortcut icon" type="image/png" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">
+    <link rel="icon" href="/app/agent_dashboard/assets/favicon.ico?v=5">
+    <link rel="apple-touch-icon" sizes="180x180" href="/app/agent_dashboard/assets/apple-touch-icon.png?v=5">
     <meta charset="UTF-8">
     <!-- Use the live page location so fetch() keeps the exact scheme, host AND port
          (e.g. :8088). Building this server-side from HTTP_HOST dropped the port and

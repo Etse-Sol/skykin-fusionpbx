@@ -63,18 +63,24 @@ function skykin_domain_param($from_request = null): string {
 	return skykin_default_domain();
 }
 
+/** SkyKin favicon asset (under bind-mounted agent_dashboard on ecs-cc). */
+function skykin_favicon_asset_url(): string {
+	return '/app/agent_dashboard/assets/skykin-favicon.png?v=5';
+}
+
 /** Public URL for the SkyKin favicon used across all Sky Connect / FusionPBX pages. */
 function skykin_favicon_url(): string {
-	return '/favicon.png';
+	return skykin_favicon_asset_url();
 }
 
 /** HTML link tags for the SkyKin favicon. */
 function skykin_favicon_tag(): string {
-	$png = htmlspecialchars(skykin_favicon_url(), ENT_QUOTES, 'UTF-8');
-	$ico = htmlspecialchars('/favicon.ico', ENT_QUOTES, 'UTF-8');
-	$apple = htmlspecialchars('/app/agent_dashboard/assets/apple-touch-icon.png', ENT_QUOTES, 'UTF-8');
+	$png = htmlspecialchars(skykin_favicon_asset_url(), ENT_QUOTES, 'UTF-8');
+	$ico = htmlspecialchars('/app/agent_dashboard/assets/favicon.ico?v=5', ENT_QUOTES, 'UTF-8');
+	$apple = htmlspecialchars('/app/agent_dashboard/assets/apple-touch-icon.png?v=5', ENT_QUOTES, 'UTF-8');
 	return '<link rel="icon" type="image/png" sizes="32x32" href="' . $png . '">' . "\n"
-		. '<link rel="shortcut icon" href="' . $ico . '">' . "\n"
+		. '<link rel="shortcut icon" type="image/png" href="' . $png . '">' . "\n"
+		. '<link rel="icon" href="' . $ico . '">' . "\n"
 		. '<link rel="apple-touch-icon" sizes="180x180" href="' . $apple . '">' . "\n";
 }
 

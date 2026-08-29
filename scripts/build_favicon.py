@@ -14,6 +14,7 @@ OUTS = [
     ROOT / "themes" / "default" / "favicon.png",
     ROOT / "themes" / "skykin" / "images" / "favicon.png",
     ROOT / "app" / "agent_dashboard" / "assets" / "skykin-favicon.png",
+    ROOT / "app" / "agent_dashboard" / "assets" / "favicon.ico",
     ROOT / "app" / "agent_dashboard" / "assets" / "apple-touch-icon.png",
     ROOT / "website" / "public" / "favicon.png",
     ROOT / "website" / "src" / "app" / "icon.png",

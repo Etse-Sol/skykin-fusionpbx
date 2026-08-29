@@ -71,8 +71,8 @@
 			}
 			header('Content-Type: text/html; charset=UTF-8');
 			echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sky Connect – Signed in</title>';
-			echo '<link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">';
-			echo '<link rel="shortcut icon" href="/favicon.ico">';
+			echo '<link rel="icon" type="image/png" sizes="32x32" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">';
+			echo '<link rel="shortcut icon" type="image/png" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">';
 			echo '<style>body{font-family:Segoe UI,Arial,sans-serif;background:#f4f7fb;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}';
 			echo '.box{background:#fff;border-radius:12px;padding:32px;max-width:420px;width:90%;box-shadow:0 8px 28px rgba(0,0,0,.08);text-align:center}';
 			echo 'h1{font-size:20px;color:#0047AB;margin:0 0 8px}p{color:#555;font-size:14px;margin:0 0 22px}';
