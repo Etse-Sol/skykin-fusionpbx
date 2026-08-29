@@ -1,6 +1,6 @@
 #!/bin/bash
 # Deploy SkyKin favicon site-wide on webcc (run as root on ecs-cc)
-set -euo pipefail
+set -eu
 
 ROOT="${SKYKIN_FAVICON_REF:-https://raw.githubusercontent.com/Etse-Sol/skykin-fusionpbx/5.5}"
 APP="${SKYKIN_APP_ROOT:-/opt/skykin/app}"
