@@ -26,7 +26,8 @@
 	{/if}
 
 {*//set favorite icon *}
-	<link rel='icon' type='image/png' href='{$project_path}/themes/skykin/images/favicon.png'>
+	<link rel='icon' type='image/png' href='{$project_path}/favicon.png'>
+	<link rel='shortcut icon' type='image/png' href='{$project_path}/favicon.png'>
 
 {*//document title *}
 	<title>{$document_title}</title>

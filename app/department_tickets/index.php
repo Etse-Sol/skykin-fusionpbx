@@ -196,7 +196,8 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="icon" type="image/png" href="/app/agent_dashboard/assets/skykin-favicon.png">
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="shortcut icon" type="image/png" href="/favicon.png">
     <meta charset="UTF-8">
     <!-- Use the live page location so fetch() keeps the exact scheme, host AND port
          (e.g. :8088). Building this server-side from HTTP_HOST dropped the port and

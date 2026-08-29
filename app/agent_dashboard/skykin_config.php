@@ -63,15 +63,16 @@ function skykin_domain_param($from_request = null): string {
 	return skykin_default_domain();
 }
 
-/** Public URL for the SkyKin favicon used across Sky Connect pages. */
+/** Public URL for the SkyKin favicon used across all Sky Connect / FusionPBX pages. */
 function skykin_favicon_url(): string {
-	return '/app/agent_dashboard/assets/skykin-favicon.png';
+	return '/favicon.png';
 }
 
-/** HTML link tag for the SkyKin favicon. */
+/** HTML link tags for the SkyKin favicon. */
 function skykin_favicon_tag(): string {
 	$url = htmlspecialchars(skykin_favicon_url(), ENT_QUOTES, 'UTF-8');
-	return '<link rel="icon" type="image/png" href="' . $url . '">' . "\n";
+	return '<link rel="icon" type="image/png" href="' . $url . '">' . "\n"
+		. '<link rel="shortcut icon" type="image/png" href="' . $url . '">' . "\n";
 }
 
 /**
