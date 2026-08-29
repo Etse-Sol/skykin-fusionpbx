@@ -10,6 +10,7 @@ skykin_require_login($is_api);
 $logged_in_user   = $_SESSION['username']    ?? '';
 $logged_in_domain = skykin_default_domain();
 $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$embed   = !empty($_GET['embed']);
 
 function getDB() {
     static $db = null;
@@ -312,6 +313,11 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 .ch-row{background:#f8fafc;border-radius:9px;padding:9px 11px}
 .empty-state{color:var(--sk-muted)}
 
+body.embed-mode{background:var(--sk-canvas)}
+body.embed-mode .topbar{display:none}
+body.embed-mode .layout{height:calc(100vh - 62px)}
+body.embed-mode .crm-footer{display:none}
+
 @media(max-width:850px){
   .topbar{padding:0 14px}.brand span,.topbar-right .user-pill{display:none}
   .nav-links{overflow-x:auto}.nav-links a{white-space:nowrap;padding:8px}
@@ -320,8 +326,9 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 }
 </style>
 </head>
-<body>
+<body<?php echo $embed ? ' class="embed-mode"' : ''; ?>>
 
+<?php if (!$embed): ?>
 <div class="topbar">
   <div class="topbar-left">
     <div class="brand"><span class="brand-sky">Sky</span> Connect <span class="role-badge">SUPERVISOR</span></div>
@@ -339,6 +346,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
     <a href="/logout.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
   </div>
 </div>
+<?php endif; ?>
 
 <div class="toolbar">
   <input type="text" id="searchBox" placeholder="Search by name, phone, company..." oninput="loadContacts()" autofocus>
@@ -393,7 +401,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
     </div>
   </div>
 </div>
-<div style="text-align:center;font-size:11px;color:#aaa;padding:16px 24px">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
+<div class="crm-footer" style="text-align:center;font-size:11px;color:#aaa;padding:16px 24px">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 
 <script>
 const DOMAIN = '<?php echo $domain; ?>';

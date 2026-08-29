@@ -3735,7 +3735,10 @@ function sidebarNav(tab) {
 
 function agentCrmUrl() {
     const d = (window.SKYKIN && SKYKIN.domain) ? SKYKIN.domain : (typeof domain !== 'undefined' ? domain : '');
-    return '/app/agent_dashboard/crm.php' + (d ? ('?domain=' + encodeURIComponent(d)) : '');
+    const params = new URLSearchParams();
+    params.set('embed', '1');
+    if (d) params.set('domain', d);
+    return '/app/agent_dashboard/crm.php?' + params.toString();
 }
 
 // ?? Customer info panel (ahununu.com) ??????????????
