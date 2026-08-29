@@ -1223,7 +1223,10 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 
 
 
-/* Static management sidebar on desktop; operational sections remain top tabs. */
+/* Static management sidebar on desktop; all sections live in the side menu. */
+.sup-side-link{display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent}
+.sup-side-link:hover,.sup-side-link.active{background:#f0f7ff;border-color:#0047AB}
+.tab-bar{display:none !important}
 @media (min-width:901px) {
     #sideMenu {
         top:60px !important; left:0 !important; height:calc(100vh - 60px) !important;
@@ -1281,19 +1284,22 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
         <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
+        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Operations</div>
+        <a href="#" class="sup-side-link active" data-side-tab="dashboard" onclick="event.preventDefault();toggleSideMenu();showTab('dashboard')"><span style="font-size:18px">&#128202;</span> Dashboard</a>
+        <a href="#" class="sup-side-link" data-side-tab="leaderboard" onclick="event.preventDefault();toggleSideMenu();showTab('leaderboard')"><span style="font-size:18px">&#127942;</span> Leaderboard</a>
+        <a href="#" class="sup-side-link" data-side-tab="callhistory" onclick="event.preventDefault();toggleSideMenu();showTab('callhistory')"><span style="font-size:18px">&#128222;</span> All Call History</a>
+        <a href="#" class="sup-side-link" data-side-tab="acwall" onclick="event.preventDefault();toggleSideMenu();showTab('acwall')"><span style="font-size:18px">&#128221;</span> ACW Review</a>
+        <a href="#" class="sup-side-link" data-side-tab="recordings" onclick="event.preventDefault();toggleSideMenu();showTab('recordings')"><span style="font-size:18px">&#127911;</span> Call Recordings</a>
+        <a href="#" class="sup-side-link" data-side-tab="voicequality" onclick="event.preventDefault();toggleSideMenu();showTab('voicequality')"><span style="font-size:18px">&#128266;</span> Voice Quality</a>
+        <a href="#" class="sup-side-link" data-side-tab="skills" onclick="event.preventDefault();toggleSideMenu();showTab('skills')"><span style="font-size:18px">&#127919;</span> Agent Skills</a>
+        <a href="#" class="sup-side-link" data-side-tab="blacklist" onclick="event.preventDefault();toggleSideMenu();showTab('blacklist')"><span style="font-size:18px">&#128683;</span> Blacklist</a>
+        <a href="#" class="sup-side-link" data-side-tab="ahununu" onclick="event.preventDefault();toggleSideMenu();showTab('ahununu')"><span style="font-size:18px">&#127760;</span> Ahununu.com</a>
+        <div style="height:1px;background:#eee;margin:8px 0"></div>
         <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Management</div>
-        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('reports');" data-side-tab="reports" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
-            <span style="font-size:18px">&#128202;</span> Reports
-        </a>
-        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('evaluation');" data-side-tab="evaluation" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
-            <span style="font-size:18px">&#9733;</span> Evaluation
-        </a>
-        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('crm');" data-side-tab="crm" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
-            <span style="font-size:18px">&#128100;</span> CRM
-        </a>
-        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('settings');" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#9881;</span> Settings
-        </a>
+        <a href="#" class="sup-side-link" data-side-tab="reports" onclick="event.preventDefault();toggleSideMenu();showTab('reports')"><span style="font-size:18px">&#128200;</span> Reports</a>
+        <a href="#" class="sup-side-link" data-side-tab="evaluation" onclick="event.preventDefault();toggleSideMenu();showTab('evaluation')"><span style="font-size:18px">&#9733;</span> Evaluation</a>
+        <a href="#" class="sup-side-link" data-side-tab="crm" onclick="event.preventDefault();toggleSideMenu();showTab('crm')"><span style="font-size:18px">&#128100;</span> CRM</a>
+        <a href="#" class="sup-side-link" data-side-tab="settings" onclick="event.preventDefault();toggleSideMenu();showTab('settings')"><span style="font-size:18px">&#9881;</span> Settings</a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
         <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
             <span style="font-size:18px">&#128682;</span> Sign Out
@@ -1305,19 +1311,8 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 
 <div class="main">
 
-    <!-- Tabs: Dashboard first, then detail views -->
+    <!-- Main content panels (navigation is in the left sidebar) -->
     <div class="bottom-section">
-        <div class="tab-bar">
-            <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
-            <button class="tab-btn" data-tab="leaderboard" onclick="showTab('leaderboard')">Leaderboard</button>
-            <button class="tab-btn" data-tab="callhistory" onclick="showTab('callhistory')">All Call History</button>
-            <button class="tab-btn" data-tab="acwall" onclick="showTab('acwall')">ACW Review</button>
-            <button class="tab-btn" data-tab="recordings" onclick="showTab('recordings')">Call Recordings</button>
-            <button class="tab-btn" data-tab="voicequality" onclick="showTab('voicequality')">Voice Quality</button>
-            <button class="tab-btn" data-tab="skills" onclick="showTab('skills')">Agent Skills</button>
-            <button class="tab-btn" data-tab="blacklist" onclick="showTab('blacklist')">Blacklist</button>
-            <button class="tab-btn" data-tab="ahununu" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
-        </div>
 
         <!-- Dashboard Tab (landing overview) -->
         <div class="tab-content active" id="tab-dashboard" style="padding:16px">
@@ -2157,28 +2152,17 @@ function loadSupervisorEmbed(frameId, page) {
 function setSideNavActive(name) {
     document.querySelectorAll('#sideMenu [data-side-tab]').forEach(function(el) {
         el.classList.remove('active');
-        el.style.background = '';
-        el.style.borderColor = 'transparent';
     });
     if (!name) return;
     const link = document.querySelector('#sideMenu [data-side-tab="' + name + '"]');
-    if (link) {
-        link.classList.add('active');
-        link.style.background = '#f0f7ff';
-        link.style.borderColor = '#0047AB';
-    }
+    if (link) link.classList.add('active');
 }
 
 function showTab(name){
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
     const panel = document.getElementById('tab-'+name);
     if (panel) panel.classList.add('active');
-    const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
-    if (btn) btn.classList.add('active');
-    else if (typeof event !== 'undefined' && event && event.target && event.target.classList) event.target.classList.add('active');
-    if (name === 'crm' || name === 'evaluation' || name === 'reports') setSideNavActive(name);
-    else setSideNavActive('');
+    setSideNavActive(name);
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
@@ -2198,13 +2182,9 @@ function showTab(name){
 
 function showTabDirect(name){
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
     const panel = document.getElementById('tab-'+name);
     if (panel) panel.classList.add('active');
-    const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
-    if (btn) btn.classList.add('active');
-    if (name === 'crm' || name === 'evaluation' || name === 'reports') setSideNavActive(name);
-    else setSideNavActive('');
+    setSideNavActive(name);
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
