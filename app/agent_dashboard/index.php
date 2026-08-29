@@ -754,6 +754,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_customer') {
             // Look up CRM contact profile
             skykin_crm_ensure_contacts($db);
             $data['contact'] = skykin_crm_find_contact($db, $customerPhone);
+            if (!$data['contact']) {
+                $norm = skykin_normalize_phone_storage($customerPhone);
+                if ($norm !== '' && $norm !== $customerPhone) {
+                    $data['contact'] = skykin_crm_find_contact($db, $norm);
+                }
+            }
             
             // Create profile fallback if not found
             if (!$data['contact']) {
@@ -4377,21 +4383,67 @@ function setSipStatus(state, text) {
     document.getElementById('sipStatusText').textContent = text;
 }
 
+function crmDisplayName(contact) {
+    if (!contact || !contact.full_name) return '';
+    const n = String(contact.full_name).trim();
+    if (contact.contact_id) return n;
+    if (/^Customer\s*\(/i.test(n)) return '';
+    return n;
+}
+
+function applyCrmNameToCallUi(phone, contact) {
+    const num = String(phone || '').trim();
+    const name = crmDisplayName(contact);
+    const incEl = document.getElementById('incomingNumber');
+    const cidEl = document.getElementById('incomingCidName');
+    if (incEl) incEl.textContent = name || num || 'Unknown';
+    if (cidEl) cidEl.textContent = (name && num) ? num : '';
+    if (!name) return;
+    const st = ((document.getElementById('sipStatusText') || {}).textContent || '');
+    if (!/ringing|calling|in call/i.test(st)) return;
+    let mode = 'incall';
+    if (/ringing/i.test(st)) mode = 'ringing';
+    else if (/calling/i.test(st)) mode = 'calling';
+    const label = mode === 'ringing' ? 'Ringing' : (mode === 'calling' ? 'Calling' : 'In Call');
+    setSipStatus(mode, label + ': ' + name);
+}
+
+function fetchCrmContact(phone, cb) {
+    const q = String(phone || '').trim();
+    if (!q || q === 'Unknown') {
+        if (cb) cb(null);
+        return;
+    }
+    fetch('crm.php?api=lookup&phone=' + encodeURIComponent(q), { credentials: 'same-origin' })
+        .then(function(res) { return res.json(); })
+        .then(function(c) {
+            applyCrmNameToCallUi(q, c);
+            if (cb) cb(c);
+        })
+        .catch(function() { if (cb) cb(null); });
+}
+window.fetchCrmContact = fetchCrmContact;
+
 function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
     window.lastIncomingNumber = callerNumber || '';
     window._callEnded = false;
     try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
-    document.getElementById('incomingNumber').textContent = callerNumber;
+    document.getElementById('incomingNumber').textContent = callerNumber || 'Unknown';
+    const cidEl = document.getElementById('incomingCidName');
+    if (cidEl) cidEl.textContent = '';
     // Show incoming screen inside the phone panel, hide dial pad
     document.getElementById('incomingScreen').style.display = 'block';
     document.getElementById('dpPanel').style.display        = 'none';
     openPhonePopup();
-    setSipStatus('ringing', 'Ringing: ' + callerNumber);
+    setSipStatus('ringing', 'Ringing: ' + (callerNumber || 'Unknown'));
     startRingtone();
-    if (callerNumber && window.performLookup) {
-        performLookup(callerNumber);
-        switchTab('lookup');
+    if (callerNumber) {
+        fetchCrmContact(callerNumber);
+        if (window.performLookup) {
+            performLookup(callerNumber);
+            switchTab('lookup');
+        }
     }
 }
 window.handleIncoming = handleIncoming;
@@ -4427,6 +4479,7 @@ function makeCall(number) {
     if (!number) return;
     lastDialedNumber = number;
     lastCallType = 'Outbound';
+    fetchCrmContact(number);
     if (window.performLookup) {
         performLookup(number);
         switchTab('lookup');
@@ -4513,9 +4566,11 @@ window.stopRingback = stopRingback;
 window.startRingback = startRingback;
 
 function startCallUI(number) {
+    number = number || window.lastDialedNumber || window.lastIncomingNumber || '';
     window._callEnded = false; // Reset so endCall() works for this new call
     stopRingtone();
     setSipStatus('incall', 'In Call: ' + number);
+    fetchCrmContact(number);
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display   = 'flex';
@@ -5023,6 +5078,7 @@ function performLookup(query) {
             // 1. Render Contact Profile
             const contact = data.contact;
             if (contact) {
+                applyCrmNameToCallUi(query, contact);
                 const cid = contact.contact_id ? Number(contact.contact_id) : 0;
                 document.getElementById('lookupProfileBox').innerHTML = `
                     <div class="profile-title">${contact.full_name || 'Unknown Customer'}</div>

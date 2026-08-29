@@ -78,6 +78,12 @@ if (isset($_GET['api'])) {
             $phone = $_GET['phone'] ?? '';
             if (!$phone) { echo json_encode(null); exit; }
             $row = skykin_crm_find_contact($db, $phone);
+            if (!$row) {
+                $norm = skykin_normalize_phone_storage($phone);
+                if ($norm !== '' && $norm !== $phone) {
+                    $row = skykin_crm_find_contact($db, $norm);
+                }
+            }
             // Also get call history for this contact
             if ($row) {
                 $clean = preg_replace('/^(\+251|00251|0)/', '', $phone);
