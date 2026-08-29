@@ -26,8 +26,9 @@
 	{/if}
 
 {*//set favorite icon *}
-	<link rel='icon' type='image/png' href='{$project_path}/favicon.png'>
-	<link rel='shortcut icon' type='image/png' href='{$project_path}/favicon.png'>
+	<link rel='icon' type='image/png' sizes='32x32' href='{$project_path}/favicon.png'>
+	<link rel='shortcut icon' href='{$project_path}/favicon.ico'>
+	<link rel='apple-touch-icon' sizes='180x180' href='{$project_path}/app/agent_dashboard/assets/apple-touch-icon.png'>
 
 {*//document title *}
 	<title>{$document_title}</title>

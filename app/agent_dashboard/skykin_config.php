@@ -70,9 +70,12 @@ function skykin_favicon_url(): string {
 
 /** HTML link tags for the SkyKin favicon. */
 function skykin_favicon_tag(): string {
-	$url = htmlspecialchars(skykin_favicon_url(), ENT_QUOTES, 'UTF-8');
-	return '<link rel="icon" type="image/png" href="' . $url . '">' . "\n"
-		. '<link rel="shortcut icon" type="image/png" href="' . $url . '">' . "\n";
+	$png = htmlspecialchars(skykin_favicon_url(), ENT_QUOTES, 'UTF-8');
+	$ico = htmlspecialchars('/favicon.ico', ENT_QUOTES, 'UTF-8');
+	$apple = htmlspecialchars('/app/agent_dashboard/assets/apple-touch-icon.png', ENT_QUOTES, 'UTF-8');
+	return '<link rel="icon" type="image/png" sizes="32x32" href="' . $png . '">' . "\n"
+		. '<link rel="shortcut icon" href="' . $ico . '">' . "\n"
+		. '<link rel="apple-touch-icon" sizes="180x180" href="' . $apple . '">' . "\n";
 }
 
 /**

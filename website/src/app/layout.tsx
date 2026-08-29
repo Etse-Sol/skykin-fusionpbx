@@ -38,8 +38,11 @@ export const metadata: Metadata = {
     type: "website",
   },
   icons: {
-    icon: "/images/skykin_logo.png",
-    apple: "/images/skykin_logo.png",
+    icon: [
+      { url: "/favicon.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon.ico", sizes: "48x48" },
+    ],
+    apple: "/images/favicon.png",
   },
 };
 
