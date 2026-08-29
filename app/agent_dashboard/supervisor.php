@@ -1224,8 +1224,20 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 
 
 /* Static management sidebar on desktop; all sections live in the side menu. */
-.sup-side-link{display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent}
-.sup-side-link:hover,.sup-side-link.active{background:#f0f7ff;border-color:#0047AB}
+.sup-side-label{padding:8px 20px 4px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px}
+.sup-side-link{
+    display:flex;align-items:center;padding:10px 20px;color:#475569;text-decoration:none;
+    font-size:13.5px;font-weight:500;border-left:3px solid transparent;
+    transition:background .15s,border-color .15s,color .15s,box-shadow .15s
+}
+.sup-side-link:hover{background:#f0f5ff;border-left-color:#0047AB;color:#0047AB}
+.sup-side-link.active{
+    background:linear-gradient(90deg,#eef3ff 0%,#f8faff 100%);
+    border-left-color:#0047AB;color:#0047AB;font-weight:700;
+    box-shadow:inset 0 0 0 1px rgba(0,71,171,.08)
+}
+.sup-side-signout{display:flex;align-items:center;padding:10px 20px;color:#dc3545;text-decoration:none;font-size:13.5px;font-weight:500;border-left:3px solid transparent}
+.sup-side-signout:hover{background:#fff5f5;border-left-color:#dc3545}
 .tab-bar{display:none !important}
 @media (min-width:901px) {
     #sideMenu {
@@ -1284,26 +1296,24 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
         <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Operations</div>
-        <a href="#" class="sup-side-link active" data-side-tab="dashboard" onclick="event.preventDefault();toggleSideMenu();showTab('dashboard')"><span style="font-size:18px">&#128202;</span> Dashboard</a>
-        <a href="#" class="sup-side-link" data-side-tab="leaderboard" onclick="event.preventDefault();toggleSideMenu();showTab('leaderboard')"><span style="font-size:18px">&#127942;</span> Leaderboard</a>
-        <a href="#" class="sup-side-link" data-side-tab="callhistory" onclick="event.preventDefault();toggleSideMenu();showTab('callhistory')"><span style="font-size:18px">&#128222;</span> All Call History</a>
-        <a href="#" class="sup-side-link" data-side-tab="acwall" onclick="event.preventDefault();toggleSideMenu();showTab('acwall')"><span style="font-size:18px">&#128221;</span> ACW Review</a>
-        <a href="#" class="sup-side-link" data-side-tab="recordings" onclick="event.preventDefault();toggleSideMenu();showTab('recordings')"><span style="font-size:18px">&#127911;</span> Call Recordings</a>
-        <a href="#" class="sup-side-link" data-side-tab="voicequality" onclick="event.preventDefault();toggleSideMenu();showTab('voicequality')"><span style="font-size:18px">&#128266;</span> Voice Quality</a>
-        <a href="#" class="sup-side-link" data-side-tab="skills" onclick="event.preventDefault();toggleSideMenu();showTab('skills')"><span style="font-size:18px">&#127919;</span> Agent Skills</a>
-        <a href="#" class="sup-side-link" data-side-tab="blacklist" onclick="event.preventDefault();toggleSideMenu();showTab('blacklist')"><span style="font-size:18px">&#128683;</span> Blacklist</a>
-        <a href="#" class="sup-side-link" data-side-tab="ahununu" onclick="event.preventDefault();toggleSideMenu();showTab('ahununu')"><span style="font-size:18px">&#127760;</span> Ahununu.com</a>
+        <div class="sup-side-label">Operations</div>
+        <a href="#" class="sup-side-link active" data-side-tab="dashboard" onclick="event.preventDefault();toggleSideMenu();showTab('dashboard')">Dashboard</a>
+        <a href="#" class="sup-side-link" data-side-tab="leaderboard" onclick="event.preventDefault();toggleSideMenu();showTab('leaderboard')">Leaderboard</a>
+        <a href="#" class="sup-side-link" data-side-tab="callhistory" onclick="event.preventDefault();toggleSideMenu();showTab('callhistory')">All Call History</a>
+        <a href="#" class="sup-side-link" data-side-tab="acwall" onclick="event.preventDefault();toggleSideMenu();showTab('acwall')">ACW Review</a>
+        <a href="#" class="sup-side-link" data-side-tab="recordings" onclick="event.preventDefault();toggleSideMenu();showTab('recordings')">Call Recordings</a>
+        <a href="#" class="sup-side-link" data-side-tab="voicequality" onclick="event.preventDefault();toggleSideMenu();showTab('voicequality')">Voice Quality</a>
+        <a href="#" class="sup-side-link" data-side-tab="skills" onclick="event.preventDefault();toggleSideMenu();showTab('skills')">Agent Skills</a>
+        <a href="#" class="sup-side-link" data-side-tab="blacklist" onclick="event.preventDefault();toggleSideMenu();showTab('blacklist')">Blacklist</a>
+        <a href="#" class="sup-side-link" data-side-tab="ahununu" onclick="event.preventDefault();toggleSideMenu();showTab('ahununu')">Ahununu.com</a>
         <div style="height:1px;background:#eee;margin:8px 0"></div>
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Management</div>
-        <a href="#" class="sup-side-link" data-side-tab="reports" onclick="event.preventDefault();toggleSideMenu();showTab('reports')"><span style="font-size:18px">&#128200;</span> Reports</a>
-        <a href="#" class="sup-side-link" data-side-tab="evaluation" onclick="event.preventDefault();toggleSideMenu();showTab('evaluation')"><span style="font-size:18px">&#9733;</span> Evaluation</a>
-        <a href="#" class="sup-side-link" data-side-tab="crm" onclick="event.preventDefault();toggleSideMenu();showTab('crm')"><span style="font-size:18px">&#128100;</span> CRM</a>
-        <a href="#" class="sup-side-link" data-side-tab="settings" onclick="event.preventDefault();toggleSideMenu();showTab('settings')"><span style="font-size:18px">&#9881;</span> Settings</a>
+        <div class="sup-side-label">Management</div>
+        <a href="#" class="sup-side-link" data-side-tab="reports" onclick="event.preventDefault();toggleSideMenu();showTab('reports')">Reports</a>
+        <a href="#" class="sup-side-link" data-side-tab="evaluation" onclick="event.preventDefault();toggleSideMenu();showTab('evaluation')">Evaluation</a>
+        <a href="#" class="sup-side-link" data-side-tab="crm" onclick="event.preventDefault();toggleSideMenu();showTab('crm')">CRM</a>
+        <a href="#" class="sup-side-link" data-side-tab="settings" onclick="event.preventDefault();toggleSideMenu();showTab('settings')">Settings</a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
-            <span style="font-size:18px">&#128682;</span> Sign Out
-        </a>
+        <a href="/logout.php" class="sup-side-signout">Sign Out</a>
     </nav>
     <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">Sky Connect &copy; <?php echo date('Y'); ?><br>Powered by SkyKin Technology</div>
 </div>
