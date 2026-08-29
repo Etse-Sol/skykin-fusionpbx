@@ -31,3 +31,8 @@ if (session_status() === PHP_SESSION_NONE) {
 	]);
 	session_start();
 }
+
+// SkyKin: favicon on all dashboard HTML pages (JSON/API responses pass through unchanged)
+if (is_file(__DIR__ . '/../../resources/skykin_favicon.php')) {
+	require_once __DIR__ . '/../../resources/skykin_favicon.php';
+}
