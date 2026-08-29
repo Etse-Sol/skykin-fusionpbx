@@ -9,6 +9,7 @@ skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 $logged_in_user   = $_SESSION['username']    ?? '';
 $logged_in_domain = skykin_default_domain();
 $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$embed   = !empty($_GET['embed']);
 $today   = date('Y-m-d');
 
 function getDB() {
@@ -144,7 +145,7 @@ if (isset($_GET['api'])) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SkyKin – Call Evaluation</title>
+<title>Sky Connect – Call Evaluation</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
@@ -301,6 +302,10 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 .empty-state{color:var(--sk-muted)}
 .audio-wrap{background:#f8fafc;padding:10px 12px;border-radius:11px}
 
+body.embed-mode{background:var(--sk-canvas)}
+body.embed-mode .topbar{display:none}
+body.embed-mode .layout{height:calc(100vh - 62px)}
+
 @media(max-width:850px){
   .topbar{padding:0 14px}.brand span,.topbar-right .user-pill{display:none}
   .nav-links{overflow-x:auto}.nav-links a{white-space:nowrap;padding:8px}
@@ -309,11 +314,12 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 }
 </style>
 </head>
-<body>
+<body<?php echo $embed ? ' class="embed-mode"' : ''; ?>>
 
+<?php if (!$embed): ?>
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand"><span class="brand-sky">SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
+    <div class="brand"><span class="brand-sky">Sky</span> Connect <span class="role-badge">SUPERVISOR</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php">Reports</a>
@@ -328,6 +334,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
     <a href="/logout.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
   </div>
 </div>
+<?php endif; ?>
 
 <div class="filters">
   <label>From</label><input type="date" id="fFrom" value="<?php echo $today; ?>">
@@ -463,6 +470,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
     </div>
   </div>
 </div>
+<div style="text-align:center;font-size:11px;color:#aaa;padding:16px 24px">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 
 <script>
 <?php echo skykin_js_bootstrap(); ?>

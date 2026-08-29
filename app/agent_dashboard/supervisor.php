@@ -979,7 +979,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_settings' && $_SERVER['R
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SkyKin Supervisor – <?php echo $domain; ?></title>
+<title>Sky Connect Supervisor – <?php echo $domain; ?></title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
@@ -1246,7 +1246,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 <div class="header">
     <div style="display:flex;align-items:center;gap:12px">
         <button class="supervisor-sidebar-toggle" onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1">&#9776;</button>
-        <div class="logo"><span>SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
+        <div class="logo"><span>Sky</span> Connect <span class="role-badge">SUPERVISOR</span></div>
     </div>
     <div class="header-right">
         <span><span class="live-dot"></span>Live</span>
@@ -1277,7 +1277,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 <!-- Slide-out side menu -->
 <div id="sideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
     <div class="supervisor-sidebar-brand" style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
-        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
+        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">Sky</span> Connect</div>
         <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
@@ -1285,10 +1285,10 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
         <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
             <span style="font-size:18px">&#128202;</span> Reports
         </a>
-        <a href="/app/agent_dashboard/evaluation.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('evaluation');" data-side-tab="evaluation" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
             <span style="font-size:18px">&#9733;</span> Evaluation
         </a>
-        <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('crm');" data-side-tab="crm" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
             <span style="font-size:18px">&#128100;</span> CRM
         </a>
         <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('settings');" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
@@ -1299,7 +1299,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             <span style="font-size:18px">&#128682;</span> Sign Out
         </a>
     </nav>
-    <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">SkyKin &copy; <?php echo date('Y'); ?></div>
+    <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">Sky Connect &copy; <?php echo date('Y'); ?><br>Powered by SkyKin Technology</div>
 </div>
 <div id="sideMenuBackdrop" onclick="toggleSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
 
@@ -1599,6 +1599,12 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                     <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
                 </table>
             </div>
+        </div>
+        <div class="tab-content" id="tab-crm" style="padding:0;height:700px">
+            <iframe src="about:blank" id="crmFrame" title="CRM" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-evaluation" style="padding:0;height:700px">
+            <iframe src="about:blank" id="evaluationFrame" title="Evaluation" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
         </div>
         <div class="tab-content" id="tab-ahununu" style="padding:0;height:700px">
             <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
@@ -2128,6 +2134,38 @@ function fetchAcwAll(){
 }
 
 // ── Tab switcher ───────────────────────────────────────────────────────────
+function supervisorEmbedUrl(page) {
+    const params = new URLSearchParams();
+    params.set('embed', '1');
+    if (domain) params.set('domain', domain);
+    return '/app/agent_dashboard/' + page + '?' + params.toString();
+}
+
+function loadSupervisorEmbed(frameId, page) {
+    const f = document.getElementById(frameId);
+    if (!f) return;
+    const url = supervisorEmbedUrl(page);
+    if (f.src === 'about:blank' || !f.src || f.dataset.embedPage !== page) {
+        f.src = url;
+        f.dataset.embedPage = page;
+    }
+}
+
+function setSideNavActive(name) {
+    document.querySelectorAll('#sideMenu [data-side-tab]').forEach(function(el) {
+        el.classList.remove('active');
+        el.style.background = '';
+        el.style.borderColor = 'transparent';
+    });
+    if (!name) return;
+    const link = document.querySelector('#sideMenu [data-side-tab="' + name + '"]');
+    if (link) {
+        link.classList.add('active');
+        link.style.background = '#f0f7ff';
+        link.style.borderColor = '#0047AB';
+    }
+}
+
 function showTab(name){
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -2136,6 +2174,8 @@ function showTab(name){
     const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
     if (btn) btn.classList.add('active');
     else if (typeof event !== 'undefined' && event && event.target && event.target.classList) event.target.classList.add('active');
+    if (name === 'crm' || name === 'evaluation') setSideNavActive(name);
+    else setSideNavActive('');
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
@@ -2144,6 +2184,8 @@ function showTab(name){
     if(name==='skills') fetchSkillsAgents();
     if(name==='blacklist') fetchSupBlacklist();
     if(name==='settings') loadIdleSettings();
+    if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
+    if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -2157,6 +2199,8 @@ function showTabDirect(name){
     if (panel) panel.classList.add('active');
     const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
     if (btn) btn.classList.add('active');
+    if (name === 'crm' || name === 'evaluation') setSideNavActive(name);
+    else setSideNavActive('');
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
@@ -2165,6 +2209,8 @@ function showTabDirect(name){
     if(name==='skills') fetchSkillsAgents();
     if(name==='blacklist') fetchSupBlacklist();
     if(name==='settings') loadIdleSettings();
+    if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
+    if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -2499,6 +2545,13 @@ function makeCall(number) {
     number = number || document.getElementById('dialInput').value.trim() || dpNumber;
     if (!number) return;
     lastDialedNumber = number;
+    fetch('/app/agent_dashboard/crm.php?api=lookup&phone=' + encodeURIComponent(number), { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data && data.full_name) {
+                toast('CRM: ' + data.full_name, '#0047AB');
+            }
+        }).catch(function() {});
     if (sipBridge.makeCall) sipBridge.makeCall(number);
     else toast('SIP not ready - open phone settings', '#c62828');
 }
@@ -2544,6 +2597,15 @@ function startCallUI(number) {
     callStartTime = new Date();
     clearInterval(callTimerInterval);
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    if (number) {
+        fetch('/app/agent_dashboard/crm.php?api=lookup&phone=' + encodeURIComponent(number), { credentials: 'same-origin' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data && data.full_name) {
+                    window.showToast && window.showToast('CRM: ' + data.full_name);
+                }
+            }).catch(function() {});
+    }
 }
 function updateCallTimer() {
     if (!callStartTime) return;
