@@ -9,6 +9,7 @@ skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 $logged_in_user   = $_SESSION['username']    ?? '';
 $logged_in_domain = skykin_default_domain();
 $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$embed   = !empty($_GET['embed']);
 $today   = date('Y-m-d');
 
 // ── DB helper ──────────────────────────────────────────────────────────────
@@ -260,7 +261,7 @@ if (isset($_GET['api'])) {
             $missedRate = $total ? round($missed / $total * 100, 1) : 0;
 
             $rows = [];
-            $rows[] = '<row r="1" ht="30" customHeight="1">'.xlsxTextCell('A1','SKYKIN CALL REPORT',1).'</row>';
+            $rows[] = '<row r="1" ht="30" customHeight="1">'.xlsxTextCell('A1','SKY CONNECT CALL REPORT',1).'</row>';
             $rows[] = '<row r="2" ht="22" customHeight="1">'.xlsxTextCell(
                 'A2', 'Period: '.$from.' to '.$to.'   |   Detail filter: '.ucfirst($type), 2
             ).'</row>';
@@ -425,7 +426,7 @@ if (isset($_GET['api'])) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SkyKin – Reports</title>
+<title>Sky Connect – Reports</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -437,6 +438,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .topbar-left{display:flex;align-items:center;gap:20px}
 .brand{font-weight:700;font-size:17px;color:#fff;letter-spacing:.5px}
 .brand span{color:rgba(255,255,255,.8);font-weight:400}
+.sk-footer{text-align:center;font-size:11px;color:#aaa;padding:20px 24px}
 .nav-links{display:flex;gap:4px}
 .nav-links a{color:rgba(255,255,255,.75);text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
 .nav-links a:hover,.nav-links a.active{background:rgba(255,255,255,.2);color:#fff}
@@ -519,13 +521,19 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .result-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700}
 .result-badge.answered{background:#dcfce7;color:#15803d}
 .result-badge.missed{background:#fee2e2;color:#b91c1c}
+
+body.embed-mode{background:#f0f2f5}
+body.embed-mode .topbar{display:none}
+body.embed-mode .sk-footer{display:none}
+body.embed-mode .page{padding-top:12px}
 </style>
 </head>
-<body>
+<body<?php echo $embed ? ' class="embed-mode"' : ''; ?>>
 
+<?php if (!$embed): ?>
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand">SkyKin<span> Technologies</span></div>
+    <div class="brand">Sky <span>Connect</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php" class="active">Reports</a>
@@ -540,6 +548,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
     <a href="/logout.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- Filters -->
 <div class="filters">
@@ -634,6 +643,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
   </div>
 
 </div><!-- /page -->
+<div class="sk-footer">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 
 <script>
 const DOMAIN = '<?php echo $domain; ?>';

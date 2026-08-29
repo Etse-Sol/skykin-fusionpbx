@@ -1282,7 +1282,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
         <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Management</div>
-        <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
+        <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('reports');" data-side-tab="reports" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
             <span style="font-size:18px">&#128202;</span> Reports
         </a>
         <a href="#" onclick="event.preventDefault(); toggleSideMenu(); showTab('evaluation');" data-side-tab="evaluation" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="if(!this.classList.contains('active')){this.style.background='';this.style.borderColor='transparent';}">
@@ -1599,6 +1599,9 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                     <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
                 </table>
             </div>
+        </div>
+        <div class="tab-content" id="tab-reports" style="padding:0;height:700px">
+            <iframe src="about:blank" id="reportsFrame" title="Reports" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
         </div>
         <div class="tab-content" id="tab-crm" style="padding:0;height:700px">
             <iframe src="about:blank" id="crmFrame" title="CRM" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
@@ -2174,7 +2177,7 @@ function showTab(name){
     const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
     if (btn) btn.classList.add('active');
     else if (typeof event !== 'undefined' && event && event.target && event.target.classList) event.target.classList.add('active');
-    if (name === 'crm' || name === 'evaluation') setSideNavActive(name);
+    if (name === 'crm' || name === 'evaluation' || name === 'reports') setSideNavActive(name);
     else setSideNavActive('');
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
@@ -2184,6 +2187,7 @@ function showTab(name){
     if(name==='skills') fetchSkillsAgents();
     if(name==='blacklist') fetchSupBlacklist();
     if(name==='settings') loadIdleSettings();
+    if(name==='reports') loadSupervisorEmbed('reportsFrame', 'reports.php');
     if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
     if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
     if(name==='ahununu') {
@@ -2199,7 +2203,7 @@ function showTabDirect(name){
     if (panel) panel.classList.add('active');
     const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
     if (btn) btn.classList.add('active');
-    if (name === 'crm' || name === 'evaluation') setSideNavActive(name);
+    if (name === 'crm' || name === 'evaluation' || name === 'reports') setSideNavActive(name);
     else setSideNavActive('');
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
@@ -2209,6 +2213,7 @@ function showTabDirect(name){
     if(name==='skills') fetchSkillsAgents();
     if(name==='blacklist') fetchSupBlacklist();
     if(name==='settings') loadIdleSettings();
+    if(name==='reports') loadSupervisorEmbed('reportsFrame', 'reports.php');
     if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
     if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
     if(name==='ahununu') {
