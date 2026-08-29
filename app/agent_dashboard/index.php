@@ -895,6 +895,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'list_callbacks') {
     error_reporting(0);
     header('Content-Type: application/json');
     $agent_id = $_GET['agent_id'] ?? '';
+    $scope_all = in_array($agent_id, ['all', '*', ''], true) && skykin_user_in_groups(['superadmin', 'admin', 'supervisor']);
     
     try {
         $db = getSkykinDB();
@@ -926,11 +927,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'list_callbacks') {
             $timeFmt = "to_char(callback_time, 'YYYY-MM-DD HH24:MI')";
         }
         
-        $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status 
-            FROM skykin_callbacks 
-            WHERE agent_id = :agent AND status = 'Scheduled' 
-            ORDER BY callback_time ASC LIMIT 100");
-        $s->execute([':agent' => $agent_id]);
+        if ($scope_all) {
+            $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status, agent_id
+                FROM skykin_callbacks
+                WHERE status = 'Scheduled'
+                ORDER BY callback_time ASC LIMIT 200");
+            $s->execute();
+        } else {
+            $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status, agent_id
+                FROM skykin_callbacks
+                WHERE agent_id = :agent AND status = 'Scheduled'
+                ORDER BY callback_time ASC LIMIT 100");
+            $s->execute([':agent' => $agent_id]);
+        }
         
         echo json_encode(['records' => $s->fetchAll(PDO::FETCH_ASSOC)]);
     } catch (Exception $e) {

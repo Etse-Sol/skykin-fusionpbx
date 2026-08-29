@@ -1305,6 +1305,9 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
         <a href="#" class="sup-side-link" data-side-tab="voicequality" onclick="event.preventDefault();toggleSideMenu();showTab('voicequality')">Voice Quality</a>
         <a href="#" class="sup-side-link" data-side-tab="skills" onclick="event.preventDefault();toggleSideMenu();showTab('skills')">Agent Skills</a>
         <a href="#" class="sup-side-link" data-side-tab="blacklist" onclick="event.preventDefault();toggleSideMenu();showTab('blacklist')">Blacklist</a>
+        <a href="#" class="sup-side-link" data-side-tab="lookup" onclick="event.preventDefault();toggleSideMenu();showTab('lookup')">Customer Lookup</a>
+        <a href="#" class="sup-side-link" data-side-tab="ticket" onclick="event.preventDefault();toggleSideMenu();showTab('ticket')">New Ticket</a>
+        <a href="#" class="sup-side-link" data-side-tab="callbacks" onclick="event.preventDefault();toggleSideMenu();showTab('callbacks')">Callbacks</a>
         <a href="#" class="sup-side-link" data-side-tab="ahununu" onclick="event.preventDefault();toggleSideMenu();showTab('ahununu')">Ahununu.com</a>
         <div style="height:1px;background:#eee;margin:8px 0"></div>
         <div class="sup-side-label">Management</div>
@@ -1602,6 +1605,15 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                 <thead><tr><th>Number</th><th>Reason</th><th>Agent</th><th></th></tr></thead>
                 <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
             </table>
+        </div>
+        <div class="tab-content" id="tab-lookup" style="padding:0;height:700px">
+            <iframe src="about:blank" id="lookupFrame" title="Customer Lookup" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-ticket" style="padding:0;height:700px">
+            <iframe src="about:blank" id="ticketFrame" title="New Ticket" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-callbacks" style="padding:0;height:700px">
+            <iframe src="about:blank" id="callbacksFrame" title="Callbacks" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
         </div>
         <div class="tab-content" id="tab-reports" style="padding:0;height:700px">
             <iframe src="about:blank" id="reportsFrame" title="Reports" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
@@ -2148,13 +2160,21 @@ function supervisorEmbedUrl(page) {
     return '/app/agent_dashboard/' + page + '?' + params.toString();
 }
 
+function supervisorToolsUrl(tool) {
+    const params = new URLSearchParams();
+    params.set('embed', '1');
+    params.set('tool', tool);
+    if (domain) params.set('domain', domain);
+    return '/app/agent_dashboard/supervisor_tools.php?' + params.toString();
+}
+
 function loadSupervisorEmbed(frameId, page) {
     const f = document.getElementById(frameId);
     if (!f) return;
-    const url = supervisorEmbedUrl(page);
-    if (f.src === 'about:blank' || !f.src || f.dataset.embedPage !== page) {
+    const url = page.indexOf('?') >= 0 ? page : supervisorEmbedUrl(page);
+    if (f.src === 'about:blank' || !f.src || f.dataset.embedPage !== url) {
         f.src = url;
-        f.dataset.embedPage = page;
+        f.dataset.embedPage = url;
     }
 }
 
@@ -2183,6 +2203,9 @@ function showTab(name){
     if(name==='reports') loadSupervisorEmbed('reportsFrame', 'reports.php');
     if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
     if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
+    if(name==='lookup') loadSupervisorEmbed('lookupFrame', supervisorToolsUrl('lookup'));
+    if(name==='ticket') loadSupervisorEmbed('ticketFrame', supervisorToolsUrl('ticket'));
+    if(name==='callbacks') loadSupervisorEmbed('callbacksFrame', supervisorToolsUrl('callbacks'));
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -2205,6 +2228,9 @@ function showTabDirect(name){
     if(name==='reports') loadSupervisorEmbed('reportsFrame', 'reports.php');
     if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
     if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
+    if(name==='lookup') loadSupervisorEmbed('lookupFrame', supervisorToolsUrl('lookup'));
+    if(name==='ticket') loadSupervisorEmbed('ticketFrame', supervisorToolsUrl('ticket'));
+    if(name==='callbacks') loadSupervisorEmbed('callbacksFrame', supervisorToolsUrl('callbacks'));
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
