@@ -2694,6 +2694,7 @@ body.phone-open .footer { margin-right: 300px; transition: margin-right 0.3s eas
         <button class="sb-item"        id="sbAcwBtn"         onclick="sidebarNav('acw')">ACW History</button>
         <button class="sb-item"        id="sbEscalationBtn"  onclick="sidebarNav('escalation')">New Ticket</button>
         <button class="sb-item"        id="sbLookupBtn"      onclick="sidebarNav('lookup')">Customer Lookup</button>
+        <button class="sb-item"        id="sbCrmBtn"         onclick="sidebarNav('crm')">CRM</button>
         <button class="sb-item"        id="sbCallbacksBtn"   onclick="sidebarNav('callbacks')">Callbacks</button>
         <button class="sb-item"        id="sbBlacklistBtn"   onclick="sidebarNav('blacklist')">Blacklist</button>
         <button class="sb-item"        id="sbAhununuBtn"     onclick="sidebarNav('ahununu')">Ahununu.com</button>
@@ -2726,6 +2727,7 @@ body.phone-open .footer { margin-right: 300px; transition: margin-right 0.3s eas
             <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
             <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
             <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
+            <button class="tab-btn" id="tabCrmBtn" onclick="switchTab('crm')">CRM</button>
             <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
             <button class="tab-btn" id="tabBlacklistBtn" onclick="switchTab('blacklist')">Blacklist</button>
             <button class="tab-btn" id="tabAhununuBtn" onclick="switchTab('ahununu')">&#127760; Ahununu.com</button>
@@ -3173,6 +3175,11 @@ body.phone-open .footer { margin-right: 300px; transition: margin-right 0.3s eas
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- CRM Tab -->
+        <div class="tab-panel" id="tabCrm" style="display:none;padding:0">
+            <iframe src="about:blank" id="crmTabFrame" title="CRM" style="width:100%;height:700px;border:none"></iframe>
         </div>
 
         <!-- ?? Ahununu.com Tab ?? -->
@@ -3698,7 +3705,7 @@ function sidebarNav(tab) {
     const tabToSb = {
         dashboard: 'sbDashboardBtn', callHistory: 'sbCallHistoryBtn',
         recordings: 'sbRecordingsBtn', acw: 'sbAcwBtn',
-        escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn',
+        escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn', crm: 'sbCrmBtn',
         callbacks: 'sbCallbacksBtn', blacklist: 'sbBlacklistBtn', ahununu: 'sbAhununuBtn'
     };
     document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
@@ -3726,14 +3733,27 @@ function sidebarNav(tab) {
     } catch(e) {}
 })();
 
+function agentCrmUrl() {
+    const d = (window.SKYKIN && SKYKIN.domain) ? SKYKIN.domain : (typeof domain !== 'undefined' ? domain : '');
+    return '/app/agent_dashboard/crm.php' + (d ? ('?domain=' + encodeURIComponent(d)) : '');
+}
+
 // ?? Customer info panel (ahununu.com) ??????????????
 // Slides in over the dashboard during a call; the Ahununu tab is the
 // full-size view for browsing between calls.
 function openCrmPanel(url) {
+    const target = url || agentCrmUrl();
+    if (target.indexOf('crm.php') !== -1) {
+        switchTab('crm');
+        sidebarNav('crm');
+        const frame = document.getElementById('crmTabFrame');
+        if (frame) frame.src = target;
+        return;
+    }
     const panel = document.getElementById('crmPanel');
     const frame = document.getElementById('crmFrame');
     if (!panel || !frame) return;
-    if (frame.src === 'about:blank') frame.src = url || (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
+    frame.src = target;
     panel.classList.add('open');
 }
 
@@ -3744,7 +3764,7 @@ function closeCrmPanel() {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks','blacklist','ahununu'].forEach(t => {
+    ['dashboard','callHistory','recordings','acw','escalation','lookup','crm','callbacks','blacklist','ahununu'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
@@ -3759,6 +3779,10 @@ function switchTab(tab) {
     if (tab === 'escalation') fetchCases();
     if (tab === 'callbacks')  fetchCallbacks();
     if (tab === 'blacklist')  fetchBlacklist();
+    if (tab === 'crm') {
+        const f = document.getElementById('crmTabFrame');
+        if (f && (f.src === 'about:blank' || !f.src)) f.src = agentCrmUrl();
+    }
     if (tab === 'ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -5092,7 +5116,7 @@ function performLookup(query) {
                     <div style="display:flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
                         <button class="btn-filter" onclick="openSmsModal('${contact.phone}')" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">SMS Update</button>
                         <button class="btn-filter" onclick="openCallbackModal('${contact.phone}', '${(contact.full_name || '').replace(/'/g, "\\'")}')" style="flex:1; padding: 6px; font-size:11px; background:#ffc107; color:#333; min-width:90px;">Schedule Callback</button>
-                        ${cid ? `<button class="btn-filter" onclick="openCrmPanel('/app/agent_dashboard/crm.php')" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">Open CRM</button>
+                        ${cid ? `<button class="btn-filter" onclick="openCrmPanel()" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">Open CRM</button>
                         <button class="btn-filter" onclick="deleteCrmContact(${cid})" style="flex:1; padding: 6px; font-size:11px; background:#fee2e2; color:#b91c1c; min-width:90px;">Delete Contact</button>` : ''}
                     </div>
                 `;
