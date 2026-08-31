@@ -136,6 +136,40 @@ if (isset($_GET['api'])) {
             exit;
         }
 
+        // Agent QA summary — average scores per agent across evaluated calls
+        if ($_GET['api'] === 'agent_summary') {
+            $s = $db->prepare("SELECT
+                agent_ext,
+                MAX(NULLIF(agent_name, '')) AS agent_name,
+                COUNT(*) AS eval_count,
+                ROUND(AVG(total_score::numeric / NULLIF(max_score, 0) * 100)) AS avg_pct,
+                ROUND(AVG(total_score::numeric), 1) AS avg_score,
+                ROUND(AVG(score_greeting::numeric), 1) AS avg_greeting,
+                ROUND(AVG(score_knowledge::numeric), 1) AS avg_knowledge,
+                ROUND(AVG(score_resolution::numeric), 1) AS avg_resolution,
+                ROUND(AVG(score_tone::numeric), 1) AS avg_tone,
+                ROUND(AVG(score_procedure::numeric), 1) AS avg_procedure,
+                ROUND(AVG(score_closing::numeric), 1) AS avg_closing,
+                MAX(eval_date) AS last_eval
+                FROM skykin_evaluations
+                WHERE domain_name = :d
+                  AND eval_date >= to_timestamp(:ts)
+                  AND eval_date <= to_timestamp(:te)
+                  AND COALESCE(agent_ext, '') <> ''
+                GROUP BY agent_ext
+                ORDER BY avg_pct DESC NULLS LAST, eval_count DESC");
+            $s->execute([':d'=>$dom, ':ts'=>$ts, ':te'=>$te]);
+            $rows = $s->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$row) {
+                $pct = (int)($row['avg_pct'] ?? 0);
+                $row['avg_grade'] = $pct >= 90 ? 'A+' : ($pct >= 80 ? 'A' : ($pct >= 70 ? 'B' : ($pct >= 60 ? 'C' : 'D')));
+                $row['eval_count'] = (int)$row['eval_count'];
+            }
+            unset($row);
+            echo json_encode($rows);
+            exit;
+        }
+
     } catch (Exception $e) { echo json_encode(['error'=>$e->getMessage()]); }
     exit;
 }
@@ -234,6 +268,25 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .hist-scores span{background:#f0f2f5;padding:2px 6px;border-radius:4px}
 
 .empty-state{text-align:center;padding:40px;color:#888;font-size:13px}
+
+.view-toggle{display:flex;gap:8px;margin-left:auto}
+.view-toggle button{background:#f0f2f5;color:#555;border:1px solid #e0e0e0;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+.view-toggle button.active{background:#2563eb;color:#fff;border-color:#2563eb}
+
+.agent-summary-panel{display:none;padding:16px 24px 24px}
+.agent-summary-panel.active{display:block}
+.agent-summary-panel .summary-table{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #e8edf3;border-radius:12px;overflow:hidden}
+.agent-summary-panel .summary-table th{background:#f8fafc;padding:12px;text-align:left;font-size:11px;text-transform:uppercase;color:#666;border-bottom:2px solid #eee}
+.agent-summary-panel .summary-table td{padding:12px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
+.agent-summary-panel .summary-table tr:hover td{background:#fafbff}
+.agent-summary-panel .rank-pill{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:#eef2ff;color:#2563eb;font-weight:700;font-size:12px}
+.agent-summary-panel .agent-name{font-weight:600;color:#222}
+.agent-summary-panel .agent-ext{font-size:11px;color:#888}
+.agent-summary-panel .mini-bar{background:#e8edf3;border-radius:999px;height:8px;min-width:90px;overflow:hidden}
+.agent-summary-panel .mini-bar > span{display:block;height:100%;background:linear-gradient(90deg,#2563eb,#22c55e);border-radius:999px}
+.agent-summary-panel .crit-avg{font-size:11px;color:#666;white-space:nowrap}
+
+.layout.hidden{display:none}
 
 /* Audio player */
 .audio-wrap{margin-bottom:14px}
@@ -343,9 +396,39 @@ body.embed-mode .layout{height:calc(100vh - 62px)}
   <input type="text" id="fSearch" placeholder="Search number..." style="width:160px">
   <button class="btn-filter" onclick="loadCalls()">&#128269; Search</button>
   <span id="callCount" style="font-size:12px;color:#888"></span>
+  <div class="view-toggle">
+    <button type="button" id="btnViewEval" class="active" onclick="setMainView('eval')">Evaluate Calls</button>
+    <button type="button" id="btnViewAgents" onclick="setMainView('agents')">Agent QA Summary</button>
+  </div>
 </div>
 
-<div class="layout">
+<div class="agent-summary-panel" id="agentSummaryPanel">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px;flex-wrap:wrap">
+    <div>
+      <div style="font-size:16px;font-weight:700;color:#222">Agent QA Summary</div>
+      <div style="font-size:12px;color:#888;margin-top:4px">Average quality scores per agent from evaluated calls in this period</div>
+    </div>
+    <button class="btn-filter" onclick="loadAgentSummary()">Refresh</button>
+  </div>
+  <table class="summary-table">
+    <thead>
+      <tr>
+        <th style="width:56px">Rank</th>
+        <th>Agent</th>
+        <th>Evaluated Calls</th>
+        <th>Avg Score</th>
+        <th>Grade</th>
+        <th>Avg Criteria (1–5)</th>
+        <th>Last Evaluated</th>
+      </tr>
+    </thead>
+    <tbody id="agentSummaryBody">
+      <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="layout" id="evalLayout">
   <!-- Left: call list -->
   <div class="call-list" id="callList">
     <div class="empty-state">Loading calls...</div>
@@ -482,6 +565,64 @@ const DOMAIN = '<?php echo $domain; ?>';
 const EVALUATOR = '<?php echo htmlspecialchars($logged_in_user); ?>';
 const scores = { greeting:0, knowledge:0, resolution:0, tone:0, procedure:0, closing:0 };
 let selectedCall = null;
+let mainView = 'eval';
+
+function setMainView(view) {
+    mainView = view;
+    document.getElementById('btnViewEval').classList.toggle('active', view === 'eval');
+    document.getElementById('btnViewAgents').classList.toggle('active', view === 'agents');
+    document.getElementById('agentSummaryPanel').classList.toggle('active', view === 'agents');
+    document.getElementById('evalLayout').classList.toggle('hidden', view === 'agents');
+    if (view === 'agents') loadAgentSummary();
+    else loadCalls();
+}
+
+function gradeClass(grade) {
+    return 'grade-' + String(grade || 'D').replace('+', '\\+');
+}
+
+function fmtCritAvg(row) {
+    const parts = [
+        ['G', row.avg_greeting],
+        ['K', row.avg_knowledge],
+        ['R', row.avg_resolution],
+        ['T', row.avg_tone],
+        ['P', row.avg_procedure],
+        ['C', row.avg_closing],
+    ];
+    return parts.map(([k, v]) => `${k}:${Number(v || 0).toFixed(1)}`).join(' · ');
+}
+
+async function loadAgentSummary() {
+    const from = document.getElementById('fFrom').value;
+    const to   = document.getElementById('fTo').value;
+    const body = document.getElementById('agentSummaryBody');
+    body.innerHTML = '<tr><td colspan="7" class="empty-state">Loading...</td></tr>';
+    const resp = await fetch(`evaluation.php?api=agent_summary&domain=${DOMAIN}&from=${from}&to=${to}`);
+    const rows = await resp.json();
+    if (!Array.isArray(rows) || rows.length === 0) {
+        body.innerHTML = '<tr><td colspan="7" class="empty-state">No evaluated calls in this period</td></tr>';
+        return;
+    }
+    body.innerHTML = rows.map((r, i) => {
+        const pct = Number(r.avg_pct || 0);
+        const name = r.agent_name && r.agent_name !== r.agent_ext ? r.agent_name : ('Ext ' + r.agent_ext);
+        const last = r.last_eval ? String(r.last_eval).replace('T', ' ').slice(0, 16) : '—';
+        return `<tr>
+          <td><span class="rank-pill">${i + 1}</span></td>
+          <td><div class="agent-name">${name}</div><div class="agent-ext">Ext ${r.agent_ext}</div></td>
+          <td>${r.eval_count}</td>
+          <td>
+            <div style="font-weight:700;color:#2563eb">${pct}%</div>
+            <div class="mini-bar"><span style="width:${Math.max(0, Math.min(100, pct))}%"></span></div>
+            <div style="font-size:11px;color:#888;margin-top:4px">${Number(r.avg_score || 0).toFixed(1)} / 30 avg</div>
+          </td>
+          <td><span class="grade-badge ${gradeClass(r.avg_grade)}">${r.avg_grade}</span></td>
+          <td class="crit-avg">${fmtCritAvg(r)}</td>
+          <td style="font-size:12px;color:#666">${last}</td>
+        </tr>`;
+    }).join('');
+}
 
 function switchTab(t) {
     document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active', (t==='score'&&i===0)||(t==='history'&&i===1)));
@@ -701,7 +842,8 @@ function openManualEval() {
     document.getElementById('audioWrap') && (document.getElementById('audioWrap').style.display = 'none');
 }
 
-loadCalls();
+if (new URLSearchParams(location.search).get('view') === 'agents') setMainView('agents');
+else loadCalls();
 </script>
 </body>
 </html>
