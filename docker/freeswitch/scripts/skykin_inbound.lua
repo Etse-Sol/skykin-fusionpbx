@@ -135,6 +135,26 @@ local function ready_ext(skip)
   return best
 end
 
+-- Only hunt the next agent after a real timeout/busy — not a sub-second bridge fail.
+local function should_try_next(cause, sip, elapsed_ms)
+  if sip == "603" or sip == "480" then return false end
+  if cause:find("CALL_REJECTED", 1, true) or cause:find("ORIGINATOR_CANCEL", 1, true) then
+    return false
+  end
+  if cause:find("USER_NOT_REGISTERED", 1, true) or cause:find("UNALLOCATED", 1, true) then
+    return true
+  end
+  if elapsed_ms < 15000 then
+    return false
+  end
+  if sip == "408" or sip == "486" or sip == "487" then return true end
+  if cause:find("NO_ANSWER", 1, true) or cause:find("USER_BUSY", 1, true)
+      or cause:find("ALLOTTED", 1, true) or cause:find("RECOVERY_ON_TIMER", 1, true) then
+    return true
+  end
+  return false
+end
+
 local skip = {}
 local t0 = os.time()
 while session:ready() do
@@ -154,13 +174,15 @@ while session:ready() do
     end
   else
     local bridge =
-      "{ignore_early_media=true,bridge_early_media=false,originate_timeout=45,fail_on_single_reject=true}" ..
+      "{ignore_early_media=true,bridge_early_media=false,originate_timeout=45}" ..
       "[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=" ..
       rtp_ip .. ",include_external_ip=true," ..
       "execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua]user/" ..
       dest .. "@" .. domain
     freeswitch.consoleLog("NOTICE", "skykin inbound try " .. dest .. "@" .. domain .. "\n")
+    local t_bridge = os.clock()
     session:execute("bridge", bridge)
+    local elapsed_ms = math.floor((os.clock() - t_bridge) * 1000)
     if not session:ready() then
       return
     end
@@ -172,16 +194,14 @@ while session:ready() do
         or session:getVariable("originate_disposition") or "")
     local sip = session:getVariable("sip_invite_failure_status") or ""
     freeswitch.consoleLog("NOTICE", "skykin inbound cause=" .. cause
-      .. " sip=" .. sip .. " dest=" .. dest .. "\n")
-    if sip == "603" or sip == "480" or cause:find("CALL_REJECTED", 1, true)
-        or cause:find("ORIGINATOR_CANCEL", 1, true) then
-      freeswitch.consoleLog("NOTICE", "skykin inbound decline drop dest=" .. dest .. "\n")
-      release_agent(dest)
+      .. " sip=" .. sip .. " dest=" .. dest .. " elapsed_ms=" .. elapsed_ms .. "\n")
+    release_agent(dest)
+    if not should_try_next(cause, sip, elapsed_ms) then
+      freeswitch.consoleLog("NOTICE", "skykin inbound stop hunt dest=" .. dest .. "\n")
       session:hangup("NORMAL_CLEARING")
       return
     end
-    release_agent(dest)
     skip[dest] = true
-    session:sleep(200)
+    session:sleep(1000)
   end
 end
