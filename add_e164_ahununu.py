@@ -75,8 +75,11 @@ if 'skykin_outbound_et_land' not in text:
         text = text.replace(ins, land_bridge + ins, 1)
         changed = True
         print("added skykin_outbound_et_land")
-
-if 'skykin_outbound_et_e164' not in text:
+    elif 'skykin_outbound_et_e164' not in text:
+        text = text.replace("  </context>\n</include>", land_bridge + e164 + "  </context>\n</include>", 1)
+        changed = True
+        print("added skykin_outbound_et_land + et_e164")
+elif 'skykin_outbound_et_e164' not in text:
     text = text.replace("  </context>\n</include>", e164 + "  </context>\n</include>", 1)
     changed = True
     print("added skykin_outbound_et_e164")
