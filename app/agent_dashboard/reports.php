@@ -56,14 +56,16 @@ if (isset($_GET['api'])) {
 
     try {
         $db = getDB();
+        $repSql = skykin_cdr_reportable_sql();
+        $missSql = skykin_cdr_missed_sql();
 
         // ── Daily call volume ──────────────────────────────────────────────
         if ($api === 'daily_volume') {
             $s = $db->prepare("SELECT
                 to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as day,
-                COUNT(*) as total,
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
                 SUM(CASE WHEN direction='inbound'  THEN 1 ELSE 0 END) as inbound,
                 SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
                 SUM(CASE WHEN direction='local'    THEN 1 ELSE 0 END) as local,
@@ -80,7 +82,7 @@ if (isset($_GET['api'])) {
             $s = $db->prepare("SELECT
                 EXTRACT(DOW FROM to_timestamp(start_epoch))::int as dow,
                 EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
-                COUNT(*) as total
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total
                 FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
                 GROUP BY dow, hour ORDER BY dow, hour");
             $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
@@ -101,14 +103,14 @@ if (isset($_GET['api'])) {
             foreach ($exts as $ex) {
                 $ext = $ex['extension'];
                 $s2 = $db->prepare("SELECT
-                    COUNT(*) as total,
+                    SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
                     SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                    SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+                    SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
                     COALESCE(SUM(billsec),0) as total_talk,
                     ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
-                    SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
-                    SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                    SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local
+                    SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
+                    SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
+                    SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local
                     FROM v_xml_cdr WHERE domain_name=:d
                     AND (caller_id_number=:e OR destination_number=:e)
                     AND start_epoch>=:ts AND start_epoch<=:te");
@@ -139,15 +141,16 @@ if (isset($_GET['api'])) {
         // ── Summary KPIs ──────────────────────────────────────────────────
         if ($api === 'summary') {
             $s = $db->prepare("SELECT
-                COUNT(*) as total,
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local,
+                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
+                SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
+                SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local,
                 COALESCE(SUM(billsec),0) as total_talk,
                 ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
-                ROUND(AVG(CASE WHEN billsec=0 THEN 1 ELSE 0 END)*100::numeric,1) as abandon_rate
+                ROUND(100.0 * SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END)
+                    / NULLIF(SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END), 0), 1) as abandon_rate
                 FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
             $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
             echo json_encode($s->fetch(PDO::FETCH_ASSOC));
@@ -158,9 +161,9 @@ if (isset($_GET['api'])) {
         if ($api === 'hourly_volume') {
             $s = $db->prepare("SELECT
                 EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
-                COUNT(*) as total,
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed
+                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed
                 FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
                 GROUP BY hour ORDER BY hour");
             $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
@@ -171,12 +174,12 @@ if (isset($_GET['api'])) {
         // ── Filtered call details ──────────────────────────────────────────
         if ($api === 'call_list') {
             $type = $_GET['type'] ?? 'all';
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
+            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND {$repSql}";
             $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
             if ($type === 'answered') {
                 $where .= " AND billsec>0";
             } elseif ($type === 'missed') {
-                $where .= " AND billsec=0";
+                $where .= " AND {$missSql}";
             } elseif (in_array($type, ['inbound','outbound','local'], true)) {
                 $where .= " AND direction=:dir";
                 $params[':dir'] = $type;
@@ -197,7 +200,7 @@ if (isset($_GET['api'])) {
         if ($api === 'queue_sla') {
             $s = $db->prepare("SELECT
                 destination_number as queue_num,
-                COUNT(*) as total,
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
                 ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur
                 FROM v_xml_cdr WHERE domain_name=:d
@@ -219,9 +222,9 @@ if (isset($_GET['api'])) {
 
             $type = $_GET['type'] ?? 'all';
             $summaryStmt = $db->prepare("SELECT
-                COUNT(*) as total,
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
                 SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
                 SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
                 SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local,
@@ -232,12 +235,12 @@ if (isset($_GET['api'])) {
             $summaryStmt->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
             $summary = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
+            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND {$repSql}";
             $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
             if ($type === 'answered') {
                 $where .= " AND billsec>0";
             } elseif ($type === 'missed') {
-                $where .= " AND billsec=0";
+                $where .= " AND {$missSql}";
             } elseif (in_array($type, ['inbound','outbound','local'], true)) {
                 $where .= " AND direction=:dir";
                 $params[':dir'] = $type;

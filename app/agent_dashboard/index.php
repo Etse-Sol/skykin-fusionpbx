@@ -91,9 +91,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
         if ($extension) {
             // Stats
             $agent_sql = skykin_cdr_agent_sql(':e');
-            $s = $db->prepare("SELECT COUNT(*) as total,
+            $rep = skykin_cdr_reportable_sql();
+            $miss = skykin_cdr_missed_sql();
+            $s = $db->prepare("SELECT SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
                 COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur,
                 COALESCE(SUM(billsec),0) as total_talk,
                 COALESCE(SUM(duration),0) as total_dur,
@@ -123,13 +125,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
 
             // Recent calls
             $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
-                direction,caller_id_number,destination_number,caller_destination,billsec,hangup_cause
+                direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND {$agent_sql}
                 AND start_epoch>=:ts AND start_epoch<=:te
+                AND " . skykin_cdr_reportable_sql() . "
                 ORDER BY start_epoch DESC LIMIT 500");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
             foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if (skykin_cdr_is_hunt_leg($r)) {
+                    continue;
+                }
                 $dest = (string)$r['destination_number'];
                 $dir  = strtolower((string)($r['direction'] ?? ''));
                 $digits = preg_replace('/\D+/', '', $dest);
@@ -4393,14 +4399,20 @@ function setSipStatus(state, text) {
     } else if (state === 'calling') {
         dot.classList.add('calling'); badge.classList.add('show','calling');
         fab.classList.add('ringing'); openPhonePopup();
-        // Show hang-up button so caller can cancel before answer
+        // Outbound ring: status only — timer starts in startCallUI when answered.
         document.getElementById('btnCall').style.display   = 'none';
         document.getElementById('btnHangup').style.display = 'block';
         document.getElementById('dpPanel').style.display = 'none';
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartTime = null;
+        document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent = '00:00';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
         dot.classList.add('ringing'); badge.classList.add('show'); fab.classList.add('ringing');
+        document.getElementById('callTimer').style.display = 'none';
     } else if (state === 'connecting') {
         dot.classList.add('connecting');
     } else if (state === 'unregistered' || state === 'failed') {
@@ -4510,10 +4522,7 @@ function makeCall(number) {
     lastDialedNumber = number;
     lastCallType = 'Outbound';
     fetchCrmContact(number);
-    if (window.performLookup) {
-        performLookup(number);
-        switchTab('lookup');
-    }
+    // Lookup tab opens when the call connects (startCallUI), not while ringing.
     if (sipBridge.makeCall) sipBridge.makeCall(number);
     else showToast('SIP not ready. Open Phone Settings to connect.');
 }
@@ -4598,7 +4607,9 @@ window.startRingback = startRingback;
 function startCallUI(number) {
     number = number || window.lastDialedNumber || window.lastIncomingNumber || '';
     window._callEnded = false; // Reset so endCall() works for this new call
+    window._outboundRingPhase = false;
     stopRingtone();
+    stopRingback();
     setSipStatus('incall', 'In Call: ' + number);
     fetchCrmContact(number);
     document.getElementById('btnCall').style.display   = 'none';
@@ -4621,6 +4632,7 @@ function startCallUI(number) {
     updateDpDisplay();
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    updateCallTimer();
     
     // Show Call popup actions
     if (document.getElementById('btnPhoneSms')) document.getElementById('btnPhoneSms').style.display = 'block';
@@ -5678,7 +5690,11 @@ function resetOutboundRingUi() {
         document.getElementById('btnHangup').style.display = 'none';
         document.getElementById('btnCall').style.display = 'block';
         document.getElementById('phonePopup').classList.remove('call-active');
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartTime = null;
         document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent = '00:00';
     } catch (e) {}
     const ext = localStorage.getItem('sip_ext') || serverExt || '';
     window.setSipStatus && window.setSipStatus('registered', 'Registered (' + ext + ')');

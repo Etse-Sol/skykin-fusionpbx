@@ -104,11 +104,13 @@ try {
     if ($extension) {
         $data['resolved_ext'] = $extension;
         // Total calls today for this extension
+        $rep = skykin_cdr_reportable_sql();
+        $miss = skykin_cdr_missed_sql();
         $stmt = $db->prepare("
             SELECT 
-                COUNT(*) as total,
+                SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec > 0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec = 0 THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
                 COALESCE(AVG(CASE WHEN billsec > 0 THEN billsec END), 0) as avg_dur,
                 COALESCE(SUM(billsec), 0) as total_talk,
                 COALESCE(SUM(duration), 0) as total_dur,
@@ -200,7 +202,8 @@ try {
                 || ($r['destination_number'] == $extension)
                 || ($r['destination_number'] == '8000')
                 || (strpos((string)$r['destination_number'], '+') === 0)
-                || (bool)preg_match('/11113875\d$/', (string)$digits);
+                || (bool)preg_match('/11113875\d$/', (string)$digits)
+                || (bool)preg_match('/11619803[5-9]$/', (string)$digits);
             $type = $is_inbound ? 'Inbound' : 'Outbound';
             if ($is_inbound) {
                 $cid = (string)($r['caller_id_number'] ?? '');

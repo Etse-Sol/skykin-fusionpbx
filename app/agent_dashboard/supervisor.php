@@ -192,7 +192,7 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             ) as ext,
             COUNT(*) as total,
             SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+            SUM(CASE WHEN " . skykin_cdr_missed_sql() . " THEN 1 ELSE 0 END) as missed,
             COALESCE(SUM(billsec),0) as total_talk,
             COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur
             FROM v_xml_cdr WHERE domain_name=:d
@@ -412,10 +412,13 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         } catch(Exception $ignored){}
 
         // Today totals
-        $s2 = $db->prepare("SELECT COUNT(*) as total,
+        $rep = skykin_cdr_reportable_sql();
+        $miss = skykin_cdr_missed_sql();
+        $s2 = $db->prepare("SELECT SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
             SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
+            SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
             COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_talk,
-            COALESCE(AVG(duration-billsec),0) as avg_wait
+            COALESCE(AVG(CASE WHEN {$rep} AND billsec=0 THEN duration ELSE NULL END),0) as avg_wait
             FROM v_xml_cdr WHERE domain_name=:d
             AND start_epoch>=:ts AND start_epoch<=:te");
         $s2->execute([':d'=>$domain,':ts'=>$today_start,':te'=>$today_end]);
@@ -423,6 +426,7 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
 
         $total    = (int)($totals['total']??0);
         $answered = (int)($totals['answered']??0);
+        $missed   = (int)($totals['missed']??0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
         // Agents online — SIP registrations, which only FreeSWITCH knows about.
@@ -437,7 +441,7 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             'waiting_callers'  => $waiting_callers ?? [],
             'total_today'      => $total,
             'answered_today'   => $answered,
-            'missed_today'     => $total - $answered,
+            'missed_today'     => $missed,
             'avg_talk'         => (int)($totals['avg_talk']??0),
             'avg_wait'         => (int)($totals['avg_wait']??0),
             'sla'              => $sla,
@@ -459,9 +463,9 @@ if (isset($_GET['action']) && $_GET['action']==='leaderboard') {
         $db = getDB();
         $s = $db->prepare("SELECT
             CASE WHEN direction='outbound' OR direction='local' THEN caller_id_number ELSE destination_number END as ext,
-            COUNT(*) as total,
+            SUM(CASE WHEN " . skykin_cdr_reportable_sql() . " THEN 1 ELSE 0 END) as total,
             SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+            SUM(CASE WHEN " . skykin_cdr_missed_sql() . " THEN 1 ELSE 0 END) as missed,
             COALESCE(SUM(billsec),0) as total_talk,
             COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur,
             COALESCE(MAX(CASE WHEN billsec>0 THEN billsec END),0) as max_dur
@@ -792,7 +796,11 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
             ];
         }
         foreach ($parsed as $p) {
-            $r = $p['r']; $b = $p['b']; $caller = $p['caller']; $dest = $p['dest'];
+            $r = $p['r'];
+            if (skykin_cdr_is_hunt_leg($r)) {
+                continue;
+            }
+            $b = $p['b']; $caller = $p['caller']; $dest = $p['dest'];
             $cdest = $p['cdest']; $agent_ext = $p['agent_ext'];
             $dest_digits = $p['dest_digits'];
             if (preg_match('/^(101|102)$/', $dest_digits)) {
@@ -2539,10 +2547,16 @@ function setSipStatus(state, text) {
         fab.classList.add('ringing'); openPhonePopup();
         document.getElementById('btnHangup').style.display = 'block';
         document.getElementById('dpPanel').style.display = 'none';
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartTime = null;
+        document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent = '00:00';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
         dot.classList.add('ringing'); badge.classList.add('show'); fab.classList.add('ringing');
+        document.getElementById('callTimer').style.display = 'none';
     } else if (state === 'connecting') {
         dot.classList.add('connecting');
     } else if (state === 'unregistered' || state === 'failed') {
@@ -2624,6 +2638,7 @@ function startCallUI(number) {
     callStartTime = new Date();
     clearInterval(callTimerInterval);
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    updateCallTimer();
     if (number) {
         fetch('/app/agent_dashboard/crm.php?api=lookup&phone=' + encodeURIComponent(number), { credentials: 'same-origin' })
             .then(function(r) { return r.json(); })

@@ -286,6 +286,32 @@ function skykin_cdr_agent_sql(string $ext_param = ':e'): string {
 		. ')';
 }
 
+/**
+ * Ethio multi-DID hunt legs: 0s inbound ORIGINATOR_CANCEL before agent ring.
+ * Exclude from missed-call KPIs and call-history lists.
+ */
+function skykin_cdr_hunt_leg_sql(): string {
+	return "(duration = 0 AND billsec = 0 AND LOWER(COALESCE(direction, '')) = 'inbound'"
+		. " AND hangup_cause = 'ORIGINATOR_CANCEL')";
+}
+
+/** Real missed: reached PBX, no talk, not a hunt leg. */
+function skykin_cdr_missed_sql(): string {
+	return '(billsec = 0 AND NOT ' . skykin_cdr_hunt_leg_sql() . ')';
+}
+
+/** Count in totals / answer-rate denominators (exclude hunt noise). */
+function skykin_cdr_reportable_sql(): string {
+	return 'NOT ' . skykin_cdr_hunt_leg_sql();
+}
+
+function skykin_cdr_is_hunt_leg(array $row): bool {
+	return (int)($row['duration'] ?? 0) === 0
+		&& (int)($row['billsec'] ?? 0) === 0
+		&& strtolower((string)($row['direction'] ?? '')) === 'inbound'
+		&& (string)($row['hangup_cause'] ?? '') === 'ORIGINATOR_CANCEL';
+}
+
 function skykin_config(): array {
 	static $cfg = null;
 	if ($cfg !== null) {
