@@ -1,8 +1,9 @@
 """Patch ahununu dialplan: mobile + landline outbound (+251 / 251 / 00251 / 0…)."""
 import re
+import sys
 from pathlib import Path
 
-p = Path("/etc/freeswitch/dialplan/01_skykin_ahununu.xml")
+p = Path(sys.argv[1] if len(sys.argv) > 1 else "/etc/freeswitch/dialplan/01_skykin_ahununu.xml")
 text = p.read_text()
 changed = False
 

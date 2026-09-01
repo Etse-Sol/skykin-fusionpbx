@@ -34,8 +34,9 @@ grep FS_INBOUND_DID2_REGEX "$APP/.env"
 
 echo "==> Ahununu dialplan +251 / landline (SIP8035)"
 curl_get "$ROOT/add_e164_ahununu.py" /tmp/add_e164_ahununu.py
-docker cp /tmp/add_e164_ahununu.py skykin-freeswitch:/tmp/add_e164_ahununu.py
-docker exec skykin-freeswitch python3 /tmp/add_e164_ahununu.py
+docker cp skykin-freeswitch:/etc/freeswitch/dialplan/01_skykin_ahununu.xml /tmp/01_skykin_ahununu.xml
+python3 /tmp/add_e164_ahununu.py /tmp/01_skykin_ahununu.xml
+docker cp /tmp/01_skykin_ahununu.xml skykin-freeswitch:/etc/freeswitch/dialplan/01_skykin_ahununu.xml
 docker exec skykin-freeswitch fs_cli -x "reloadxml"
 
 echo "==> Copy into skykin-web (if running)"
