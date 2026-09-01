@@ -2131,58 +2131,6 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .phone-popup.ringing-inbound .dp-panel { display: none !important; }
 .phone-popup.ringing-inbound #incomingScreen { display: block !important; }
 
-/* Fixed Answer/Decline — visible even when lookup tab has focus */
-.incoming-call-bar {
-    position: fixed;
-    bottom: 88px;
-    right: 24px;
-    z-index: 20050;
-    width: 280px;
-    padding: 16px 18px;
-    background: #fff;
-    border: 2px solid #fd7e14;
-    border-radius: 14px;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
-}
-.incoming-call-bar-label {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #fd7e14;
-    margin-bottom: 6px;
-}
-.incoming-call-bar-number {
-    font-size: 22px;
-    font-weight: 700;
-    color: #0047AB;
-    line-height: 1.2;
-    word-break: break-all;
-}
-.incoming-call-bar-name {
-    font-size: 13px;
-    color: #555;
-    margin-top: 4px;
-    min-height: 18px;
-}
-.incoming-call-bar-actions {
-    display: flex;
-    gap: 10px;
-    margin-top: 14px;
-}
-.incoming-call-bar-answer,
-.incoming-call-bar-decline {
-    flex: 1;
-    border: none;
-    border-radius: 28px;
-    padding: 12px 10px;
-    font-size: 14px;
-    font-weight: 700;
-    cursor: pointer;
-    color: #fff;
-}
-.incoming-call-bar-answer { background: #28a745; }
-.incoming-call-bar-decline { background: #dc3545; }
 .pp-body { flex-shrink: 0; padding: 0; }
 .phone-popup.call-active .pp-body { padding: 12px 16px; }
 .dial-input-wrap { padding: 10px 16px 0; }
@@ -3404,17 +3352,6 @@ body.phone-open .footer { margin-right: 300px; transition: margin-right 0.3s eas
     </div>
 </div>
 
-<!-- Fixed inbound ring actions — stays visible while Customer Lookup tab is open -->
-<div id="incomingCallBar" class="incoming-call-bar" style="display:none" aria-live="polite">
-    <div class="incoming-call-bar-label">Incoming call</div>
-    <div class="incoming-call-bar-number" id="incomingBarNumber">Unknown</div>
-    <div class="incoming-call-bar-name" id="incomingBarName"></div>
-    <div class="incoming-call-bar-actions">
-        <button type="button" class="incoming-call-bar-answer" onclick="answerCall()">Answer</button>
-        <button type="button" class="incoming-call-bar-decline" onclick="declineCall()">Decline</button>
-    </div>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
 <?php echo skykin_js_bootstrap(); ?>
@@ -4513,12 +4450,8 @@ function applyCrmNameToCallUi(phone, contact) {
     const name = crmDisplayName(contact);
     const incEl = document.getElementById('incomingNumber');
     const cidEl = document.getElementById('incomingCidName');
-    const barNum = document.getElementById('incomingBarNumber');
-    const barName = document.getElementById('incomingBarName');
     if (incEl) incEl.textContent = name || num || 'Unknown';
     if (cidEl) cidEl.textContent = (name && num) ? num : '';
-    if (barNum) barNum.textContent = name || num || 'Unknown';
-    if (barName) barName.textContent = (name && num) ? num : '';
     if (!name) return;
     const st = ((document.getElementById('sipStatusText') || {}).textContent || '');
     if (!/ringing|calling|in call/i.test(st)) return;
@@ -4555,12 +4488,6 @@ function showIncomingRingUi(callerNumber) {
     document.getElementById('incomingNumber').textContent = num;
     const cidEl = document.getElementById('incomingCidName');
     if (cidEl) cidEl.textContent = '';
-    const bar = document.getElementById('incomingCallBar');
-    const barNum = document.getElementById('incomingBarNumber');
-    const barName = document.getElementById('incomingBarName');
-    if (barNum) barNum.textContent = num;
-    if (barName) barName.textContent = '';
-    if (bar) bar.style.display = 'block';
     document.getElementById('incomingScreen').style.display = 'block';
     document.getElementById('dpPanel').style.display = 'none';
     document.getElementById('callTimer').style.display = 'none';
@@ -4575,8 +4502,6 @@ function showIncomingRingUi(callerNumber) {
 
 function clearIncomingRingUi() {
     window._inboundRingActive = false;
-    const bar = document.getElementById('incomingCallBar');
-    if (bar) bar.style.display = 'none';
     document.getElementById('incomingScreen').style.display = 'none';
     document.getElementById('dpPanel').style.display = 'block';
     const popup = document.getElementById('phonePopup');
@@ -4595,7 +4520,7 @@ function handleIncoming(callerNumber) {
             switchTab('lookup');
         }
     }
-    // Re-pin ring UI after lookup tab paints (phone panel + fixed bar).
+    // Re-pin ring UI after lookup tab paints (phone panel stays on top).
     setTimeout(function() {
         if (!window._inboundRingActive) return;
         openPhonePopup();
@@ -4603,8 +4528,6 @@ function handleIncoming(callerNumber) {
         if (popup) popup.classList.add('ringing-inbound');
         document.getElementById('incomingScreen').style.display = 'block';
         document.getElementById('dpPanel').style.display = 'none';
-        const bar = document.getElementById('incomingCallBar');
-        if (bar) bar.style.display = 'block';
         const ctrls = document.querySelector('#phonePopup .call-controls');
         if (ctrls) ctrls.style.display = 'none';
     }, 50);
@@ -4628,8 +4551,6 @@ window.resetMissedRing = resetMissedRing;
 function answerCall() {
     document.getElementById('incomingOverlay').style.display = 'none';
     window._inboundRingActive = false;
-    const bar = document.getElementById('incomingCallBar');
-    if (bar) bar.style.display = 'none';
     if (sipBridge.answer) sipBridge.answer();
     // Do not auto-open ahununu.com — agent opens it manually via the Ahununu tab
 }
@@ -4755,8 +4676,6 @@ function startCallUI(number) {
     document.getElementById('dialInput').value = number;
     // Hide incoming screen if still showing (edge case)
     window._inboundRingActive = false;
-    const barEnd = document.getElementById('incomingCallBar');
-    if (barEnd) barEnd.style.display = 'none';
     document.getElementById('phonePopup').classList.remove('ringing-inbound');
     document.getElementById('incomingScreen').style.display = 'none';
     document.getElementById('dpPanel').style.display = 'none';

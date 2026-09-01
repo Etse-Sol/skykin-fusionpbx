@@ -141,14 +141,14 @@ FS "reloadxml"
 echo "=== 5) Verify dialplan (must NOT show transfer 500) ==="
 docker exec skykin-freeswitch grep -E 'skykin_inbound|transfer' /etc/freeswitch/dialplan/public/02_skykin_did_ahununu.xml
 
-echo "=== 6) Dashboard Answer bar (if index.php has incomingCallBar) ==="
+echo "=== 6) Dashboard (optional — copy index.php separately if needed) ==="
 IDX="$APP/app/agent_dashboard/index.php"
-if grep -q incomingCallBar "$IDX" 2>/dev/null; then
+if [ -f "$IDX" ]; then
   docker cp "$IDX" skykin-web:/var/www/fusionpbx/app/agent_dashboard/index.php
   docker exec skykin-web php -l /var/www/fusionpbx/app/agent_dashboard/index.php
-  echo "  index.php deployed ($(grep -c incomingCallBar "$IDX") incomingCallBar refs)"
+  echo "  index.php deployed from $IDX"
 else
-  echo "  WARN: $IDX missing incomingCallBar — git pull or copy updated index.php from dev machine"
+  echo "  SKIP: $IDX not found — deploy index.php manually"
 fi
 
 echo ""
