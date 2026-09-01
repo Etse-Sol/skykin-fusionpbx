@@ -1,9 +1,11 @@
 #!/bin/bash
-# Restore ahununu inbound + agent ring on ecs-cc.
+# Restore ahununu inbound + agent ring on ecs-cc (pinned to last known-good git).
 # Fixes: transfer 500, directory dialplan IVR, broken 02_skykin_did_ahununu.xml
 # Welcome plays inside skykin_inbound.lua (NOT extension 500).
 set -eu
 
+COMMIT="${SKYKIN_RESTORE_COMMIT:-c72b43b2c}"
+RAW="https://raw.githubusercontent.com/Etse-Sol/skykin-fusionpbx/${COMMIT}"
 APP="${SKYKIN_APP:-/opt/skykin/app}"
 PW=$(grep -E '^ESL_PASSWORD=' "$APP/.env" | cut -d= -f2-)
 FS() { docker exec skykin-freeswitch fs_cli -H 127.0.0.1 -P 8021 -p "$PW" -x "$1"; }
@@ -53,16 +55,12 @@ docker exec -i skykin-freeswitch tee /etc/freeswitch/dialplan/public/02_skykin_d
 </include>
 EOF
 
-echo "=== 3) skykin_cc_prune + skykin_inbound (longest-idle hunt, one agent) ==="
-PRUNE="$APP/docker/freeswitch/scripts/skykin_cc_prune.lua"
-INB="$APP/docker/freeswitch/scripts/skykin_inbound.lua"
-if [ -f "$INB" ] && [ -f "$PRUNE" ]; then
-  docker cp "$PRUNE" skykin-freeswitch:/etc/freeswitch/scripts/skykin_cc_prune.lua
-  docker cp "$INB" skykin-freeswitch:/etc/freeswitch/scripts/skykin_inbound.lua
-  echo "  copied from $APP/docker/freeswitch/scripts/"
-else
-  echo "  WARN: repo lua missing — use curl raw files from GitHub commit"
-fi
+echo "=== 3) skykin_cc_prune + skykin_inbound from GitHub $COMMIT ==="
+curl -fsSL -o /tmp/skykin_cc_prune.lua "$RAW/docker/freeswitch/scripts/skykin_cc_prune.lua"
+curl -fsSL -o /tmp/skykin_inbound.lua "$RAW/docker/freeswitch/scripts/skykin_inbound.lua"
+docker cp /tmp/skykin_cc_prune.lua skykin-freeswitch:/etc/freeswitch/scripts/skykin_cc_prune.lua
+docker cp /tmp/skykin_inbound.lua skykin-freeswitch:/etc/freeswitch/scripts/skykin_inbound.lua
+echo "  deployed lua from $COMMIT"
 
 echo "=== 4) Queue strategy longest-idle-agent (not ring-all) ==="
 docker exec skykin-freeswitch sh -c '
@@ -85,15 +83,11 @@ FS "reloadxml"
 echo "=== 6) Verify dialplan (must NOT show transfer 500) ==="
 docker exec skykin-freeswitch grep -E 'skykin_inbound|transfer' /etc/freeswitch/dialplan/public/02_skykin_did_ahununu.xml
 
-echo "=== 7) Dashboard (optional — copy index.php separately if needed) ==="
-IDX="$APP/app/agent_dashboard/index.php"
-if [ -f "$IDX" ]; then
-  docker cp "$IDX" skykin-web:/var/www/fusionpbx/app/agent_dashboard/index.php
-  docker exec skykin-web php -l /var/www/fusionpbx/app/agent_dashboard/index.php
-  echo "  index.php deployed from $IDX"
-else
-  echo "  SKIP: $IDX not found — deploy index.php manually"
-fi
+echo "=== 7) Dashboard index.php from GitHub $COMMIT ==="
+curl -fsSL -o /tmp/index.php "$RAW/app/agent_dashboard/index.php"
+docker cp /tmp/index.php skykin-web:/var/www/fusionpbx/app/agent_dashboard/index.php
+docker exec skykin-web php -l /var/www/fusionpbx/app/agent_dashboard/index.php
+echo "  index.php deployed from $COMMIT"
 
 echo ""
 echo "DONE. Test:"

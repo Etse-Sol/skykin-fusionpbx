@@ -62,32 +62,15 @@ if (isset($_GET['api'])) {
 
         // ── Daily call volume ──────────────────────────────────────────────
         if ($api === 'daily_volume') {
-            $s = $db->prepare("SELECT
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as day,
-                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound'  AND {$repSql} THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local'    AND {$repSql} THEN 1 ELSE 0 END) as local,
-                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_dur
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
-                GROUP BY day ORDER BY day");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_daily_volume($rows));
             exit;
         }
 
         // ── Hourly heatmap ────────────────────────────────────────────────
         if ($api === 'hourly_heatmap') {
-            $s = $db->prepare("SELECT
-                EXTRACT(DOW FROM to_timestamp(start_epoch))::int as dow,
-                EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
-                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
-                GROUP BY dow, hour ORDER BY dow, hour");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_hourly_heatmap($rows));
             exit;
         }
 
@@ -130,59 +113,54 @@ if (isset($_GET['api'])) {
 
         // ── Summary KPIs ──────────────────────────────────────────────────
         if ($api === 'summary') {
-            $s = $db->prepare("SELECT
-                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local,
-                COALESCE(SUM(billsec),0) as total_talk,
-                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
-                ROUND(100.0 * SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END)
-                    / NULLIF(SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END), 0), 1) as abandon_rate
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetch(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_period_metrics($rows));
             exit;
         }
 
         // ── Hourly volume ─────────────────────────────────────────────────
         if ($api === 'hourly_volume') {
-            $s = $db->prepare("SELECT
-                EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
-                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
-                GROUP BY hour ORDER BY hour");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_hourly_volume($rows));
             exit;
         }
 
         // ── Filtered call details ──────────────────────────────────────────
         if ($api === 'call_list') {
             $type = $_GET['type'] ?? 'all';
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND {$repSql}";
-            $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
-            if ($type === 'answered') {
-                $where .= " AND {$ansSql}";
-            } elseif ($type === 'missed') {
-                $where .= " AND {$missSql}";
-            } elseif (in_array($type, ['inbound','outbound','local'], true)) {
-                $where .= " AND direction=:dir";
-                $params[':dir'] = $type;
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te, '', [], 2000);
+            $out = [];
+            foreach ($rows as $r) {
+                $result = strtolower(skykin_cdr_result_label($r));
+                $dir = strtolower(trim((string)($r['direction'] ?? '')));
+                if ($type === 'answered' && $result !== 'answered') {
+                    continue;
+                }
+                if ($type === 'missed' && $result !== 'missed') {
+                    continue;
+                }
+                if ($type === 'failed' && $result !== 'failed') {
+                    continue;
+                }
+                if (in_array($type, ['inbound', 'outbound', 'local'], true) && $dir !== $type) {
+                    continue;
+                }
+                $out[] = [
+                    'call_time' => $r['call_time'] ?? '',
+                    'caller_id_name' => $r['caller_id_name'] ?? '',
+                    'caller_id_number' => $r['caller_id_number'] ?? '',
+                    'destination_number' => $r['destination_number'] ?? '',
+                    'direction' => $r['direction'] ?? '',
+                    'duration' => $r['duration'] ?? 0,
+                    'billsec' => $r['billsec'] ?? 0,
+                    'hangup_cause' => $r['hangup_cause'] ?? '',
+                    'result' => $result,
+                ];
+                if (count($out) >= 500) {
+                    break;
+                }
             }
-            $s = $db->prepare("SELECT
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
-                caller_id_name, caller_id_number, destination_number,
-                direction, duration, billsec, hangup_cause,
-                " . skykin_cdr_result_sql(true) . " as result
-                FROM v_xml_cdr WHERE {$where}
-                ORDER BY start_epoch DESC LIMIT 500");
-            $s->execute($params);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            echo json_encode($out);
             exit;
         }
 
@@ -211,41 +189,39 @@ if (isset($_GET['api'])) {
             }
 
             $type = $_GET['type'] ?? 'all';
-            $summaryStmt = $db->prepare("SELECT
-                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local,
-                COALESCE(SUM(CASE WHEN {$ansSql} THEN billsec ELSE 0 END),0) as total_talk,
-                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_talk
-                FROM v_xml_cdr
-                WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
-            $summaryStmt->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            $summary = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te, '', [], 5000);
+            $summary = skykin_cdr_period_metrics($rows);
 
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND {$repSql}";
-            $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
-            if ($type === 'answered') {
-                $where .= " AND {$ansSql}";
-            } elseif ($type === 'missed') {
-                $where .= " AND {$missSql}";
-            } elseif (in_array($type, ['inbound','outbound','local'], true)) {
-                $where .= " AND direction=:dir";
-                $params[':dir'] = $type;
+            $details = [];
+            foreach ($rows as $r) {
+                $result = skykin_cdr_result_label($r);
+                $dir = strtolower(trim((string)($r['direction'] ?? '')));
+                if ($type === 'answered' && $result !== 'Answered') {
+                    continue;
+                }
+                if ($type === 'missed' && $result !== 'Missed') {
+                    continue;
+                }
+                if ($type === 'failed' && $result !== 'Failed') {
+                    continue;
+                }
+                if (in_array($type, ['inbound', 'outbound', 'local'], true) && $dir !== $type) {
+                    continue;
+                }
+                $details[] = [
+                    'call_date' => $r['call_day'] ?? date('Y-m-d', (int)($r['start_epoch'] ?? 0)),
+                    'call_time' => preg_replace('/^.* /', '', (string)($r['call_time'] ?? '')),
+                    'caller_id_name' => $r['caller_id_name'] ?? '',
+                    'caller_id_number' => $r['caller_id_number'] ?? '',
+                    'destination_number' => $r['destination_number'] ?? '',
+                    'direction' => $r['direction'] ?? '',
+                    'result' => $result,
+                    'duration' => $r['duration'] ?? 0,
+                    'billsec' => $r['billsec'] ?? 0,
+                    'hangup_cause' => $r['hangup_cause'] ?? '',
+                    'record_name' => $r['record_name'] ?? '',
+                ];
             }
-            $detailStmt = $db->prepare("SELECT
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as call_date,
-                to_char(to_timestamp(start_epoch),'HH24:MI:SS') as call_time,
-                caller_id_name, caller_id_number, destination_number,
-                direction,
-                " . skykin_cdr_result_sql(false) . " as result,
-                duration, billsec, hangup_cause, record_name
-                FROM v_xml_cdr WHERE {$where}
-                ORDER BY start_epoch DESC LIMIT 5000");
-            $detailStmt->execute($params);
-            $details = $detailStmt->fetchAll(PDO::FETCH_ASSOC);
 
             $total = (int)($summary['total'] ?? 0);
             $answered = (int)($summary['answered'] ?? 0);

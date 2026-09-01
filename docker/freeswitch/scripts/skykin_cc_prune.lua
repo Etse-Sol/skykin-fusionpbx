@@ -1,5 +1,5 @@
--- Before inbound hunt: drop unregistered agents; put Available agents in Waiting.
--- Do NOT reset ready_time (that breaks longest-idle selection).
+-- Before callcenter: do not offer unregistered agents, and clear a stale
+-- ready_time so the one registered agent actually rings.
 if not session then
   return
 end
@@ -31,15 +31,16 @@ local out = api:execute("callcenter_config", "queue list agents " .. queue) or "
 for line in out:gmatch("[^\r\n]+") do
   if line:find("|", 1, true) and line:sub(1, 5) ~= "name|" then
     local c = cols(line)
-    local uuid, contact, status, state = c[1] or "", c[5] or "", c[6] or "", c[7] or ""
+    local uuid, contact, status = c[1] or "", c[5] or "", c[6] or ""
     local ext = contact:match("user/([^@]+)")
     if uuid ~= "" and ext then
       if registered(ext) then
-        if status == "Available" and state ~= "In a queue call" then
+        api:execute("callcenter_config", "agent set wrap_up_time " .. uuid .. " 0")
+        api:execute("callcenter_config", "agent set ready_time " .. uuid .. " 0")
+        if status == "Available" then
           api:execute("callcenter_config", "agent set state " .. uuid .. " Waiting")
         end
-        freeswitch.consoleLog("NOTICE", "skykin_cc_prune keep " .. ext .. "@" .. domain
-          .. " status=" .. status .. " state=" .. state .. "\n")
+        freeswitch.consoleLog("NOTICE", "skykin_cc_prune keep " .. ext .. "@" .. domain .. "\n")
       else
         api:execute("callcenter_config", "agent set status " .. uuid .. " Logged Out")
         freeswitch.consoleLog("NOTICE", "skykin_cc_prune skip " .. ext .. " not registered\n")

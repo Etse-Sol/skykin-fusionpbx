@@ -125,17 +125,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
 
             // Recent calls
             $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
-                direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause
+                direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause,start_epoch
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND {$agent_sql}
                 AND start_epoch>=:ts AND start_epoch<=:te
-                AND " . skykin_cdr_reportable_sql() . "
-                ORDER BY start_epoch DESC LIMIT 500");
+                ORDER BY start_epoch DESC LIMIT 1000");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
-            foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                if (skykin_cdr_is_hunt_leg($r)) {
-                    continue;
-                }
+            $recent = skykin_cdr_collapse_hunt_legs($s2->fetchAll(PDO::FETCH_ASSOC));
+            foreach (array_slice($recent, 0, 500) as $r) {
                 $dest = (string)$r['destination_number'];
                 $dir  = strtolower((string)($r['direction'] ?? ''));
                 $digits = preg_replace('/\D+/', '', $dest);
@@ -170,7 +167,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                     'type'       => $in ? 'Inbound' : 'Outbound',
                     'number'     => $clean_num,
                     'duration'   => floor($bill/60).':'.str_pad($bill%60,2,'0',STR_PAD_LEFT),
-                    'status'     => skykin_cdr_result_label(['billsec'=>$bill,'direction'=>$r['direction']??'','duration'=>$r['duration']??0,'hangup_cause'=>$r['hangup_cause']??'']),
+                    'status'     => skykin_cdr_result_label($r),
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
                 ];
             }
@@ -2122,15 +2119,6 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
     transition: right 0.3s ease;
 }
 .phone-popup.open { right: 0; }
-.phone-popup.ringing-inbound {
-    z-index: 10050;
-    box-shadow: -4px 0 28px rgba(253, 126, 20, 0.35);
-}
-.phone-popup.ringing-inbound .call-controls,
-.phone-popup.ringing-inbound #callTimer,
-.phone-popup.ringing-inbound .dp-panel { display: none !important; }
-.phone-popup.ringing-inbound #incomingScreen { display: block !important; }
-
 .pp-body { flex-shrink: 0; padding: 0; }
 .phone-popup.call-active .pp-body { padding: 12px 16px; }
 .dial-input-wrap { padding: 10px 16px 0; }
@@ -4423,7 +4411,6 @@ function setSipStatus(state, text) {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
         dot.classList.add('ringing'); badge.classList.add('show'); fab.classList.add('ringing');
-        openPhonePopup();
         document.getElementById('callTimer').style.display = 'none';
     } else if (state === 'connecting') {
         dot.classList.add('connecting');
@@ -4478,66 +4465,35 @@ function fetchCrmContact(phone, cb) {
 }
 window.fetchCrmContact = fetchCrmContact;
 
-function showIncomingRingUi(callerNumber) {
+function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
     window.lastIncomingNumber = callerNumber || '';
     window._callEnded = false;
-    window._inboundRingActive = true;
     try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
-    const num = callerNumber || 'Unknown';
-    document.getElementById('incomingNumber').textContent = num;
+    document.getElementById('incomingNumber').textContent = callerNumber || 'Unknown';
     const cidEl = document.getElementById('incomingCidName');
     if (cidEl) cidEl.textContent = '';
+    // Show incoming screen inside the phone panel, hide dial pad
     document.getElementById('incomingScreen').style.display = 'block';
     document.getElementById('dpPanel').style.display = 'none';
-    document.getElementById('callTimer').style.display = 'none';
-    const ctrls = document.querySelector('#phonePopup .call-controls');
-    if (ctrls) ctrls.style.display = 'none';
-    const popup = document.getElementById('phonePopup');
-    if (popup) popup.classList.add('ringing-inbound');
     openPhonePopup();
-    setSipStatus('ringing', 'Ringing: ' + num);
+    setSipStatus('ringing', 'Ringing: ' + (callerNumber || 'Unknown'));
     startRingtone();
-}
-
-function clearIncomingRingUi() {
-    window._inboundRingActive = false;
-    document.getElementById('incomingScreen').style.display = 'none';
-    document.getElementById('dpPanel').style.display = 'block';
-    const popup = document.getElementById('phonePopup');
-    if (popup) popup.classList.remove('ringing-inbound');
-    const ctrls = document.querySelector('#phonePopup .call-controls');
-    if (ctrls) ctrls.style.display = '';
-    stopRingtone();
-}
-
-function handleIncoming(callerNumber) {
-    showIncomingRingUi(callerNumber);
     if (callerNumber) {
         fetchCrmContact(callerNumber);
+        if (window.performLookup) {
+            performLookup(callerNumber);
+            switchTab('lookup');
+        }
     }
-    // CRM lookup tab opens after answer (startCallUI) — not during ring.
-    setTimeout(function() {
-        if (!window._inboundRingActive) return;
-        openPhonePopup();
-        const popup = document.getElementById('phonePopup');
-        if (popup) popup.classList.add('ringing-inbound');
-        document.getElementById('incomingScreen').style.display = 'block';
-        document.getElementById('dpPanel').style.display = 'none';
-        const ctrls = document.querySelector('#phonePopup .call-controls');
-        if (ctrls) ctrls.style.display = 'none';
-    }, 50);
 }
 window.handleIncoming = handleIncoming;
 
 // A cancelled / missed ring must not open ACW or hide a newer incoming call.
 function resetMissedRing() {
     try {
-        if (window._inboundRingActive && session && session instanceof Invitation
-            && session.state !== SessionState.Terminated) {
-            return;
-        }
-        clearIncomingRingUi();
+        document.getElementById('incomingScreen').style.display = 'none';
+        document.getElementById('dpPanel').style.display = 'block';
         const ext = localStorage.getItem('sip_ext') || '';
         setSipStatus('registered', 'Registered (' + ext + ')');
     } catch (e) {}
@@ -4545,23 +4501,18 @@ function resetMissedRing() {
 window.resetMissedRing = resetMissedRing;
 
 function answerCall() {
-    if (window.skykinHasRingingInvite && !window.skykinHasRingingInvite()) {
-        showToast('Call ended before you could answer.');
-        clearIncomingRingUi();
-        return;
-    }
     document.getElementById('incomingOverlay').style.display = 'none';
     if (sipBridge.answer) sipBridge.answer();
     // Do not auto-open ahununu.com — agent opens it manually via the Ahununu tab
 }
 
 function declineCall() {
-    clearIncomingRingUi();
+    document.getElementById('incomingScreen').style.display = 'none';
+    document.getElementById('dpPanel').style.display = 'block';
+    stopRingtone();
     if (sipBridge.decline) sipBridge.decline();
     else if (sipBridge.hangup) sipBridge.hangup();
     currentSession = null;
-    const ext = localStorage.getItem('sip_ext') || '';
-    setSipStatus('registered', 'Registered (' + ext + ')');
 }
 
 function makeCall(number) {
@@ -4662,10 +4613,6 @@ function startCallUI(number) {
     stopRingback();
     setSipStatus('incall', 'In Call: ' + number);
     fetchCrmContact(number);
-    if (lastCallType === 'Inbound' && number && window.performLookup) {
-        performLookup(number);
-        switchTab('lookup');
-    }
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display   = 'flex';
@@ -4679,8 +4626,6 @@ function startCallUI(number) {
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number;
     // Hide incoming screen if still showing (edge case)
-    window._inboundRingActive = false;
-    document.getElementById('phonePopup').classList.remove('ringing-inbound');
     document.getElementById('incomingScreen').style.display = 'none';
     document.getElementById('dpPanel').style.display = 'none';
     document.getElementById('btnKeypad').classList.remove('active');
@@ -5122,16 +5067,9 @@ function showToast(msg) {
     const socket = io(url, { transports: ['websocket','polling'] });
     socket.on('connect', () => showToast('Live events connected'));
     socket.on('call_bridged', function(data) {
-        // CRM hint only — ring UI must come from the live SIP INVITE.
-        if (!(window.skykinHasRingingInvite && window.skykinHasRingingInvite())) return;
         const callerNum = data.callerId || data.caller_id || '';
-        lastCallType = 'Inbound';
-        lastDialedNumber = callerNum;
-        if (callerNum && window.fetchCrmContact) fetchCrmContact(callerNum);
-        if (callerNum && window.performLookup) {
-            performLookup(callerNum);
-            switchTab('lookup');
-        }
+        lastCallType = 'Inbound'; lastDialedNumber = callerNum;
+        handleIncoming(callerNum);
     });
     socket.on('call_ended', function() { endCall(); });
     socket.on('metrics_update', function() { fetchData(); });
@@ -5736,12 +5674,6 @@ const {
 
 let ua = null, reg = null, session = null;
 
-window.skykinHasRingingInvite = function() {
-    return session instanceof Invitation
-        && session.state !== SessionState.Terminated
-        && session.state !== SessionState.Terminating;
-};
-
 // SKYKIN_SAFE_DECLINE_v3
 function stopOutboundPoll() {
     if (window._outboundPoll) { clearInterval(window._outboundPoll); window._outboundPoll = null; }
@@ -6053,10 +5985,6 @@ function bindSession(s) {
                 if (window.endCall) window.endCall();
             } else {
                 window.stopRingtone && window.stopRingtone();
-                if (s instanceof Invitation && !s._skykinEstablished) {
-                    if (window.clearIncomingRingUi) window.clearIncomingRingUi();
-                    if (window.showToast) window.showToast('Incoming call ended');
-                }
                 if (window.resetMissedRing) window.resetMissedRing();
             }
         }
@@ -6129,7 +6057,6 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
             }
             session = inv;
             window._callEnded = false;
-            bindSession(inv);
             try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
             const num = inv.remoteIdentity?.uri?.user
                 || inv.remoteIdentity?.displayName
@@ -6138,23 +6065,16 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/sip:(\+?[\d]+)@/)?.[1]
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
-            window.lastDialedNumber = num;
-            window.lastCallType = 'Inbound';
+            window.lastDialedNumber = num; window.lastCallType = 'Inbound';
+            // 180 without SDP. Do not attach WebRTC media (183/SDP) or Ethio
+            // starts the caller timer before Answer. Swallow progress errors:
+            // a failed 100rel/ICE path would 480 the INVITE and the incoming
+            // ring would vanish from the dashboard.
+            try {
+                inv.progress({ statusCode: 180 }).catch(function () {});
+            } catch (e) {}
             window.handleIncoming && window.handleIncoming(num);
-            const progressOpts = {
-                statusCode: 183,
-                sessionDescriptionHandlerOptions: {
-                    constraints: MIC_CONSTRAINTS,
-                    iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
-                    peerConnectionConfiguration: ICE_PC_CONFIG
-                },
-                sessionDescriptionHandlerModifiers: SDP_MODIFIERS
-            };
-            // Send 183+SDP immediately — waiting for ensureMic() lets FS drop the leg in ~20ms.
-            inv.progress(progressOpts).catch(function(e) {
-                window.sipReport && window.sipReport('invite_progress_failed', e, '');
-                return inv.progress({ statusCode: 180 }).catch(function() {});
-            });
+            bindSession(inv);
         }
     };
 
@@ -6316,13 +6236,11 @@ function micErrorMessage(e) {
 }
 
 window.sipBridge.answer = function() {
-    if (!window.skykinHasRingingInvite()) {
+    if (!(session instanceof Invitation)) {
         window.showToast && window.showToast('No incoming call to answer.');
-        if (window.clearIncomingRingUi) window.clearIncomingRingUi();
         return;
     }
     const inv = session;
-    window._inboundRingActive = false;
     window.ensureMic()
         .then(function(stream) {
             const el = document.getElementById('remoteAudio');
