@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run on ecs-cc as root. Deploys dashboard + ahununu +251/landline dialplan from CC branch 5.5.
+# Run on ecs-cc as root. Deploys from Etse-Sol/skykin-fusionpbx branch 5.5.
 set -euo pipefail
 
 BRANCH=5.5
