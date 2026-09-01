@@ -2874,7 +2874,11 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || (inv.remoteIdentity && inv.remoteIdentity.displayName)
                 || 'Unknown';
             window.lastDialedNumber = num;
-            try { inv.progress({ statusCode: 180 }); } catch (e) {}
+            window.ensureMic && window.ensureMic().then(function() {
+                return inv.progress({ statusCode: 183 });
+            }).catch(function() {
+                try { inv.progress({ statusCode: 180 }); } catch (e) {}
+            });
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }

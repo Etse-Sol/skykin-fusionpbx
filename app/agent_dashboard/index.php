@@ -6142,13 +6142,22 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
-            // 180 without SDP. Do not attach WebRTC media (183/SDP) or Ethio
-            // starts the caller timer before Answer. Swallow progress errors:
-            // a failed 100rel/ICE path would 480 the INVITE and the incoming
-            // ring would vanish from the dashboard.
-            try {
-                inv.progress({ statusCode: 180 }).catch(function () {});
-            } catch (e) {}
+            // WebRTC B-leg must send 183+SDP or FreeSWITCH drops the originate in ~20ms
+            // (NO_ANSWER). Caller A-leg stays on 180 — this does not pre-answer Ethio.
+            window.ensureMic().then(function() {
+                return inv.progress({
+                    statusCode: 183,
+                    sessionDescriptionHandlerOptions: {
+                        constraints: MIC_CONSTRAINTS,
+                        iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
+                        peerConnectionConfiguration: ICE_PC_CONFIG
+                    },
+                    sessionDescriptionHandlerModifiers: SDP_MODIFIERS
+                });
+            }).catch(function(e) {
+                window.sipReport && window.sipReport('invite_progress_failed', e, '');
+                try { inv.progress({ statusCode: 180 }).catch(function() {}); } catch (ex) {}
+            });
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }
