@@ -1217,11 +1217,11 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 .dial-input::placeholder{color:#ccc;letter-spacing:0;font-size:13px}
 .btn-dialpad{background:#f0f2f5;border:1px solid #ddd;border-radius:8px;width:40px;cursor:pointer;font-size:18px;color:#555;display:flex;align-items:center;justify-content:center}
 .btn-dialpad:hover{background:#e2e8f0}
-.dp-panel{display:none;padding:14px 22px 22px;background:#fff}
-.dp-panel.open{display:block}
+.dp-panel{display:block;padding:14px 22px 22px;background:#fff}
 .dp-title{margin:0 0 10px;color:#64748b;font-size:10px;font-weight:700;letter-spacing:1.2px;text-align:center;text-transform:uppercase}
-.dp-display{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:20px;font-weight:650;color:#0f3f79;text-align:center;letter-spacing:2px;min-height:46px;margin-bottom:16px;display:flex;align-items:center;justify-content:center}
-.dp-display.empty{color:#94a3b8;font-size:12px;letter-spacing:0;font-weight:500}
+.dp-display{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:20px;font-weight:650;color:#0f3f79;text-align:center;letter-spacing:2px;min-height:46px;width:100%;margin-bottom:16px;box-sizing:border-box;outline:none}
+.dp-display:focus{border-color:#9dc5f0}
+.dp-display::placeholder{color:#94a3b8;font-size:12px;letter-spacing:0;font-weight:500}
 .dp-grid{display:grid;grid-template-columns:repeat(3,58px);gap:10px 18px;justify-content:center;margin-bottom:16px}
 .dp-key{width:58px;height:58px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:50%;font-size:19px;font-weight:650;color:#172b4d;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .dp-key .dp-sub{font-size:8px;color:#94a3b8;letter-spacing:.5px;margin-top:2px}
@@ -1672,10 +1672,6 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             </div>
         </div>
         <div id="callTimer" class="call-timer">00:00</div>
-        <div class="dial-input-wrap" id="dialInputWrap">
-            <input type="tel" class="dial-input" id="dialInput" placeholder="Enter number to call..." maxlength="20" autocomplete="off">
-            <button type="button" class="btn-dialpad" id="btnDialpadToggle" title="Dial Pad" onclick="togglePad()">&#8999;</button>
-        </div>
         <div class="call-controls">
             <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">End call</button>
             <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
@@ -1686,7 +1682,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
     </div>
     <div class="dp-panel" id="dpPanel">
         <div class="dp-title">Dial number</div>
-        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
+        <input type="tel" class="dp-display" id="dialInput" placeholder="Enter number..." maxlength="20" autocomplete="off" inputmode="tel">
         <div class="dp-grid">
             <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
             <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
@@ -2434,7 +2430,7 @@ function fetchSkillsAgents() {
 
 // ── Supervisor softphone ───────────────────────────────────────────────────
 let phoneOpen = false, lastDialedNumber = '', isMuted = false, onHold = false;
-let callStartTime = null, callTimerInterval = null, dpNumber = '', padOpen = false;
+let callStartTime = null, callTimerInterval = null, dpNumber = '';
 let _ringCtx = null, _ringInterval = null;
 
 function showToast(msg, color){ toast(msg, color || '#333'); }
@@ -2559,11 +2555,7 @@ function handleIncoming(callerNumber) {
     lastDialedNumber = callerNumber || '';
     document.getElementById('incomingNumber').textContent = callerNumber;
     document.getElementById('incomingScreen').style.display = 'block';
-    const dialWrap = document.getElementById('dialInputWrap');
-    if (dialWrap) dialWrap.style.display = 'none';
     document.getElementById('dpPanel').style.display = 'none';
-    document.getElementById('dpPanel').classList.remove('open');
-    padOpen = false;
     openPhonePopup();
     setSipStatus('ringing', 'Ringing: ' + callerNumber);
     startRingtone();
@@ -2571,11 +2563,7 @@ function handleIncoming(callerNumber) {
 function answerCall() { if (sipBridge.answer) sipBridge.answer(); }
 function declineCall() {
     document.getElementById('incomingScreen').style.display = 'none';
-    const dialWrap = document.getElementById('dialInputWrap');
-    if (dialWrap) dialWrap.style.display = '';
-    document.getElementById('dpPanel').style.display = '';
-    document.getElementById('dpPanel').classList.remove('open');
-    padOpen = false;
+    document.getElementById('dpPanel').style.display = 'block';
     stopRingtone();
     if (sipBridge.decline) sipBridge.decline();
     else if (sipBridge.hangup) sipBridge.hangup();
@@ -2696,52 +2684,35 @@ function endCall() {
     document.getElementById('callTimer').style.display = 'none';
     document.getElementById('callTimer').textContent = '00:00';
     document.getElementById('incomingScreen').style.display = 'none';
-    const dialWrap = document.getElementById('dialInputWrap');
-    if (dialWrap) dialWrap.style.display = '';
-    document.getElementById('dpPanel').style.display = '';
-    document.getElementById('dpPanel').classList.remove('open');
-    padOpen = false;
-    const padBtn = document.getElementById('btnDialpadToggle');
-    if (padBtn) { padBtn.style.background = ''; padBtn.style.color = ''; }
+    document.getElementById('dpPanel').style.display = 'block';
     const ext = localStorage.getItem('sup_sip_ext') || serverExt || '';
     if (ext) setSipStatus('registered', 'Registered (' + ext + ')');
     setTimeout(() => { window._callEnded = false; }, 3000);
 }
-function togglePad() {
-    padOpen = !padOpen;
-    const panel = document.getElementById('dpPanel');
-    panel.classList.toggle('open', padOpen);
-    panel.style.display = '';
-    const btn = document.getElementById('btnDialpadToggle');
-    if (btn) {
-        btn.style.background = padOpen ? '#0047AB' : '';
-        btn.style.color = padOpen ? 'white' : '';
-    }
-}
 function updateDpDisplay() {
-    const d = document.getElementById('dpDisplay');
-    if (!d) return;
-    if (!dpNumber) { d.textContent = 'Enter number...'; d.classList.add('empty'); }
-    else { d.textContent = dpNumber; d.classList.remove('empty'); }
-    document.getElementById('dialInput').value = dpNumber;
+    const inp = document.getElementById('dialInput');
+    if (inp && inp.value !== dpNumber) inp.value = dpNumber;
 }
 function dpKey(k) {
-    if (document.getElementById('btnKeypad').classList.contains('active') && sipBridge.sendDtmf) {
+    if (callStartTime && document.getElementById('btnKeypad').classList.contains('active') && sipBridge.sendDtmf) {
         sipBridge.sendDtmf(k); return;
     }
     if (dpNumber.length >= 20) return;
-    dpNumber += k; updateDpDisplay();
+    dpNumber += k;
+    updateDpDisplay();
 }
-function dpDelete() { dpNumber = dpNumber.slice(0, -1); updateDpDisplay(); }
-function dpCall() { makeCall(dpNumber); }
+function dpDelete() {
+    if (callStartTime) return;
+    dpNumber = dpNumber.slice(0, -1);
+    updateDpDisplay();
+}
+function dpCall() { makeCall(); }
 function toggleCallKeypad() {
     const btn = document.getElementById('btnKeypad');
     const panel = document.getElementById('dpPanel');
-    const opening = panel.style.display === 'none' || !panel.classList.contains('open');
+    const opening = panel.style.display === 'none';
     panel.style.display = opening ? 'block' : 'none';
-    panel.classList.toggle('open', opening);
     btn.classList.toggle('active', opening);
-    padOpen = opening;
 }
 function openTransferModal() {
     const modal = document.getElementById('transferModal');
@@ -2808,18 +2779,8 @@ if (dialInputEl) {
     });
     dialInputEl.addEventListener('input', function() {
         dpNumber = this.value;
-        updateDpDisplay();
     });
 }
-document.addEventListener('click', function(e) {
-    if (!padOpen || callStartTime) return;
-    if (!e.target.closest('#dpPanel') && !e.target.closest('#btnDialpadToggle')) {
-        padOpen = false;
-        document.getElementById('dpPanel').classList.remove('open');
-        const btn = document.getElementById('btnDialpadToggle');
-        if (btn) { btn.style.background = ''; btn.style.color = ''; }
-    }
-});
 
 // Close Agent View dropdown when clicking outside
 document.addEventListener('click', function(e) {
