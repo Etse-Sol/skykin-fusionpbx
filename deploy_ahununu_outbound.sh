@@ -1,46 +1,52 @@
 #!/bin/bash
-# Run on ecs-cc as root. Deploys from Etse-Sol/skykin-fusionpbx branch 5.5.
-set -euo pipefail
+# Paste on ecs-cc as root — same curl deploy style as scripts/deploy_favicon.sh
+set -eu
 
-BRANCH=5.5
-REPO_BASE="https://raw.githubusercontent.com/Etse-Sol/skykin-fusionpbx/${BRANCH}"
-DASH=/opt/skykin/app/app/agent_dashboard
-ENV=/opt/skykin/app/.env
+ROOT="${SKYKIN_DEPLOY_REF:-https://raw.githubusercontent.com/Etse-Sol/skykin-fusionpbx/5.5}"
+APP="${SKYKIN_APP_ROOT:-/opt/skykin/app}"
+DASH="$APP/app/agent_dashboard"
 STAMP=$(date +%Y%m%d_%H%M%S)
+BASE="$ROOT/app/agent_dashboard"
 
 curl_get() {
   local url="$1" out="$2"
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -o "$out" "$url"
+    curl -fSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -o "$out" "$url"
   else
-    curl -fsSL -o "$out" "$url"
+    curl -fSL -o "$out" "$url"
   fi
 }
 
-echo "=== 1) Dashboard PHP ==="
+echo "==> Dashboard PHP from $ROOT"
 for f in skykin_config.php supervisor.php reports.php index.php data.php; do
   [ -f "$DASH/$f" ] && cp -a "$DASH/$f" "$DASH/$f.bak-$STAMP"
-  curl_get "$REPO_BASE/app/agent_dashboard/$f" "$DASH/$f"
+  curl_get "$BASE/$f" "$DASH/$f"
   echo "  $f"
 done
 
-echo "=== 2) .env — ahununu inbound DID 035-039 ==="
-if grep -q '^FS_INBOUND_DID2_REGEX=' "$ENV"; then
-  sed -i 's|^FS_INBOUND_DID2_REGEX=.*|FS_INBOUND_DID2_REGEX=^\\+?(?:251)?11619803[5-9]$|' "$ENV"
+echo "==> .env inbound DID 035-039"
+if grep -q '^FS_INBOUND_DID2_REGEX=' "$APP/.env"; then
+  sed -i 's|^FS_INBOUND_DID2_REGEX=.*|FS_INBOUND_DID2_REGEX=^\\+?(?:251)?11619803[5-9]$|' "$APP/.env"
 else
-  echo 'FS_INBOUND_DID2_REGEX=^\+?(?:251)?11619803[5-9]$' >> "$ENV"
+  echo 'FS_INBOUND_DID2_REGEX=^\+?(?:251)?11619803[5-9]$' >> "$APP/.env"
 fi
-grep FS_INBOUND_DID2_REGEX "$ENV"
+grep FS_INBOUND_DID2_REGEX "$APP/.env"
 
-echo "=== 3) Dialplan patch (+251 / landline → SIP8035) ==="
-curl_get "$REPO_BASE/add_e164_ahununu.py" /tmp/add_e164_ahununu.py
+echo "==> Ahununu dialplan +251 / landline (SIP8035)"
+curl_get "$ROOT/add_e164_ahununu.py" /tmp/add_e164_ahununu.py
 docker cp /tmp/add_e164_ahununu.py skykin-freeswitch:/tmp/add_e164_ahununu.py
 docker exec skykin-freeswitch python3 /tmp/add_e164_ahununu.py
 docker exec skykin-freeswitch fs_cli -x "reloadxml"
 
-echo "=== 4) Verify ==="
-docker exec skykin-freeswitch grep -E 'normalize|et_land|et_e164|SIP8035' \
-  /etc/freeswitch/dialplan/01_skykin_ahununu.xml | head -20
+echo "==> Copy into skykin-web (if running)"
+if docker ps --format '{{.Names}}' | grep -qx skykin-web; then
+  for f in skykin_config.php supervisor.php reports.php index.php data.php; do
+    docker cp "$DASH/$f" "skykin-web:/var/www/fusionpbx/app/agent_dashboard/$f"
+  done
+fi
 
-echo "=== DONE ==="
-echo "Hard-refresh dashboard (Ctrl+Shift+R). Test outbound: 0912..., 251912..., 0111234567"
+echo "==> Verify"
+grep -c skykinNormalizeEtDial "$DASH/skykin_config.php" && echo OK skykin_config
+docker exec skykin-freeswitch grep -E 'normalize|et_land|et_e164|SIP8035' \
+  /etc/freeswitch/dialplan/01_skykin_ahununu.xml | head -10
+echo "Done. Hard-refresh dashboard Ctrl+Shift+R"
