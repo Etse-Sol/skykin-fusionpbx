@@ -4523,6 +4523,10 @@ function handleIncoming(callerNumber) {
     // Re-pin ring UI after lookup tab paints (phone panel stays on top).
     setTimeout(function() {
         if (!window._inboundRingActive) return;
+        if (window.skykinHasRingingInvite && !window.skykinHasRingingInvite()) {
+            clearIncomingRingUi();
+            return;
+        }
         openPhonePopup();
         const popup = document.getElementById('phonePopup');
         if (popup) popup.classList.add('ringing-inbound');
@@ -4549,8 +4553,12 @@ function resetMissedRing() {
 window.resetMissedRing = resetMissedRing;
 
 function answerCall() {
+    if (window.skykinHasRingingInvite && !window.skykinHasRingingInvite()) {
+        showToast('No incoming call to answer.');
+        clearIncomingRingUi();
+        return;
+    }
     document.getElementById('incomingOverlay').style.display = 'none';
-    window._inboundRingActive = false;
     if (sipBridge.answer) sipBridge.answer();
     // Do not auto-open ahununu.com — agent opens it manually via the Ahununu tab
 }
@@ -5118,9 +5126,16 @@ function showToast(msg) {
     const socket = io(url, { transports: ['websocket','polling'] });
     socket.on('connect', () => showToast('Live events connected'));
     socket.on('call_bridged', function(data) {
+        // CRM hint only — ring UI must come from the live SIP INVITE.
+        if (!(window.skykinHasRingingInvite && window.skykinHasRingingInvite())) return;
         const callerNum = data.callerId || data.caller_id || '';
-        lastCallType = 'Inbound'; lastDialedNumber = callerNum;
-        handleIncoming(callerNum);
+        lastCallType = 'Inbound';
+        lastDialedNumber = callerNum;
+        if (callerNum && window.fetchCrmContact) fetchCrmContact(callerNum);
+        if (callerNum && window.performLookup) {
+            performLookup(callerNum);
+            switchTab('lookup');
+        }
     });
     socket.on('call_ended', function() { endCall(); });
     socket.on('metrics_update', function() { fetchData(); });
@@ -5725,6 +5740,12 @@ const {
 
 let ua = null, reg = null, session = null;
 
+window.skykinHasRingingInvite = function() {
+    return session instanceof Invitation
+        && session.state !== SessionState.Terminated
+        && session.state !== SessionState.Terminating;
+};
+
 // SKYKIN_SAFE_DECLINE_v3
 function stopOutboundPoll() {
     if (window._outboundPoll) { clearInterval(window._outboundPoll); window._outboundPoll = null; }
@@ -6036,6 +6057,10 @@ function bindSession(s) {
                 if (window.endCall) window.endCall();
             } else {
                 window.stopRingtone && window.stopRingtone();
+                if (s instanceof Invitation && !s._skykinEstablished) {
+                    if (window.clearIncomingRingUi) window.clearIncomingRingUi();
+                    if (window.showToast) window.showToast('Incoming call ended');
+                }
                 if (window.resetMissedRing) window.resetMissedRing();
             }
         }
@@ -6287,11 +6312,13 @@ function micErrorMessage(e) {
 }
 
 window.sipBridge.answer = function() {
-    if (!(session instanceof Invitation)) {
+    if (!window.skykinHasRingingInvite()) {
         window.showToast && window.showToast('No incoming call to answer.');
+        if (window.clearIncomingRingUi) window.clearIncomingRingUi();
         return;
     }
     const inv = session;
+    window._inboundRingActive = false;
     window.ensureMic()
         .then(function(stream) {
             const el = document.getElementById('remoteAudio');
