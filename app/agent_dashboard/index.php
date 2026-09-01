@@ -125,17 +125,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
 
             // Recent calls
             $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
-                direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause
+                direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause,start_epoch
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND {$agent_sql}
                 AND start_epoch>=:ts AND start_epoch<=:te
-                AND " . skykin_cdr_reportable_sql() . "
-                ORDER BY start_epoch DESC LIMIT 500");
+                ORDER BY start_epoch DESC LIMIT 1000");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
-            foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
-                if (skykin_cdr_is_hunt_leg($r)) {
-                    continue;
-                }
+            $recent = skykin_cdr_collapse_hunt_legs($s2->fetchAll(PDO::FETCH_ASSOC));
+            foreach (array_slice($recent, 0, 500) as $r) {
                 $dest = (string)$r['destination_number'];
                 $dir  = strtolower((string)($r['direction'] ?? ''));
                 $digits = preg_replace('/\D+/', '', $dest);
@@ -170,7 +167,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                     'type'       => $in ? 'Inbound' : 'Outbound',
                     'number'     => $clean_num,
                     'duration'   => floor($bill/60).':'.str_pad($bill%60,2,'0',STR_PAD_LEFT),
-                    'status'     => skykin_cdr_result_label(['billsec'=>$bill,'direction'=>$r['direction']??'','duration'=>$r['duration']??0,'hangup_cause'=>$r['hangup_cause']??'']),
+                    'status'     => skykin_cdr_result_label($r),
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
                 ];
             }

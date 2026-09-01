@@ -398,23 +398,12 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             }
         } catch(Exception $ignored){}
 
-        // Today totals
-        $rep = skykin_cdr_reportable_sql();
-        $miss = skykin_cdr_missed_sql();
-        $ans = skykin_cdr_answered_sql();
-        $s2 = $db->prepare("SELECT SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
-            SUM(CASE WHEN {$ans} THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
-            COALESCE(AVG(CASE WHEN {$ans} THEN billsec END),0) as avg_talk,
-            COALESCE(AVG(CASE WHEN {$rep} AND billsec=0 THEN duration ELSE NULL END),0) as avg_wait
-            FROM v_xml_cdr WHERE domain_name=:d
-            AND start_epoch>=:ts AND start_epoch<=:te");
-        $s2->execute([':d'=>$domain,':ts'=>$today_start,':te'=>$today_end]);
-        $totals = $s2->fetch(PDO::FETCH_ASSOC);
-
-        $total    = (int)($totals['total']??0);
-        $answered = (int)($totals['answered']??0);
-        $missed   = (int)($totals['missed']??0);
+        // Today totals (hunt legs collapsed to one missed per caller attempt)
+        $today_rows = skykin_cdr_fetch_period($db, $domain, $today_start, $today_end);
+        $tm = skykin_cdr_period_metrics($today_rows);
+        $total    = (int)($tm['total'] ?? 0);
+        $answered = (int)($tm['answered'] ?? 0);
+        $missed   = (int)($tm['missed'] ?? 0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
         // Agents online — SIP registrations, which only FreeSWITCH knows about.
@@ -430,8 +419,8 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             'total_today'      => $total,
             'answered_today'   => $answered,
             'missed_today'     => $missed,
-            'avg_talk'         => (int)($totals['avg_talk']??0),
-            'avg_wait'         => (int)($totals['avg_wait']??0),
+            'avg_talk'         => (int)($tm['avg_dur'] ?? 0),
+            'avg_wait'         => 0,
             'sla'              => $sla,
             'agents_online'    => (int)($online['cnt']??0),
         ]);
@@ -695,28 +684,17 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 $uname_ext[strtolower($um['username'])] = $um['extension'];
         } catch (Exception $ignore) {}
 
-        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND " . skykin_cdr_reportable_sql()
-            . " AND (leg IS NULL OR LOWER(TRIM(leg::text)) <> 'b')";
+        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q OR caller_destination LIKE :q OR last_arg LIKE :q)"; $params[':q']='%'.$search.'%'; }
         $s = $db->prepare("SELECT start_epoch,
             to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
             caller_id_number, destination_number, caller_destination, direction, billsec, duration,
             hangup_cause, last_arg, cc_agent, cc_agent_bridged
-            FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 500");
-        try {
-            $s->execute($params);
-        } catch (Exception $legErr) {
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND " . skykin_cdr_reportable_sql();
-            $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
-            if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
-            $s = $db->prepare("SELECT start_epoch,
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
-                caller_id_number, destination_number, caller_destination, direction, billsec, duration,
-                hangup_cause, last_arg, cc_agent, cc_agent_bridged
-                FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 500");
-            $s->execute($params);
-        }
+            FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 1500");
+        $s->execute($params);
+        $raw = skykin_cdr_collapse_hunt_legs($s->fetchAll(PDO::FETCH_ASSOC));
+        $raw = array_slice($raw, 0, 500);
         $rows = [];
         $agent_label = [];
         try {
@@ -733,7 +711,6 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 }
             }
         } catch (Exception $ignore) {}
-        $raw = $s->fetchAll(PDO::FETCH_ASSOC);
         $agent_guess = [];
         $parsed = [];
         foreach ($raw as $r) {
@@ -784,9 +761,6 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
         }
         foreach ($parsed as $p) {
             $r = $p['r'];
-            if (skykin_cdr_is_hunt_leg($r)) {
-                continue;
-            }
             $b = $p['b']; $caller = $p['caller']; $dest = $p['dest'];
             $cdest = $p['cdest']; $agent_ext = $p['agent_ext'];
             $dest_digits = $p['dest_digits'];
@@ -833,7 +807,7 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 'destination'=>$dest,'agent'=>$agent !== '' ? $agent : '—',
                 'direction'=>$dir,
                 'duration'=>floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
-                'status'=>skykin_cdr_result_label(['billsec'=>$b,'direction'=>$dir,'duration'=>$r['duration']??0,'hangup_cause'=>$r['hangup_cause']??'']),
+                'status'=>skykin_cdr_result_label($r),
                 'cause'=>$r['hangup_cause']??''];
         }
         echo json_encode(['rows'=>$rows]);
