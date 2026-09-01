@@ -3,7 +3,7 @@
 set -euo pipefail
 
 BRANCH=5.5
-REPO_BASE="https://raw.githubusercontent.com/Skykin-Technologies/CC/${BRANCH}"
+REPO_BASE="https://raw.githubusercontent.com/Etse-Sol/skykin-fusionpbx/${BRANCH}"
 DASH=/opt/skykin/app/app/agent_dashboard
 ENV=/opt/skykin/app/.env
 STAMP=$(date +%Y%m%d_%H%M%S)
