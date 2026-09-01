@@ -53,95 +53,39 @@ docker exec -i skykin-freeswitch tee /etc/freeswitch/dialplan/public/02_skykin_d
 </include>
 EOF
 
-echo "=== 3) skykin_inbound.lua — welcome + agent hunt ==="
-docker exec -i skykin-freeswitch tee /etc/freeswitch/scripts/skykin_inbound.lua >/dev/null <<'LUA'
-if not session then return end
-local api = freeswitch.API()
-local domain = session:getVariable("domain_name") or "ahununu"
-local queue = "8000@" .. domain
-local rtp_ip = session:getVariable("rtp_ext_ip") or "196.189.236.126"
-local wait_wav = "/var/lib/freeswitch/recordings/" .. domain .. "/ahununu-waiting.wav"
-local welcome = "/var/lib/freeswitch/recordings/" .. domain .. "/ahununu-opening.wav"
-if session:getVariable("skykin_blocked") == "true" or not session:ready() then
-  session:execute("hangup", "CALL_REJECTED"); return
-end
-session:execute("ring_ready")
-session:setVariable("ringback", "${us-ring}")
-session:setVariable("instant_ringback", "true")
-session:setVariable("hangup_after_bridge", "true")
-session:setVariable("continue_on_fail", "true")
-session:setVariable("ignore_early_media", "true")
-session:setVariable("bridge_early_media", "false")
-session:setVariable("originate_early_media", "false")
-local function play_wav(path, tag)
-  local f = io.open(path, "r"); if not f then return false end; f:close()
-  local ok, ans = pcall(function() return session:answered() end)
-  if not (ok and ans) then session:execute("pre_answer") end
-  freeswitch.consoleLog("NOTICE", tag .. " play " .. path .. "\n")
-  session:streamFile(path); return true
-end
-play_wav(welcome, "skykin welcome")
-local function registered(ext)
-  local r = api:execute("sofia_contact", "*/" .. ext .. "@" .. domain) or ""
-  return not r:find("error", 1, true) and not r:find("user_not_registered", 1, true) and r:find("sip:", 1, true)
-end
-local function on_a_call(ext)
-  local chans = api:execute("show", "channels") or ""
-  return chans:find("user/" .. ext .. "@" .. domain, 1, true) or chans:find("/" .. ext .. "@" .. domain, 1, true)
-end
-local function ready_ext(skip)
-  local out = api:execute("callcenter_config", "queue list agents " .. queue) or ""
-  local best, best_idle = nil, nil
-  for line in out:gmatch("[^\r\n]+") do
-    if line:find("|") and line:sub(1,5) ~= "name|" then
-      local c = {}; for x in (line.."|"):gmatch("(.-)|") do c[#c+1]=x end
-      local ext = (c[5] or ""):match("user/([^@]+)")
-      if ext and not skip[ext] and c[6]=="Available" and (c[7]=="Waiting" or c[7]=="Idle")
-          and registered(ext) and not on_a_call(ext) then
-        local idle = tonumber(c[20]) or tonumber(c[14]) or 0
-        if not best or idle < best_idle then best, best_idle = ext, idle end
-      end
-    end
-  end
-  return best
-end
-local skip = {}; local t0 = os.time()
-while session:ready() do
-  if os.time()-t0 > 90 then session:hangup("NO_ANSWER"); return end
-  local dest = ready_ext(skip)
-  if not dest then
-    freeswitch.consoleLog("NOTICE", "skykin inbound wait " .. queue .. "\n")
-    if not play_wav(wait_wav, "skykin wait") then session:sleep(500) end
-  else
-    freeswitch.consoleLog("NOTICE", "skykin inbound try " .. dest .. "@" .. domain .. "\n")
-    session:execute("bridge",
-      "{ignore_early_media=true,bridge_early_media=false,originate_timeout=45,fail_on_single_reject=true}"
-      .. "[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip="
-      .. rtp_ip .. ",include_external_ip=true,execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua]user/"
-      .. dest .. "@" .. domain)
-    if not session:ready() then return end
-    local ok, ans = pcall(function() return session:answered() end)
-    if ok and ans then return end
-    local sip = session:getVariable("sip_invite_failure_status") or ""
-    local cause = string.upper(session:getVariable("last_bridge_hangup_cause") or "")
-    if sip=="603" or sip=="480" or cause:find("CALL_REJECTED",1,true) or cause:find("ORIGINATOR_CANCEL",1,true) then
-      session:hangup("NORMAL_CLEARING"); return
-    end
-    skip[dest]=true; session:sleep(200)
-  end
-end
-LUA
+echo "=== 3) skykin_cc_prune + skykin_inbound (longest-idle hunt, one agent) ==="
+PRUNE="$APP/docker/freeswitch/scripts/skykin_cc_prune.lua"
+INB="$APP/docker/freeswitch/scripts/skykin_inbound.lua"
+if [ -f "$INB" ] && [ -f "$PRUNE" ]; then
+  docker cp "$PRUNE" skykin-freeswitch:/etc/freeswitch/scripts/skykin_cc_prune.lua
+  docker cp "$INB" skykin-freeswitch:/etc/freeswitch/scripts/skykin_inbound.lua
+  echo "  copied from $APP/docker/freeswitch/scripts/"
+else
+  echo "  WARN: repo lua missing — use curl raw files from GitHub commit"
+fi
 
-echo "=== 4) Persist (survive container recreate) ==="
+echo "=== 4) Queue strategy longest-idle-agent (not ring-all) ==="
+docker exec skykin-freeswitch sh -c '
+  f=/etc/freeswitch/autoload_configs/callcenter.conf.xml
+  sed -i "s|value=\"ring-all\"|value=\"longest-idle-agent\"|g" "$f"
+  grep -E "strategy|8000" "$f" | head -8
+'
+docker exec skykin-db psql -U fusionpbx -d fusionpbx -c \
+  "UPDATE v_call_center_queues SET queue_strategy = 'longest-idle-agent' WHERE queue_extension = '8000';" \
+  2>/dev/null || true
+FS "callcenter_config queue reload 8000@ahununu" 2>/dev/null || true
+
+echo "=== 5) Persist (survive container recreate) ==="
 docker cp skykin-freeswitch:/etc/freeswitch/dialplan/public/02_skykin_did_ahununu.xml "$LIVE/"
 docker cp skykin-freeswitch:/etc/freeswitch/scripts/skykin_inbound.lua "$LIVE/"
+docker cp skykin-freeswitch:/etc/freeswitch/scripts/skykin_cc_prune.lua "$LIVE/" 2>/dev/null || true
 
 FS "reloadxml"
 
-echo "=== 5) Verify dialplan (must NOT show transfer 500) ==="
+echo "=== 6) Verify dialplan (must NOT show transfer 500) ==="
 docker exec skykin-freeswitch grep -E 'skykin_inbound|transfer' /etc/freeswitch/dialplan/public/02_skykin_did_ahununu.xml
 
-echo "=== 6) Dashboard (optional — copy index.php separately if needed) ==="
+echo "=== 7) Dashboard (optional — copy index.php separately if needed) ==="
 IDX="$APP/app/agent_dashboard/index.php"
 if [ -f "$IDX" ]; then
   docker cp "$IDX" skykin-web:/var/www/fusionpbx/app/agent_dashboard/index.php
@@ -155,5 +99,5 @@ echo ""
 echo "DONE. Test:"
 echo "  1) Agent 202 Ready + Registered on dashboard (Ctrl+Shift+R)"
 echo "  2) fs sofia_contact */202@ahununu  -> must show sip:..."
-echo "  3) Call 8414 — lookup tab + Answer/Decline bar bottom-right"
-echo "  4) grep 'skykin inbound try' /var/log/freeswitch/freeswitch.log | tail -3"
+echo "  3) Call 8414 — lookup tab + Answer/Decline in phone panel (top right)"
+echo "  4) grep 'skykin inbound pick' /var/log/freeswitch/freeswitch.log | tail -3"

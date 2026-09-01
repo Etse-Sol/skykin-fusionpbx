@@ -35,9 +35,7 @@ for line in out:gmatch("[^\r\n]+") do
     local ext = contact:match("user/([^@]+)")
     if uuid ~= "" and ext then
       if registered(ext) then
-        api:execute("callcenter_config", "agent set wrap_up_time " .. uuid .. " 0")
-        api:execute("callcenter_config", "agent set ready_time " .. uuid .. " 0")
-        if status == "Available" then
+        if status == "Available" and state ~= "Waiting" and state ~= "Idle" then
           api:execute("callcenter_config", "agent set state " .. uuid .. " Waiting")
         end
         freeswitch.consoleLog("NOTICE", "skykin_cc_prune keep " .. ext .. "@" .. domain .. "\n")
