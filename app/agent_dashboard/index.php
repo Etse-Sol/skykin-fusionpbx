@@ -4515,18 +4515,10 @@ function handleIncoming(callerNumber) {
     showIncomingRingUi(callerNumber);
     if (callerNumber) {
         fetchCrmContact(callerNumber);
-        if (window.performLookup) {
-            performLookup(callerNumber);
-            switchTab('lookup');
-        }
     }
-    // Re-pin ring UI after lookup tab paints (phone panel stays on top).
+    // CRM lookup tab opens after answer (startCallUI) — not during ring.
     setTimeout(function() {
         if (!window._inboundRingActive) return;
-        if (window.skykinHasRingingInvite && !window.skykinHasRingingInvite()) {
-            clearIncomingRingUi();
-            return;
-        }
         openPhonePopup();
         const popup = document.getElementById('phonePopup');
         if (popup) popup.classList.add('ringing-inbound');
@@ -4554,7 +4546,7 @@ window.resetMissedRing = resetMissedRing;
 
 function answerCall() {
     if (window.skykinHasRingingInvite && !window.skykinHasRingingInvite()) {
-        showToast('No incoming call to answer.');
+        showToast('Call ended before you could answer.');
         clearIncomingRingUi();
         return;
     }
@@ -4670,6 +4662,10 @@ function startCallUI(number) {
     stopRingback();
     setSipStatus('incall', 'In Call: ' + number);
     fetchCrmContact(number);
+    if (lastCallType === 'Inbound' && number && window.performLookup) {
+        performLookup(number);
+        switchTab('lookup');
+    }
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display   = 'flex';
@@ -6133,6 +6129,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
             }
             session = inv;
             window._callEnded = false;
+            bindSession(inv);
             try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
             const num = inv.remoteIdentity?.uri?.user
                 || inv.remoteIdentity?.displayName
@@ -6141,25 +6138,23 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/sip:(\+?[\d]+)@/)?.[1]
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
-            window.lastDialedNumber = num; window.lastCallType = 'Inbound';
-            // WebRTC B-leg must send 183+SDP or FreeSWITCH drops the originate in ~20ms
-            // (NO_ANSWER). Caller A-leg stays on 180 — this does not pre-answer Ethio.
-            window.ensureMic().then(function() {
-                return inv.progress({
-                    statusCode: 183,
-                    sessionDescriptionHandlerOptions: {
-                        constraints: MIC_CONSTRAINTS,
-                        iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
-                        peerConnectionConfiguration: ICE_PC_CONFIG
-                    },
-                    sessionDescriptionHandlerModifiers: SDP_MODIFIERS
-                });
-            }).catch(function(e) {
-                window.sipReport && window.sipReport('invite_progress_failed', e, '');
-                try { inv.progress({ statusCode: 180 }).catch(function() {}); } catch (ex) {}
-            });
+            window.lastDialedNumber = num;
+            window.lastCallType = 'Inbound';
             window.handleIncoming && window.handleIncoming(num);
-            bindSession(inv);
+            const progressOpts = {
+                statusCode: 183,
+                sessionDescriptionHandlerOptions: {
+                    constraints: MIC_CONSTRAINTS,
+                    iceGatheringTimeout: ICE_GATHERING_TIMEOUT_MS,
+                    peerConnectionConfiguration: ICE_PC_CONFIG
+                },
+                sessionDescriptionHandlerModifiers: SDP_MODIFIERS
+            };
+            // Send 183+SDP immediately — waiting for ensureMic() lets FS drop the leg in ~20ms.
+            inv.progress(progressOpts).catch(function(e) {
+                window.sipReport && window.sipReport('invite_progress_failed', e, '');
+                return inv.progress({ statusCode: 180 }).catch(function() {});
+            });
         }
     };
 

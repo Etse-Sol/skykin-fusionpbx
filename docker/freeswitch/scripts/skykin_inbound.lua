@@ -144,6 +144,10 @@ local function should_try_next(cause, sip, elapsed_ms)
   if cause:find("USER_NOT_REGISTERED", 1, true) or cause:find("UNALLOCATED", 1, true) then
     return true
   end
+  -- Fast NO_ANSWER = WebRTC leg died before agent could answer — keep caller waiting.
+  if cause:find("NO_ANSWER", 1, true) and elapsed_ms < 3000 then
+    return true
+  end
   if elapsed_ms < 15000 then
     return false
   end
