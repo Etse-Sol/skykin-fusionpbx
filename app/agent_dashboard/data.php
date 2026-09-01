@@ -224,7 +224,7 @@ try {
                 'type'        => $type,
                 'number'      => $number ?: 'Unknown',
                 'duration'    => sprintf('%d:%02d', $mins, $secs),
-                'status'      => $answered ? 'Answered' : 'Missed',
+                'status'      => skykin_cdr_result_label($r),
                 'disposition' => $answered ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
             ];
         }

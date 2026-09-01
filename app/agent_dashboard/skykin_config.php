@@ -108,6 +108,46 @@ function skykin_phone_tail(string $phone, int $len = 9): string {
 	return strlen($d) >= $len ? substr($d, -$len) : $d;
 }
 
+/**
+ * Normalize agent outbound dial strings for FreeSWITCH (Ethiopia mobile + landline).
+ * Internal extensions (1xx / 2xx) are returned unchanged.
+ * Mobile: 09…, 9…, +2519…, 2519…, 002519…
+ * Landline: 011…, 11…, +25111…, 25111… (Addis and other area codes 11–87)
+ */
+function skykin_normalize_et_outbound_dial(string $raw): string {
+	$s = trim($raw);
+	if ($s === '') {
+		return '';
+	}
+	if (preg_match('/^2\d{2}$/', $s) || preg_match('/^1\d{2}$/', $s)) {
+		return $s;
+	}
+	$d = preg_replace('/\D+/', '', $s);
+	if ($d === '') {
+		return $s;
+	}
+	if (str_starts_with($d, '00251') && strlen($d) >= 12) {
+		$d = substr($d, 5);
+	} elseif (str_starts_with($d, '251') && strlen($d) >= 12) {
+		$d = substr($d, 3);
+	}
+	if (strlen($d) === 10 && $d[0] === '0') {
+		if (preg_match('/^09\d{8}$/', $d)) {
+			return substr($d, 1);
+		}
+		return $d;
+	}
+	if (strlen($d) === 9) {
+		if (preg_match('/^9\d{8}$/', $d)) {
+			return $d;
+		}
+		if (preg_match('/^[1-8]\d{8}$/', $d)) {
+			return '0' . $d;
+		}
+	}
+	return $d;
+}
+
 /** Store mobiles as 09XXXXXXXX when possible. */
 function skykin_normalize_phone_storage(string $phone): string {
 	$d = skykin_phone_digits($phone);
@@ -278,6 +318,8 @@ function skykin_cdr_agent_sql(string $ext_param = ':e'): string {
 		. 'caller_id_number = ' . $ext_param
 		. ' OR destination_number = ' . $ext_param
 		. ' OR caller_destination = ' . $ext_param
+		. " OR last_arg LIKE '%user/' || " . $ext_param . " || '@%'"
+		. " OR cc_agent_bridged LIKE '%/' || " . $ext_param . " || '@%'"
 		. ' OR (cc_agent IN ('
 		. 'SELECT call_center_agent_uuid::text FROM v_call_center_agents'
 		. ' WHERE agent_id = ' . $ext_param
@@ -286,13 +328,46 @@ function skykin_cdr_agent_sql(string $ext_param = ':e'): string {
 		. ')';
 }
 
+/** Per-agent CDR totals for supervisor / leaderboard (matches agent dashboard stats). */
+function skykin_cdr_agent_stats(PDO $db, string $domain, string $ext, int $ts, int $te): array {
+	$agent_sql = skykin_cdr_agent_sql(':e');
+	$rep = skykin_cdr_reportable_sql();
+	$miss = skykin_cdr_missed_sql();
+	$ans = skykin_cdr_answered_sql();
+	$s = $db->prepare("SELECT
+		SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
+		SUM(CASE WHEN {$ans} THEN 1 ELSE 0 END) as answered,
+		SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
+		COALESCE(SUM(CASE WHEN {$ans} THEN billsec ELSE 0 END),0) as total_talk,
+		COALESCE(AVG(CASE WHEN {$ans} THEN billsec END),0) as avg_dur,
+		COALESCE(MAX(CASE WHEN {$ans} THEN billsec END),0) as max_dur
+		FROM v_xml_cdr WHERE domain_name=:d
+		AND {$agent_sql}
+		AND start_epoch>=:ts AND start_epoch<=:te");
+	$s->execute([':d' => $domain, ':e' => $ext, ':ts' => $ts, ':te' => $te]);
+	$row = $s->fetch(PDO::FETCH_ASSOC);
+	return is_array($row) ? $row : [];
+}
+
 /**
- * Ethio multi-DID hunt legs: 0s inbound ORIGINATOR_CANCEL before agent ring.
- * Exclude from missed-call KPIs and call-history lists.
+ * Ethio inbound DIDs used for parallel/sequential carrier hunt (035–039 / 757–759).
+ */
+function skykin_cdr_is_hunt_did(string $number): bool {
+	$digits = preg_replace('/\D+/', '', $number);
+	return (bool)preg_match('/11113875[789]$/', $digits)
+		|| (bool)preg_match('/11619803[5-9]$/', $digits);
+}
+
+/**
+ * Ethio multi-DID hunt legs: inbound ORIGINATOR_CANCEL with no talk time.
+ * Carrier rings several DIDs; losing legs cancel with ORIGINATOR_CANCEL (duration may be >0).
  */
 function skykin_cdr_hunt_leg_sql(): string {
-	return "(duration = 0 AND billsec = 0 AND LOWER(COALESCE(direction, '')) = 'inbound'"
-		. " AND hangup_cause = 'ORIGINATOR_CANCEL')";
+	return "(billsec = 0 AND LOWER(COALESCE(direction, '')) = 'inbound'"
+		. " AND hangup_cause = 'ORIGINATOR_CANCEL'"
+		. " AND (duration = 0"
+		. " OR destination_number ~ '(11619803[5-9]|11113875[789])$'"
+		. " OR caller_destination ~ '(11619803[5-9]|11113875[789])$'))";
 }
 
 /** Real missed: reached PBX, no talk, not a hunt leg. */
@@ -305,11 +380,56 @@ function skykin_cdr_reportable_sql(): string {
 	return 'NOT ' . skykin_cdr_hunt_leg_sql();
 }
 
+/** Answered calls for KPIs (talk time > 0, reportable). */
+function skykin_cdr_answered_sql(): string {
+	return '(billsec > 0 AND ' . skykin_cdr_reportable_sql() . ')';
+}
+
 function skykin_cdr_is_hunt_leg(array $row): bool {
-	return (int)($row['duration'] ?? 0) === 0
-		&& (int)($row['billsec'] ?? 0) === 0
-		&& strtolower((string)($row['direction'] ?? '')) === 'inbound'
-		&& (string)($row['hangup_cause'] ?? '') === 'ORIGINATOR_CANCEL';
+	if ((int)($row['billsec'] ?? 0) > 0) {
+		return false;
+	}
+	if (strtolower((string)($row['direction'] ?? '')) !== 'inbound') {
+		return false;
+	}
+	if ((string)($row['hangup_cause'] ?? '') !== 'ORIGINATOR_CANCEL') {
+		return false;
+	}
+	if ((int)($row['duration'] ?? 0) === 0) {
+		return true;
+	}
+	$dest = (string)($row['destination_number'] ?? '');
+	$cdest = (string)($row['caller_destination'] ?? '');
+	return skykin_cdr_is_hunt_did($dest) || skykin_cdr_is_hunt_did($cdest);
+}
+
+/** UI label: Answered | Failed (outbound/local no talk) | Missed (inbound) | Hunt leg */
+function skykin_cdr_result_label(array $row): string {
+	if ((int)($row['billsec'] ?? 0) > 0) {
+		return 'Answered';
+	}
+	$dir = strtolower(trim((string)($row['direction'] ?? '')));
+	if ($dir === 'outbound' || $dir === 'local') {
+		return 'Failed';
+	}
+	if (skykin_cdr_is_hunt_leg($row)) {
+		return 'Hunt leg';
+	}
+	return 'Missed';
+}
+
+/** SQL CASE for CDR result column ($lowercase for API badges). */
+function skykin_cdr_result_sql(bool $lowercase = false): string {
+	$answered = $lowercase ? 'answered' : 'Answered';
+	$failed = $lowercase ? 'failed' : 'Failed';
+	$missed = $lowercase ? 'missed' : 'Missed';
+	$hunt = $lowercase ? 'hunt leg' : 'Hunt leg';
+	return "CASE
+		WHEN billsec > 0 THEN '{$answered}'
+		WHEN LOWER(COALESCE(direction, '')) IN ('outbound', 'local') THEN '{$failed}'
+		WHEN " . skykin_cdr_hunt_leg_sql() . " THEN '{$hunt}'
+		ELSE '{$missed}'
+	END";
 }
 
 function skykin_config(): array {
@@ -898,6 +1018,37 @@ function skykin_cc_waiting_callers(string $domain, array $queue_exts = []): arra
 		];
 	}
 
+	// Ethio parallel DID hunt opens several inbound channels (035–039) for one
+	// customer. Show one waiting row per caller, prefer agent-offer over hunt leg.
+	$dedupe = [];
+	foreach ($out as $item) {
+		$digits = preg_replace('/\D+/', '', (string)($item['number'] ?? ''));
+		if (strlen($digits) >= 9) {
+			$digits = substr($digits, -9);
+		}
+		$key = $digits !== '' ? $digits : (string)($item['number'] ?? 'unknown');
+		if (!isset($dedupe[$key])) {
+			$dedupe[$key] = $item;
+			continue;
+		}
+		$rank = static function (array $it): int {
+			$st = (string)($it['state'] ?? '');
+			if ($st === 'Offering') {
+				return 3;
+			}
+			if ($st === 'Waiting') {
+				return 2;
+			}
+			return 1;
+		};
+		$prev = $dedupe[$key];
+		if ($rank($item) > $rank($prev)
+			|| ($rank($item) === $rank($prev) && (int)$item['wait_seconds'] > (int)$prev['wait_seconds'])) {
+			$dedupe[$key] = $item;
+		}
+	}
+	$out = array_values($dedupe);
+
 	usort($out, static function ($a, $b) {
 		return ((int)$b['wait_seconds'] <=> (int)$a['wait_seconds']);
 	});
@@ -1137,7 +1288,32 @@ function skykin_js_bootstrap(): string {
 		'idleTimeoutMinutes'  => skykin_idle_timeout_minutes(),
 		'idlePingUrl'         => 'session_ping.php',
 	];
-	return 'window.SKYKIN=' . json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS) . ';';
+	return 'window.SKYKIN=' . json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS) . ';'
+		. skykin_js_dial_helpers();
+}
+
+/** Shared dial normalization for agent + supervisor dashboards. */
+function skykin_js_dial_helpers(): string {
+	return <<<'JS'
+window.skykinNormalizeEtDial=function(raw){
+  var s=String(raw||'').trim();
+  if(!s)return s;
+  if(/^2\d{2}$/.test(s)||/^1\d{2}$/.test(s))return s;
+  var d=s.replace(/\D/g,'');
+  if(!d)return s;
+  if(d.indexOf('00251')===0&&d.length>=12)d=d.slice(5);
+  else if(d.indexOf('251')===0&&d.length>=12)d=d.slice(3);
+  if(d.length===10&&d.charAt(0)==='0'){
+    if(/^09\d{8}$/.test(d))return d.slice(1);
+    return d;
+  }
+  if(d.length===9){
+    if(/^9\d{8}$/.test(d))return d;
+    if(/^[1-8]\d{8}$/.test(d))return '0'+d;
+  }
+  return d;
+};
+JS;
 }
 
 /**

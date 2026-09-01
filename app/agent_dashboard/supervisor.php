@@ -181,26 +181,13 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             return !isset($supervisorExts[$e['extension']]);
         });
 
-        // Today's CDR stats per extension — resolve SIP usernames to extension numbers
-        $s2 = $db->prepare("SELECT
-            COALESCE(
-                NULLIF(CASE WHEN direction IN ('outbound','local') THEN caller_id_number END, ''),
-                (SELECT a.agent_id FROM v_call_center_agents a
-                  WHERE a.call_center_agent_uuid::text = v_xml_cdr.cc_agent LIMIT 1),
-                CASE WHEN destination_number ~ '^[0-9]{2,6}$' THEN destination_number END,
-                caller_id_number
-            ) as ext,
-            COUNT(*) as total,
-            SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN " . skykin_cdr_missed_sql() . " THEN 1 ELSE 0 END) as missed,
-            COALESCE(SUM(billsec),0) as total_talk,
-            COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur
-            FROM v_xml_cdr WHERE domain_name=:d
-            AND start_epoch>=:ts AND start_epoch<=:te
-            GROUP BY 1");
-        $s2->execute([':d'=>$domain,':ts'=>$today_start,':te'=>$today_end]);
+        // Per-extension CDR stats (same attribution as agent dashboard — includes inbound).
         $stats = [];
-        foreach($s2->fetchAll(PDO::FETCH_ASSOC) as $r) $stats[$r['ext']] = $r;
+        foreach ($exts as $e) {
+            $stats[$e['extension']] = skykin_cdr_agent_stats(
+                $db, $domain, (string)$e['extension'], $today_start, $today_end
+            );
+        }
 
         // Call center agent status — key by agent_id AND by extension extracted from contact.
         // BUGFIX: previously keyed only by agent_name ("Agent 1"), then looked up by
@@ -414,10 +401,11 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         // Today totals
         $rep = skykin_cdr_reportable_sql();
         $miss = skykin_cdr_missed_sql();
+        $ans = skykin_cdr_answered_sql();
         $s2 = $db->prepare("SELECT SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
-            SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
+            SUM(CASE WHEN {$ans} THEN 1 ELSE 0 END) as answered,
             SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
-            COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_talk,
+            COALESCE(AVG(CASE WHEN {$ans} THEN billsec END),0) as avg_talk,
             COALESCE(AVG(CASE WHEN {$rep} AND billsec=0 THEN duration ELSE NULL END),0) as avg_wait
             FROM v_xml_cdr WHERE domain_name=:d
             AND start_epoch>=:ts AND start_epoch<=:te");
@@ -461,36 +449,34 @@ if (isset($_GET['action']) && $_GET['action']==='leaderboard') {
     $te = strtotime($to.' 23:59:59');
     try {
         $db = getDB();
-        $s = $db->prepare("SELECT
-            CASE WHEN direction='outbound' OR direction='local' THEN caller_id_number ELSE destination_number END as ext,
-            SUM(CASE WHEN " . skykin_cdr_reportable_sql() . " THEN 1 ELSE 0 END) as total,
-            SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN " . skykin_cdr_missed_sql() . " THEN 1 ELSE 0 END) as missed,
-            COALESCE(SUM(billsec),0) as total_talk,
-            COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur,
-            COALESCE(MAX(CASE WHEN billsec>0 THEN billsec END),0) as max_dur
-            FROM v_xml_cdr WHERE domain_name=:d
-            AND start_epoch>=:ts AND start_epoch<=:te
-            GROUP BY 1 ORDER BY answered DESC LIMIT 20");
-        $s->execute([':d'=>$domain,':ts'=>$ts,':te'=>$te]);
-        $rows = $s->fetchAll(PDO::FETCH_ASSOC);
-
-        // Enrich with names — join v_domains since v_extensions uses domain_uuid
-        $names = [];
         $sn = $db->prepare("SELECT e.extension, e.effective_caller_id_name
             FROM v_extensions e JOIN v_domains d ON d.domain_uuid=e.domain_uuid
-            WHERE d.domain_name=:d");
+            WHERE d.domain_name=:d ORDER BY e.extension");
         $sn->execute([':d'=>$domain]);
-        foreach($sn->fetchAll(PDO::FETCH_ASSOC) as $r) $names[$r['extension']] = $r['effective_caller_id_name'];
+        $ext_rows = $sn->fetchAll(PDO::FETCH_ASSOC);
 
-        foreach($rows as &$r) {
-            $r['name']     = $names[$r['ext']] ?? 'Ext '.$r['ext'];
-            $r['total']    = (int)$r['total'];
-            $r['answered'] = (int)$r['answered'];
-            $r['missed']   = (int)$r['missed'];
-            $r['total_talk']=(int)$r['total_talk'];
-            $r['avg_dur']  = (int)$r['avg_dur'];
+        $rows = [];
+        foreach ($ext_rows as $er) {
+            $st = skykin_cdr_agent_stats($db, $domain, (string)$er['extension'], $ts, $te);
+            $answered = (int)($st['answered'] ?? 0);
+            if ($answered < 1 && (int)($st['total'] ?? 0) < 1) {
+                continue;
+            }
+            $rows[] = [
+                'ext' => $er['extension'],
+                'name' => $er['effective_caller_id_name'] ?: ('Ext ' . $er['extension']),
+                'total' => (int)($st['total'] ?? 0),
+                'answered' => $answered,
+                'missed' => (int)($st['missed'] ?? 0),
+                'total_talk' => (int)($st['total_talk'] ?? 0),
+                'avg_dur' => (int)($st['avg_dur'] ?? 0),
+                'max_dur' => (int)($st['max_dur'] ?? 0),
+            ];
         }
+        usort($rows, static function ($a, $b) {
+            return $b['answered'] <=> $a['answered'];
+        });
+        $rows = array_slice($rows, 0, 20);
         echo json_encode(['rows'=>$rows]);
     } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
     exit;
@@ -709,7 +695,8 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 $uname_ext[strtolower($um['username'])] = $um['extension'];
         } catch (Exception $ignore) {}
 
-        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND (leg IS NULL OR LOWER(TRIM(leg::text)) <> 'b')";
+        $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND " . skykin_cdr_reportable_sql()
+            . " AND (leg IS NULL OR LOWER(TRIM(leg::text)) <> 'b')";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q OR caller_destination LIKE :q OR last_arg LIKE :q)"; $params[':q']='%'.$search.'%'; }
         $s = $db->prepare("SELECT start_epoch,
@@ -720,7 +707,7 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
         try {
             $s->execute($params);
         } catch (Exception $legErr) {
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
+            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND " . skykin_cdr_reportable_sql();
             $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
             if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
             $s = $db->prepare("SELECT start_epoch,
@@ -846,7 +833,8 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 'destination'=>$dest,'agent'=>$agent !== '' ? $agent : '—',
                 'direction'=>$dir,
                 'duration'=>floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
-                'status'=>$b>0?'Answered':'Missed','cause'=>$r['hangup_cause']??''];
+                'status'=>skykin_cdr_result_label(['billsec'=>$b,'direction'=>$dir,'duration'=>$r['duration']??0,'hangup_cause'=>$r['hangup_cause']??'']),
+                'cause'=>$r['hangup_cause']??''];
         }
         echo json_encode(['rows'=>$rows]);
     } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
@@ -1119,6 +1107,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .badge-in{background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-out{background:#f3e5f5;color:#6a1b9a;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-answered{background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
+.badge-failed{background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-missed{background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .rank-medal{font-size:16px}
 
@@ -2139,7 +2128,7 @@ function fetchCallHistory(){
                 <td>${r.agent||'—'}</td>
                 <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction||'—'}</span></td>
                 <td>${r.duration}</td>
-                <td><span class="badge-${r.status==='Answered'?'answered':'missed'}">${r.status}</span></td>
+                <td><span class="badge-${r.status==='Answered'?'answered':r.status==='Failed'?'failed':'missed'}">${r.status}</span></td>
                 <td style="font-size:11px;color:#888">${r.cause}</td>
             </tr>`).join('');
         });
@@ -2585,6 +2574,8 @@ function declineCall() {
 function makeCall(number) {
     number = number || document.getElementById('dialInput').value.trim() || dpNumber;
     if (!number) return;
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
+    document.getElementById('dialInput').value = number;
     lastDialedNumber = number;
     fetch('/app/agent_dashboard/crm.php?api=lookup&phone=' + encodeURIComponent(number), { credentials: 'same-origin' })
         .then(function(r) { return r.json(); })
@@ -2904,6 +2895,7 @@ window.ensureMic = function() {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
     if (!uri) return;
     if (session) { try { session.dispose && session.dispose(); } catch(e) {} session = null; }

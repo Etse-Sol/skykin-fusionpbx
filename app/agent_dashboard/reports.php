@@ -58,18 +58,19 @@ if (isset($_GET['api'])) {
         $db = getDB();
         $repSql = skykin_cdr_reportable_sql();
         $missSql = skykin_cdr_missed_sql();
+        $ansSql = skykin_cdr_answered_sql();
 
         // ── Daily call volume ──────────────────────────────────────────────
         if ($api === 'daily_volume') {
             $s = $db->prepare("SELECT
                 to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as day,
                 SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
+                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
                 SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound'  THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local'    THEN 1 ELSE 0 END) as local,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur
+                SUM(CASE WHEN direction='inbound'  AND {$repSql} THEN 1 ELSE 0 END) as inbound,
+                SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
+                SUM(CASE WHEN direction='local'    AND {$repSql} THEN 1 ELSE 0 END) as local,
+                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_dur
                 FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
                 GROUP BY day ORDER BY day");
             $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
@@ -101,35 +102,24 @@ if (isset($_GET['api'])) {
             $exts = $s->fetchAll(PDO::FETCH_ASSOC);
             $rows = [];
             foreach ($exts as $ex) {
-                $ext = $ex['extension'];
-                $s2 = $db->prepare("SELECT
-                    SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                    SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                    SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
-                    COALESCE(SUM(billsec),0) as total_talk,
-                    ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
-                    SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
-                    SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
-                    SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local
-                    FROM v_xml_cdr WHERE domain_name=:d
-                    AND (caller_id_number=:e OR destination_number=:e)
-                    AND start_epoch>=:ts AND start_epoch<=:te");
-                $s2->execute([':d'=>$dom,':e'=>$ext,':ts'=>$ts,':te'=>$te]);
-                $r = $s2->fetch(PDO::FETCH_ASSOC);
-                $answered = (int)($r['answered'] ?? 0);
-                $total    = (int)($r['total']    ?? 0);
+                $st = skykin_cdr_agent_stats($db, $dom, (string)$ex['extension'], $ts, $te);
+                $answered = (int)($st['answered'] ?? 0);
+                $total    = (int)($st['total'] ?? 0);
+                if ($total < 1 && $answered < 1) {
+                    continue;
+                }
                 $rows[] = [
-                    'ext'        => $ext,
+                    'ext'        => $ex['extension'],
                     'name'       => $ex['name'],
                     'total'      => $total,
                     'answered'   => $answered,
-                    'missed'     => (int)($r['missed']     ?? 0),
-                    'inbound'    => (int)($r['inbound']    ?? 0),
-                    'outbound'   => (int)($r['outbound']   ?? 0),
-                    'local'      => (int)($r['local']      ?? 0),
-                    'total_talk' => (int)($r['total_talk'] ?? 0),
-                    'avg_dur'    => (int)($r['avg_dur']    ?? 0),
-                    'answer_rate'=> $total > 0 ? round($answered/$total*100,1) : 0,
+                    'missed'     => (int)($st['missed'] ?? 0),
+                    'inbound'    => 0,
+                    'outbound'   => 0,
+                    'local'      => 0,
+                    'total_talk' => (int)($st['total_talk'] ?? 0),
+                    'avg_dur'    => (int)($st['avg_dur'] ?? 0),
+                    'answer_rate'=> $total > 0 ? round($answered / $total * 100, 1) : 0,
                 ];
             }
             // Sort by total calls desc
@@ -142,13 +132,13 @@ if (isset($_GET['api'])) {
         if ($api === 'summary') {
             $s = $db->prepare("SELECT
                 SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
+                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
                 SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
                 SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
                 SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
                 SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local,
                 COALESCE(SUM(billsec),0) as total_talk,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
+                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
                 ROUND(100.0 * SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END)
                     / NULLIF(SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END), 0), 1) as abandon_rate
                 FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
@@ -162,7 +152,7 @@ if (isset($_GET['api'])) {
             $s = $db->prepare("SELECT
                 EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
                 SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
+                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
                 SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed
                 FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
                 GROUP BY hour ORDER BY hour");
@@ -177,7 +167,7 @@ if (isset($_GET['api'])) {
             $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND {$repSql}";
             $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
             if ($type === 'answered') {
-                $where .= " AND billsec>0";
+                $where .= " AND {$ansSql}";
             } elseif ($type === 'missed') {
                 $where .= " AND {$missSql}";
             } elseif (in_array($type, ['inbound','outbound','local'], true)) {
@@ -188,7 +178,7 @@ if (isset($_GET['api'])) {
                 to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
                 caller_id_name, caller_id_number, destination_number,
                 direction, duration, billsec, hangup_cause,
-                CASE WHEN billsec>0 THEN 'answered' ELSE 'missed' END as result
+                " . skykin_cdr_result_sql(true) . " as result
                 FROM v_xml_cdr WHERE {$where}
                 ORDER BY start_epoch DESC LIMIT 500");
             $s->execute($params);
@@ -201,8 +191,8 @@ if (isset($_GET['api'])) {
             $s = $db->prepare("SELECT
                 destination_number as queue_num,
                 SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur
+                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
+                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_dur
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND start_epoch>=:ts AND start_epoch<=:te
                 AND (destination_number ~ '^[89][0-9]{3}$' OR destination_number LIKE '800%')
@@ -223,13 +213,13 @@ if (isset($_GET['api'])) {
             $type = $_GET['type'] ?? 'all';
             $summaryStmt = $db->prepare("SELECT
                 SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
+                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
                 SUM(CASE WHEN {$missSql} THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local,
-                COALESCE(SUM(billsec),0) as total_talk,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_talk
+                SUM(CASE WHEN direction='inbound' AND {$repSql} THEN 1 ELSE 0 END) as inbound,
+                SUM(CASE WHEN direction='outbound' AND {$repSql} THEN 1 ELSE 0 END) as outbound,
+                SUM(CASE WHEN direction='local' AND {$repSql} THEN 1 ELSE 0 END) as local,
+                COALESCE(SUM(CASE WHEN {$ansSql} THEN billsec ELSE 0 END),0) as total_talk,
+                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_talk
                 FROM v_xml_cdr
                 WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
             $summaryStmt->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
@@ -238,7 +228,7 @@ if (isset($_GET['api'])) {
             $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND {$repSql}";
             $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
             if ($type === 'answered') {
-                $where .= " AND billsec>0";
+                $where .= " AND {$ansSql}";
             } elseif ($type === 'missed') {
                 $where .= " AND {$missSql}";
             } elseif (in_array($type, ['inbound','outbound','local'], true)) {
@@ -250,7 +240,7 @@ if (isset($_GET['api'])) {
                 to_char(to_timestamp(start_epoch),'HH24:MI:SS') as call_time,
                 caller_id_name, caller_id_number, destination_number,
                 direction,
-                CASE WHEN billsec>0 THEN 'Answered' ELSE 'Missed' END as result,
+                " . skykin_cdr_result_sql(false) . " as result,
                 duration, billsec, hangup_cause, record_name
                 FROM v_xml_cdr WHERE {$where}
                 ORDER BY start_epoch DESC LIMIT 5000");
@@ -525,6 +515,8 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .result-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700}
 .result-badge.answered{background:#dcfce7;color:#15803d}
 .result-badge.missed{background:#fee2e2;color:#b91c1c}
+.result-badge.failed{background:#ffedd5;color:#c2410c}
+.result-badge.failed,.result-badge.missed,.result-badge.answered{text-transform:capitalize}
 
 body.embed-mode{background:#f0f2f5}
 body.embed-mode .topbar{display:none}
@@ -634,6 +626,7 @@ body.embed-mode .page{padding-top:12px}
       <button class="detail-tab active" data-type="all" onclick="loadDetails('all')">All</button>
       <button class="detail-tab" data-type="answered" onclick="loadDetails('answered')">Answered</button>
       <button class="detail-tab" data-type="missed" onclick="loadDetails('missed')">Missed</button>
+      <button class="detail-tab" data-type="failed" onclick="loadDetails('failed')">Failed</button>
       <button class="detail-tab" data-type="inbound" onclick="loadDetails('inbound')">Inbound</button>
       <button class="detail-tab" data-type="outbound" onclick="loadDetails('outbound')">Outbound</button>
       <button class="detail-tab" data-type="local" onclick="loadDetails('local')">Local</button>

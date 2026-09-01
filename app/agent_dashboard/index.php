@@ -170,7 +170,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                     'type'       => $in ? 'Inbound' : 'Outbound',
                     'number'     => $clean_num,
                     'duration'   => floor($bill/60).':'.str_pad($bill%60,2,'0',STR_PAD_LEFT),
-                    'status'     => $bill>0 ? 'Answered' : 'Missed',
+                    'status'     => skykin_cdr_result_label(['billsec'=>$bill,'direction'=>$r['direction']??'','duration'=>$r['duration']??0,'hangup_cause'=>$r['hangup_cause']??'']),
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
                 ];
             }
@@ -2043,6 +2043,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .badge-in       { background: #d4edda; color: #28a745; }
 .badge-out      { background: #d1ecf1; color: #00B4D8; }
 .badge-missed   { background: #f8d7da; color: #dc3545; }
+.badge-failed   { background: #fff3cd; color: #856404; }
 .badge-transfer { background: #e2d9f3; color: #6f42c1; }
 
 /* ?? Live dot ?? */
@@ -4042,6 +4043,7 @@ function renderCallPage(page) {
                             c.type==='Outbound' ? 'badge-out' :
                             c.type==='Transfer' ? 'badge-transfer' : 'badge-missed';
         const statusBadge = c.status==='Missed'      ? 'badge-missed' :
+                            c.status==='Failed'      ? 'badge-failed' :
                             c.status==='Transferred' ? 'badge-transfer' : 'badge-in';
         html += `<tr>
             <td>${c.time}</td>
@@ -4519,6 +4521,8 @@ function declineCall() {
 function makeCall(number) {
     number = number || document.getElementById('dialInput').value.trim();
     if (!number) return;
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
+    document.getElementById('dialInput').value = number;
     lastDialedNumber = number;
     lastCallType = 'Outbound';
     fetchCrmContact(number);
@@ -6085,6 +6089,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
     if (!uri) return;
 
