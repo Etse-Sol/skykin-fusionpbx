@@ -65,16 +65,38 @@ local function registered(ext)
   return r:find("sip:", 1, true) ~= nil
 end
 
-local function on_a_call(ext)
-  local chans = api:execute("show", "channels") or ""
-  return chans:find("user/" .. ext .. "@" .. domain, 1, true) ~= nil
-      or chans:find("/" .. ext .. "@" .. domain, 1, true) ~= nil
-end
-
 local function cols(line)
   local c = {}
   for x in (line .. "|"):gmatch("(.-)|") do c[#c + 1] = x end
   return c
+end
+
+local function on_a_call(ext)
+  local chans = api:execute("show", "channels like user/" .. ext .. "@" .. domain) or ""
+  if chans:find("total", 1, true) then
+    local total = tonumber(chans:match("(%d+) total")) or 0
+    return total > 0
+  end
+  return chans:find("user/" .. ext .. "@" .. domain, 1, true) ~= nil
+end
+
+local function agent_uuid_for(ext)
+  local out = api:execute("callcenter_config", "queue list agents " .. queue) or ""
+  for line in out:gmatch("[^\r\n]+") do
+    if line:find("|", 1, true) and line:sub(1, 5) ~= "name|" then
+      local c = cols(line)
+      local e = (c[5] or ""):match("user/([^@]+)")
+      if e == ext then return c[1] or "" end
+    end
+  end
+  return ""
+end
+
+local function release_agent(ext)
+  local uuid = agent_uuid_for(ext)
+  if uuid ~= "" then
+    api:execute("callcenter_config", "agent set state " .. uuid .. " Waiting")
+  end
 end
 
 -- Smaller ready_time epoch = idle longer. Do not reset ready_time in cc_prune.
@@ -107,6 +129,8 @@ local function ready_ext(skip)
   if best then
     freeswitch.consoleLog("NOTICE", "skykin inbound pick " .. best .. "@" .. domain
       .. " ready_epoch=" .. tostring(best_idle) .. "\n")
+  else
+    freeswitch.consoleLog("NOTICE", "skykin inbound no ready agent for " .. queue .. "\n")
   end
   return best
 end
@@ -152,9 +176,11 @@ while session:ready() do
     if sip == "603" or sip == "480" or cause:find("CALL_REJECTED", 1, true)
         or cause:find("ORIGINATOR_CANCEL", 1, true) then
       freeswitch.consoleLog("NOTICE", "skykin inbound decline drop dest=" .. dest .. "\n")
+      release_agent(dest)
       session:hangup("NORMAL_CLEARING")
       return
     end
+    release_agent(dest)
     skip[dest] = true
     session:sleep(200)
   end
