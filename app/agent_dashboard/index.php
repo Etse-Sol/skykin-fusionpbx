@@ -124,7 +124,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
             }
 
             // Recent calls
-            $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
+            $s2 = $db->prepare("SELECT " . skykin_cdr_time_sql('HH24:MI') . " as call_time,
                 direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause,start_epoch
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND {$agent_sql}
@@ -449,7 +449,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
                 $params[':ext'] = $ext;
             }
             $s = $db->prepare(
-                "SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as datetime,
+                "SELECT " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as datetime,
                         caller_id_number, destination_number, direction, billsec,
                         record_path, record_name
                  FROM v_xml_cdr WHERE {$where}

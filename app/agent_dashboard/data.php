@@ -169,7 +169,7 @@ try {
         // Recent calls
         $recent_stmt = $db->prepare("
             SELECT 
-                to_char(to_timestamp(start_epoch), 'HH24:MI') as call_time,
+                " . skykin_cdr_time_sql('HH24:MI') . " as call_time,
                 direction,
                 caller_id_number,
                 destination_number,

@@ -91,7 +91,7 @@ if (isset($_GET['api'])) {
                 $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
                 $timeExpr = $isSQLite
                     ? "datetime(start_epoch, 'unixepoch', 'localtime')"
-                    : "to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI')";
+                    : skykin_cdr_time_sql('YYYY-MM-DD HH24:MI');
                 $s2 = $db->prepare("SELECT
                     {$timeExpr} as call_time,
                     direction, billsec, destination_number, hangup_cause

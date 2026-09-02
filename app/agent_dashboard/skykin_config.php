@@ -303,7 +303,32 @@ function skykin_timezone(): string {
 	}
 
 	$tz = date_default_timezone_get() ?: 'UTC';
+	if (strcasecmp($tz, 'UTC') === 0 || strcasecmp($tz, 'Etc/UTC') === 0) {
+		$tz = 'Africa/Addis_Ababa';
+	}
 	return $tz;
+}
+
+/** Postgres-safe IANA zone name for SQL fragments. */
+function skykin_sql_tz(): string {
+	return str_replace("'", "''", skykin_timezone());
+}
+
+/** Local wall-clock instant from a Unix epoch column (v_xml_cdr.start_epoch). */
+function skykin_cdr_local_ts_sql(string $epoch_col = 'start_epoch'): string {
+	$tz = skykin_sql_tz();
+	return "(to_timestamp({$epoch_col}) AT TIME ZONE 'UTC') AT TIME ZONE '{$tz}'";
+}
+
+/** Format a CDR epoch in the dashboard timezone. */
+function skykin_cdr_time_sql(string $pg_format, string $epoch_col = 'start_epoch'): string {
+	return 'to_char(' . skykin_cdr_local_ts_sql($epoch_col) . ", '{$pg_format}')";
+}
+
+/** Format a timestamptz column in the dashboard timezone. */
+function skykin_db_time_sql(string $pg_format, string $ts_col): string {
+	$tz = skykin_sql_tz();
+	return "to_char(timezone('{$tz}', {$ts_col}), '{$pg_format}')";
 }
 
 /**
@@ -505,12 +530,13 @@ function skykin_cdr_fetch_period(
 	$where = 'domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te' . $extraAnd;
 	$p = array_merge([':d' => $domain, ':ts' => $ts, ':te' => $te], $params);
 	$lim = $limit !== null ? ' LIMIT ' . (int)$limit : '';
+	$local_ts = skykin_cdr_local_ts_sql();
 	$s = $db->prepare(
 		"SELECT start_epoch,
-			to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
-			to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as call_day,
-			EXTRACT(DOW FROM to_timestamp(start_epoch))::int as dow,
-			EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
+			" . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
+			" . skykin_cdr_time_sql('YYYY-MM-DD') . " as call_day,
+			EXTRACT(DOW FROM {$local_ts})::int as dow,
+			EXTRACT(HOUR FROM {$local_ts})::int as hour,
 			caller_id_name, caller_id_number, destination_number, caller_destination,
 			direction, billsec, duration, hangup_cause, last_arg, cc_agent, cc_agent_bridged,
 			record_name, record_path

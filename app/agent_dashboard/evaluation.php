@@ -71,7 +71,7 @@ if (isset($_GET['api'])) {
             if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
             $s = $db->prepare("SELECT
                 xml_cdr_uuid as cdr_uuid,
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+                " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
                 caller_id_number, caller_id_name, destination_number,
                 direction, billsec, hangup_cause, record_name, record_path
                 FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 200");

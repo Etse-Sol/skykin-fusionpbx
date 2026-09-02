@@ -483,7 +483,7 @@ if (isset($_GET['action']) && $_GET['action']==='acw_all') {
             call_type VARCHAR(20), duration INTEGER, disposition VARCHAR(100),
             call_reason VARCHAR(200), notes TEXT, recording_filename VARCHAR(255),
             created_at TIMESTAMP DEFAULT NOW())");
-        $s = $db->prepare("SELECT to_char(created_at,'YYYY-MM-DD HH24:MI') as created_at,
+        $s = $db->prepare("SELECT " . skykin_db_time_sql('YYYY-MM-DD HH24:MI', 'created_at') . " as created_at,
             agent_id,caller_id,call_type,duration,disposition,call_reason,notes
             FROM skykin_acw WHERE DATE(created_at)>=:f AND DATE(created_at)<=:t
             ORDER BY created_at DESC LIMIT 200");
@@ -593,7 +593,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'leave_requests') {
         $db = getDB();
         ensureLeaveRequestsTable($db);
         $s = $db->prepare("SELECT id, agent_ext, agent_name, request_type, reason, status,
-            to_char(requested_at, 'YYYY-MM-DD HH24:MI') as requested_at
+            " . skykin_db_time_sql('YYYY-MM-DD HH24:MI', 'requested_at') . " as requested_at
             FROM skykin_leave_requests
             WHERE domain = :d AND status = 'pending'
             ORDER BY requested_at ASC");
@@ -688,7 +688,7 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q OR caller_destination LIKE :q OR last_arg LIKE :q)"; $params[':q']='%'.$search.'%'; }
         $s = $db->prepare("SELECT start_epoch,
-            to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+            " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
             caller_id_number, destination_number, caller_destination, direction, billsec, duration,
             hangup_cause, last_arg, cc_agent, cc_agent_bridged
             FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 1500");
@@ -830,7 +830,7 @@ if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
         $where  = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND (record_path IS NOT NULL OR record_name IS NOT NULL)";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
-        $s = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+        $s = $db->prepare("SELECT " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
             caller_id_number, destination_number, direction, billsec,
             record_path, record_name, hangup_cause
             FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 300");
@@ -877,7 +877,7 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
     try {
         $db = getDB();
         $s = $db->prepare("SELECT
-            to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+            " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
             caller_id_number, destination_number, direction, billsec, duration,
             hangup_cause
             FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
