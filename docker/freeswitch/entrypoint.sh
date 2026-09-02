@@ -14,6 +14,8 @@ FS_DIRECTORY_USERS="${FS_DIRECTORY_USERS:-}"
 FS_QUEUE_EXT="${FS_QUEUE_EXT:-8000}"
 FS_QUEUE_STRATEGY="${FS_QUEUE_STRATEGY:-longest-idle-agent}"
 FS_QUEUE_AGENTS="${FS_QUEUE_AGENTS:-}"
+# Extra domains (comma-separated) that get queue 8000@domain for waiting / longest-idle.
+FS_QUEUE_DOMAINS="${FS_QUEUE_DOMAINS:-}"
 # Overrides the vanilla SIP password for the unused 1000-1019 users. Left empty a
 # random one is generated; it must not stay 1234 or the stock dialplan sleeps 10s
 # on every call. See the vars.xml handling below.
@@ -45,6 +47,9 @@ FS_OUTBOUND_PROXY="${FS_OUTBOUND_PROXY:-}"
 FS_OUTBOUND_USERNAME="${FS_OUTBOUND_USERNAME:-}"
 FS_OUTBOUND_PASSWORD="${FS_OUTBOUND_PASSWORD:-}"
 FS_OUTBOUND_CID="${FS_OUTBOUND_CID:-${FS_OUTBOUND_USERNAME}}"
+# Second Ethio identity (DID 756). Agents prefix the number with 756 to use it.
+FS_OUTBOUND_GATEWAY2="${FS_OUTBOUND_GATEWAY2:-SIP2}"
+FS_OUTBOUND_CID2="${FS_OUTBOUND_CID2:-+251111138756}"
 # true only if the carrier requires REGISTER; IP trunks must stay false.
 FS_OUTBOUND_REGISTER="${FS_OUTBOUND_REGISTER:-false}"
 # IMS / digest extras. Leave empty for a plain IP trunk (proxy-only).
@@ -72,7 +77,8 @@ mkdir -p \
   /var/lib/freeswitch/recordings \
   /var/log/freeswitch \
   /var/run/freeswitch \
-  /usr/share/freeswitch/scripts
+  /usr/share/freeswitch/scripts \
+  /etc/freeswitch/scripts
 
 # Default ESL ACL is loopback.auto (blocks Docker bridge peers).
 # rfc1918.auto allows Docker nets but NOT 127.0.0.1 (breaks fs_cli/healthcheck).
@@ -152,6 +158,14 @@ if [ -f "$INTERNAL" ]; then
       sed -i 's#</settings>#  <param name="local-network-acl" value="none"/>\n  </settings>#' "$INTERNAL" || true
     fi
   fi
+  # Vanilla sofia forces every REGISTER onto $${domain} (FS_DOMAIN). That makes
+  # 101@client1.skykin.local work, but a second FusionPBX domain (e.g. ahununu)
+  # is rewritten to 201@client1.skykin.local and never finds the user.
+  for p in force-register-domain force-register-db-domain force-subscription-domain; do
+    if grep -q "name=\"$p\"" "$INTERNAL"; then
+      sed -i "s#<param name=\"${p}\" value=\"[^\"]*\"/>#<param name=\"${p}\" value=\"\"/>#" "$INTERNAL" || true
+    fi
+  done
 fi
 
 VARS=/etc/freeswitch/vars.xml
@@ -286,7 +300,9 @@ CFGEOF
     # "attempt to concatenate a nil value (global 'scripts_dir')".
     # Same delete-then-insert approach as above to stay idempotent.
     sed -i '/name="xml-handler-script"/d;/name="xml-handler-bindings"/d' "$LUACONF" || true
-    sed -i 's#</settings>#    <param name="xml-handler-script" value="app.lua xml_handler"/>\n    <param name="xml-handler-bindings" value="directory"/>\n  </settings>#' "$LUACONF" || true
+    sed -i 's#</settings>#    <param name="xml-handler-script" value="app.lua xml_handler"/>\n    <param name="xml-handler-bindings" value="directory dialplan"/>\n  </settings>#' "$LUACONF" || true
+    sed -i '/skykin_cc_watch/d;/skykin_bl_hash/d' "$LUACONF" || true
+    sed -i 's#</settings>#    <param name="startup-script" value="/etc/freeswitch/scripts/skykin_cc_watch.lua"/>\n    <param name="startup-script" value="/etc/freeswitch/scripts/skykin_bl_hash.lua"/>\n  </settings>#' "$LUACONF" || true
     echo "  FusionPBX directory handler enabled (db ${FUSIONPBX_DB_HOST}/${FUSIONPBX_DB_NAME})"
   fi
 else
@@ -338,6 +354,9 @@ if [ -f "$MODULES" ]; then
       sed -i "s#</modules>#    <load module=\"${m}\"/>\n  </modules>#" "$MODULES" || true
     fi
   done
+  # Unused here. The image has no ca-certificates.crt, so a loaded
+  # mod_signalwire logs Curl Result 77 every ~15 minutes.
+  sed -i '/mod_signalwire/s#^[[:space:]]*<load module="mod_signalwire"/>#    <!-- <load module="mod_signalwire"/> -->#' "$MODULES" || true
 fi
 
 # Point mod_xml_cdr at the FusionPBX importer. The importer requires HTTP basic
@@ -389,6 +408,22 @@ if [ -n "$FS_DOMAIN" ]; then
     echo '      <param name="discard-abandoned-after" value="60"/>'
     echo '      <param name="abandoned-resume-allowed" value="false"/>'
     echo '    </queue>'
+    echo "${FS_QUEUE_DOMAINS:-}" | tr ',' '\n' | while IFS= read -r extra; do
+      extra=$(echo "$extra" | tr -d ' ')
+      [ -n "$extra" ] || continue
+      [ "$extra" = "$FS_DOMAIN" ] && continue
+      printf '    <queue name="%s@%s">\n' "$FS_QUEUE_EXT" "$extra"
+      printf '      <param name="strategy" value="%s"/>\n' "$FS_QUEUE_STRATEGY"
+      echo '      <param name="moh-sound" value=""/>'
+      echo '      <param name="time-base-score" value="system"/>'
+      echo '      <param name="max-wait-time" value="0"/>'
+      echo '      <param name="max-wait-time-with-no-agent" value="0"/>'
+      echo '      <param name="max-wait-time-with-no-agent-time-reached" value="5"/>'
+      echo '      <param name="tier-rules-apply" value="false"/>'
+      echo '      <param name="discard-abandoned-after" value="60"/>'
+      echo '      <param name="abandoned-resume-allowed" value="false"/>'
+      echo '    </queue>'
+    done
     echo '  </queues>'
     # Each agent entry is "name:ext". "name" is normally the FusionPBX
     # call_center_agent_uuid (the dashboard sets status by that name); "ext" is
@@ -401,8 +436,8 @@ if [ -n "$FS_DOMAIN" ]; then
       aext="${ag#*:}"
       [ -n "$aext" ] || aext="$aname"
       [ "$aname" != "$ag" ] || aname="$aext"
-      printf '    <agent name="%s" type="callback" contact="[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=%s,include_external_ip=true]user/%s@%s" status="Available" max-no-answer="999" wrap-up-time="10" reject-delay-time="10" busy-delay-time="60"/>\n' \
-        "$aname" "${EXTERNAL_RTP_IP:-196.189.236.140}" "$aext" "$FS_DOMAIN"
+      printf '    <agent name="%s" type="callback" contact="{ignore_early_media=true,bridge_early_media=false,originate_timeout=45}[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=%s,include_external_ip=true]user/%s@%s" status="Available" max-no-answer="999" wrap-up-time="10" reject-delay-time="10" busy-delay-time="60"/>\n' \
+        "$aname" "${EXTERNAL_RTP_IP:-196.189.236.126}" "$aext" "$FS_DOMAIN"
     done
     echo '  </agents>'
     echo '  <tiers>'
@@ -460,6 +495,17 @@ if [ -n "$FS_OUTBOUND_PROXY" ] && [ -n "$FS_OUTBOUND_GATEWAY" ]; then
     else
       sed -i 's#</settings>#    <param name="enable-100rel" value="true"/>\n  </settings>#' "$EXT_PROF" || true
     fi
+    # Carrier (Ethio IMS) is on the LAN. Advertising the public NAT IP in
+    # Contact/Via makes REGISTER FAIL_WAIT: the IMS replies to the WAN IP,
+    # which is not this VM. Pin sip-ip/rtp-ip and ext-* to the host NIC.
+    # Internal/WebRTC keeps $${external_sip_ip} for browsers.
+    if [ -n "$FS_LAN_RTP_IP" ]; then
+      sed -i "s#name=\"sip-ip\" value=\"[^\"]*\"#name=\"sip-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      sed -i "s#name=\"rtp-ip\" value=\"[^\"]*\"#name=\"rtp-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      sed -i "s#name=\"ext-sip-ip\" value=\"[^\"]*\"#name=\"ext-sip-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      sed -i "s#name=\"ext-rtp-ip\" value=\"[^\"]*\"#name=\"ext-rtp-ip\" value=\"${FS_LAN_RTP_IP}\"#" "$EXT_PROF" || true
+      echo "  External profile Contact/RTP advertised as ${FS_LAN_RTP_IP}"
+    fi
   fi
   if [ -n "$FS_OUTBOUND_REALM" ] && [ -n "$FS_OUTBOUND_PROXY" ]; then
     if ! grep -q "[[:space:]]${FS_OUTBOUND_REALM}$" /etc/hosts 2>/dev/null; then
@@ -477,8 +523,18 @@ if [ -n "$FS_DOMAIN" ]; then
   # channel-variable counterpart to local-network-acl=none on the profile.
   RTP_ADV=""
   if [ -n "$EXTERNAL_RTP_IP" ]; then
+    # Plain export (not nolocal:). Agent-to-agent WebRTC needs the public NAT
+    # IP in SDP. The Ethio b-leg overrides this in the sofia/gateway {} string
+    # with FS_LAN_RTP_IP. nolocal: stripped the public IP from callee WebRTC
+    # and made agent-to-agent silent.
     RTP_ADV="      <action application=\"export\" data=\"rtp_advertise_ip=${EXTERNAL_RTP_IP}\"/>
       <action application=\"export\" data=\"include_external_ip=true\"/>"
+  fi
+  # Local/queue bridges to user/<ext> must enable DTLS (media_webrtc) or
+  # Chrome answers with "SDP without DTLS fingerprint" and the call dies.
+  USER_BRIDGE="{rtp_secure_media=optional,media_webrtc=true}"
+  if [ -n "$EXTERNAL_RTP_IP" ]; then
+    USER_BRIDGE="{rtp_secure_media=optional,media_webrtc=true,rtp_advertise_ip=${EXTERNAL_RTP_IP},include_external_ip=true}"
   fi
   # The dashboards look recordings up through the CDR, so the call record has to
   # carry domain_name plus record_path/record_name. Use the FusionPBX archive
@@ -515,7 +571,7 @@ ${RTP_ADV}
       <action application="set" data="record_stereo=true"/>
 ${CDR_VARS}
       <action application="record_session" data="\${record_path}/\${record_name}"/>
-      <action application="bridge" data="{rtp_secure_media=optional}user/\$1@${FS_DOMAIN}"/>
+      <action application="bridge" data="${USER_BRIDGE}user/\$1@${FS_DOMAIN}"/>
     </condition>
   </extension>
 
@@ -533,32 +589,79 @@ DPEOF
   # dialling is never stolen. Ethiopian mobiles dialled as 09xxxxxxxx are
   # rewritten to +2519xxxxxxxx; bare/E.164 251… forms are accepted as-is.
   if [ -n "$FS_OUTBOUND_GATEWAY" ]; then
-    # Answer the WebRTC a-leg first so DTLS is up before the mobile answers.
-    # Keep PCMA (AMR negotiated but the handset path was silent). Cut through
-    # early media so the carrier RTP SSRC does not restart on 200. No RTCP —
-    # Ethio's 183 does not mux it. Pin LAN RTP toward the carrier.
-    BLEG_RTP="origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU,rtcp_audio_interval_msec=-1,rtcp_mux=false,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,send_silence_when_idle=100,sip_session_expires=180,sip_force_session_timer=true"
+    # pre_answer (not answer): talk timer starts when the mobile answers.
+    # Do not uuid_media_reneg on this trunk — it drops the call immediately.
+    # Pin LAN RTP toward Ethio (SIP whitelist ≠ RTP/media ACL). Keep AMR in
+    # the list (PT 102); order matches the last working ecs-cc runtime.
+    # Carrier later asked SDP 8 0 101 (PCMA,PCMU,telephone-event) with AMR
+    # still offered — switch the string to ^^:PCMA:PCMU:AMR@8000h@20i if they
+    # require that order. No send_silence_when_idle (it blocked agent audio).
+    # Ethio SDP order 8 0 101, keep AMR (PT 102) but not first.
+    BLEG_RTP="origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,sip_session_expires=180,sip_force_session_timer=true"
     if [ -n "$FS_LAN_RTP_IP" ]; then
       BLEG_RTP="${BLEG_RTP},rtp_advertise_ip=${FS_LAN_RTP_IP},include_external_ip=false"
     fi
     if [ -n "$FS_OUTBOUND_CID" ]; then
       BLEG_RTP="${BLEG_RTP},origination_caller_id_number=${FS_OUTBOUND_CID},origination_caller_id_name=${FS_OUTBOUND_CID}"
     fi
+    BLEG_RTP2="${BLEG_RTP}"
+    if [ -n "$FS_OUTBOUND_CID2" ]; then
+      BLEG_RTP2="$(printf '%s' "$BLEG_RTP" | sed "s/origination_caller_id_number=[^,]*/origination_caller_id_number=${FS_OUTBOUND_CID2}/;s/origination_caller_id_name=[^,]*/origination_caller_id_name=${FS_OUTBOUND_CID2}/")"
+      if ! printf '%s' "$BLEG_RTP2" | grep -q origination_caller_id_number; then
+        BLEG_RTP2="${BLEG_RTP2},origination_caller_id_number=${FS_OUTBOUND_CID2},origination_caller_id_name=${FS_OUTBOUND_CID2}"
+      fi
+    fi
+    # continue_on_fail=true through pre_answer/record so a recording-path miss
+    # does not kill the call before the mobile rings. Flip to false immediately
+    # before bridge so Decline/Busy hangs up the agent instead of retrying.
     OUT_PRE="${RTP_ADV}
       <action application=\"set\" data=\"hangup_after_bridge=true\"/>
+      <action application=\"set\" data=\"call_direction=outbound\"/>
+      <action application=\"export\" data=\"call_direction=outbound\"/>
       <action application=\"set\" data=\"continue_on_fail=true\"/>
       <action application=\"set\" data=\"call_timeout=60\"/>
       <action application=\"pre_answer\"/>
       <action application=\"set\" data=\"record_stereo=true\"/>
 ${CDR_VARS}
       <action application=\"record_session\" data=\"\${record_path}/\${record_name}\"/>
-      <action application=\"set\" data=\"bleg_uuid=\${create_uuid()}\"/>"
+      <action application=\"set\" data=\"bleg_uuid=\${create_uuid()}\"/>
+      <action application=\"set\" data=\"continue_on_fail=false\"/>"
+    OUT_HUP="      <action application=\"hangup\"/>"
     SKYKIN_EXTENSIONS="${SKYKIN_EXTENSIONS}
+
+  <extension name=\"skykin_outbound_et_normalize_mobile\">
+    <condition field=\"destination_number\" expression=\"^\\\\+?(?:00251|251)(9[0-9]{8})\$\">
+      <action application=\"transfer\" data=\"\$1 XML ${FS_DOMAIN}\"/>
+    </condition>
+  </extension>
+
+  <extension name=\"skykin_outbound_et_normalize_land\">
+    <condition field=\"destination_number\" expression=\"^\\\\+?(?:00251|251)([1-8][0-9]{8})\$\">
+      <action application=\"transfer\" data=\"0\$1 XML ${FS_DOMAIN}\"/>
+    </condition>
+  </extension>
+
+  <extension name=\"skykin_outbound_756_zero\">
+    <condition field=\"destination_number\" expression=\"^7560([0-9]{9})\$\">
+${OUT_PRE}
+      <action application=\"bridge\" data=\"{${BLEG_RTP2}}sofia/gateway/${FS_OUTBOUND_GATEWAY2}/+251\$1\"/>
+${OUT_HUP}
+    </condition>
+  </extension>
+
+  <extension name=\"skykin_outbound_756_nozero\">
+    <condition field=\"destination_number\" expression=\"^756(9[0-9]{8})\$\">
+${OUT_PRE}
+      <action application=\"bridge\" data=\"{${BLEG_RTP2}}sofia/gateway/${FS_OUTBOUND_GATEWAY2}/+251\$1\"/>
+${OUT_HUP}
+    </condition>
+  </extension>
 
   <extension name=\"skykin_outbound_et_zero\">
     <condition field=\"destination_number\" expression=\"^0([0-9]{9})\$\">
 ${OUT_PRE}
       <action application=\"bridge\" data=\"{${BLEG_RTP}}sofia/gateway/${FS_OUTBOUND_GATEWAY}/+251\$1\"/>
+${OUT_HUP}
     </condition>
   </extension>
 
@@ -566,13 +669,23 @@ ${OUT_PRE}
     <condition field=\"destination_number\" expression=\"^(9[0-9]{8})\$\">
 ${OUT_PRE}
       <action application=\"bridge\" data=\"{${BLEG_RTP}}sofia/gateway/${FS_OUTBOUND_GATEWAY}/+251\$1\"/>
+${OUT_HUP}
+    </condition>
+  </extension>
+
+  <extension name=\"skykin_outbound_et_land\">
+    <condition field=\"destination_number\" expression=\"^([1-8][0-9]{8})\$\">
+${OUT_PRE}
+      <action application=\"bridge\" data=\"{${BLEG_RTP}}sofia/gateway/${FS_OUTBOUND_GATEWAY}/+251\$1\"/>
+${OUT_HUP}
     </condition>
   </extension>
 
   <extension name=\"skykin_outbound_et_e164\">
-    <condition field=\"destination_number\" expression=\"^\\\\+?(251[0-9]{9})\$\">
+    <condition field=\"destination_number\" expression=\"^\\\\+?(?:00251|251)([0-9]{9})\$\">
 ${OUT_PRE}
-      <action application=\"bridge\" data=\"{${BLEG_RTP}}sofia/gateway/${FS_OUTBOUND_GATEWAY}/+\$1\"/>
+      <action application=\"bridge\" data=\"{${BLEG_RTP}}sofia/gateway/${FS_OUTBOUND_GATEWAY}/+251\$1\"/>
+${OUT_HUP}
     </condition>
   </extension>
 "
@@ -591,6 +704,225 @@ ${OUT_PRE}
     "$FS_DOMAIN" "$SKYKIN_EXTENSIONS" \
     > "/etc/freeswitch/dialplan/01_skykin_${FS_DOMAIN}.xml"
 
+  # Second FusionPBX domain (ahununu / 201-205). Inbound 035-039 (SIP8035-8039);
+  # agents still need a named context or every outbound is NO_ROUTE_DESTINATION.
+  AHUNUNU_CID758="${FS_OUTBOUND_CID758:-+251111138758}"
+  AHUNUNU_CID759="${FS_OUTBOUND_CID759:-+251111138759}"
+  AHUNUNU_GW="${FS_AHUNUNU_OUTBOUND_GATEWAY:-SIP8035}"
+  AHUNUNU_CID="${FS_AHUNUNU_OUTBOUND_CID:-+251116198035}"
+  AHUNUNU_LAN="${FS_LAN_RTP_IP:-10.0.0.77}"
+  AHUNUNU_EXTIP="${EXTERNAL_RTP_IP:-196.189.236.126}"
+  mkdir -p /var/lib/freeswitch/recordings/ahununu/archive
+  cat > /etc/freeswitch/dialplan/01_skykin_ahununu.xml <<AHUNUNUEOF
+<include>
+  <context name="ahununu">
+    <extension name="skykin_local_2xx">
+      <condition field="destination_number" expression="^(2[0-9]{2})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="export" data="include_external_ip=true"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="set" data="call_timeout=30"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="bridge" data="{rtp_secure_media=optional,media_webrtc=true,rtp_advertise_ip=${AHUNUNU_EXTIP},include_external_ip=true}user/\$1@ahununu"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_et_normalize_mobile">
+      <condition field="destination_number" expression="^\+?(?:00251|251)(9[0-9]{8})$">
+        <action application="transfer" data="$1 XML ahununu"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_et_normalize_land">
+      <condition field="destination_number" expression="^\+?(?:00251|251)([1-8][0-9]{8})$">
+        <action application="transfer" data="0$1 XML ahununu"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_758_zero">
+      <condition field="destination_number" expression="^7580([0-9]{9})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID758},origination_caller_id_name=${AHUNUNU_CID758}}sofia/gateway/SIP758/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_758_nozero">
+      <condition field="destination_number" expression="^758(9[0-9]{8})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID758},origination_caller_id_name=${AHUNUNU_CID758}}sofia/gateway/SIP758/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_759_zero">
+      <condition field="destination_number" expression="^7590([0-9]{9})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID759},origination_caller_id_name=${AHUNUNU_CID759}}sofia/gateway/SIP759/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_759_nozero">
+      <condition field="destination_number" expression="^759(9[0-9]{8})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID759},origination_caller_id_name=${AHUNUNU_CID759}}sofia/gateway/SIP759/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_et_zero">
+      <condition field="destination_number" expression="^0([0-9]{9})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_et_nozero">
+      <condition field="destination_number" expression="^(9[0-9]{8})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_et_land">
+      <condition field="destination_number" expression="^([1-8][0-9]{8})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_outbound_et_e164">
+      <condition field="destination_number" expression="^\+?(?:00251|251)([0-9]{9})\$">
+        <action application="export" data="rtp_advertise_ip=${AHUNUNU_EXTIP}"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="call_direction=outbound"/>
+        <action application="set" data="continue_on_fail=true"/>
+        <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
+        <action application="set" data="bleg_uuid=\${create_uuid()}"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_welcome_route">
+      <condition field="destination_number" expression="^8098$">
+        <action application="set" data="domain_name=ahununu"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="call_direction=inbound"/>
+        <action application="export" data="call_direction=inbound"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="ignore_early_media=true"/>
+        <action application="set" data="bridge_early_media=false"/>
+        <action application="set" data="instant_ringback=true"/>
+        <action application="ring_ready"/>
+        <action application="lua" data="/etc/freeswitch/scripts/skykin_welcome.lua"/>
+        <action application="transfer" data="8099 XML ahununu"/>
+      </condition>
+    </extension>
+    <extension name="skykin_agent_hunt">
+      <condition field="destination_number" expression="^8099$">
+        <action application="set" data="domain_name=ahununu"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="call_direction=inbound"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="set" data="ignore_early_media=true"/>
+        <action application="set" data="bridge_early_media=false"/>
+        <action application="set" data="originate_early_media=false"/>
+        <action application="set" data="instant_ringback=true"/>
+        <action application="lua" data="/etc/freeswitch/scripts/skykin_cc_prune.lua 8000@ahununu"/>
+        <action application="export" data="nolocal:execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua"/>
+        <action application="set" data="cc_export_vars=execute_on_hangup"/>
+        <action application="ring_ready"/>
+        <action application="lua" data="/etc/freeswitch/scripts/skykin_inbound.lua"/>
+      </condition>
+    </extension>
+  </context>
+</include>
+AHUNUNUEOF
+  echo "  Ahununu context: 2xx local, outbound ${AHUNUNU_GW} (035-039 SIP8035-8039; 758/759 prefix optional)"
+
   # A leftover webrtc_local that only matches 101|102 and uses a WSS-only
   # contact steals agent-to-agent calls before skykin_local_extension runs.
   # Overwrite every copy so any 1xx rings via user/<ext> (WSS or UDP).
@@ -603,7 +935,7 @@ ${OUT_PRE}
       <action application="set" data="call_timeout=30"/>
       <action application="set" data="rtp_secure_media=optional"/>
 ${RTP_ADV}
-      <action application="bridge" data="{rtp_secure_media=optional}user/\$1@${FS_DOMAIN}"/>
+      <action application="bridge" data="${USER_BRIDGE}user/\$1@${FS_DOMAIN}"/>
     </condition>
   </extension>
 </include>
@@ -617,34 +949,626 @@ WLEOF
   rm -f /etc/freeswitch/dialplan/default/00_ethio_mobile.xml
 fi
 
+# Ring available agents without answering Ethio. mod_callcenter pre-answers
+# the caller (183/SDP); that IMS treats 183 as answered so the mobile ring
+# stops. Direct bridge after 180 keeps the phone ringing until Answer.
+mkdir -p /etc/freeswitch/scripts
+cat > /etc/freeswitch/scripts/skykin_inbound_queue.lua << 'LUAEOF'
+-- Ring idle agents only. Never answer Ethio (180 only) until an agent answers.
+if not session then
+  return
+end
+
+local api = freeswitch.API()
+local domain = session:getVariable("domain_name") or "client1.skykin.local"
+local rtp_ip = session:getVariable("rtp_ext_ip") or "196.189.236.140"
+local uuid = session:getVariable("uuid") or ""
+
+session:execute("ring_ready")
+session:setVariable("ignore_early_media", "true")
+session:setVariable("bridge_early_media", "false")
+session:setVariable("hangup_after_bridge", "true")
+session:setVariable("continue_on_fail", "true")
+session:setVariable("originate_timeout", "45")
+session:setVariable("call_timeout", "45")
+session:setVariable("hangup_cause", "NO_ANSWER")
+
+local function split_pipe(line)
+  local cols = {}
+  local i = 0
+  for col in (line .. "|"):gmatch("([^|]*)|") do
+    i = i + 1
+    cols[i] = col
+  end
+  return cols
+end
+
+local function registered(ext)
+  local r = api:execute("sofia_contact", "*/" .. ext .. "@" .. domain) or ""
+  if r:find("error", 1, true) or r:find("user_not_registered", 1, true) then
+    return false
+  end
+  return r:find("sip:", 1, true) ~= nil or r:find("sofia/", 1, true) ~= nil
+end
+
+local function in_call(ext)
+  local raw = api:execute("show", "channels as json") or ""
+  if raw == "" or raw:sub(1, 4) == "-ERR" then
+    raw = api:execute("show", "channels") or ""
+  end
+  if uuid ~= "" then
+    raw = raw:gsub(uuid, "")
+  end
+  ext = tostring(ext)
+  if raw:find(ext .. "@" .. domain, 1, true) then return true end
+  if raw:find("/" .. ext .. "@", 1, true) then return true end
+  if raw:find('presence_id":"' .. ext .. "@", 1, true) then return true end
+  if raw:find('cid_num":"' .. ext .. '"', 1, true) then return true end
+  if raw:find('dest":"' .. ext .. '"', 1, true) then return true end
+  if raw:find("presence_id: " .. ext .. "@", 1, true) then return true end
+  return false
+end
+
+local function collect()
+  local raw = api:execute("callcenter_config", "agent list") or ""
+  local header_idx = nil
+  local dests = {}
+  local seen = {}
+  for line in raw:gmatch("[^\r\n]+") do
+    if line:sub(1, 3) ~= "+OK" and line ~= "" then
+      if not header_idx then
+        header_idx = {}
+        for i, name in ipairs(split_pipe(line)) do
+          header_idx[name] = i
+        end
+      else
+        local cols = split_pipe(line)
+        local status = cols[header_idx.status or 0] or ""
+        local contact = cols[header_idx.contact or 0] or ""
+        local ext = contact:match("user/(%d+)@")
+        if ext and not seen[ext] then
+          seen[ext] = true
+          if status ~= "Logged Out" and status ~= "On Break"
+              and registered(ext) and not in_call(ext) then
+            dests[#dests + 1] = ext
+          end
+        end
+      end
+    end
+  end
+  if #dests == 0 then
+    for _, ext in ipairs({"101", "102"}) do
+      if registered(ext) and not in_call(ext) then
+        dests[#dests + 1] = ext
+      end
+    end
+  end
+  return dests
+end
+
+local function bridge_to(exts)
+  local legs = {}
+  for _, ext in ipairs(exts) do
+    legs[#legs + 1] =
+      "{ignore_early_media=true,bridge_early_media=false,originate_timeout=45,fail_on_single_reject=false}" ..
+      "[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=" ..
+      rtp_ip .. ",include_external_ip=true]user/" .. ext .. "@" .. domain
+  end
+  local dest = table.concat(legs, ":_:")
+  freeswitch.consoleLog("NOTICE", "skykin_inbound_queue idle=" .. table.concat(exts, ",") .. " dest=" .. dest .. "\n")
+  session:execute("bridge", dest)
+end
+
+local tries = 0
+while session:ready() and tries < 40 do
+  tries = tries + 1
+  local exts = collect()
+  if #exts > 0 then
+    bridge_to(exts)
+    local ok, answered = pcall(function() return session:answered() end)
+    if ok and answered then
+      break
+    end
+    session:sleep(500)
+  else
+    session:sleep(2000)
+  end
+end
+LUAEOF
+
+cat > /etc/freeswitch/scripts/skykin_cc_prune.lua << 'PRUNEEOF'
+-- Before callcenter: skip unregistered agents; clear stale ready_time so
+-- the one registered agent rings instead of the call blocking on offline legs.
+if not session then
+  return
+end
+
+local api = freeswitch.API()
+local queue = argv[1]
+if not queue or queue == "" then
+  queue = "8000@" .. (session:getVariable("domain_name") or "ahununu")
+end
+local domain = queue:match("@(.+)$") or "ahununu"
+
+local function cols(line)
+  local c = {}
+  for x in (line .. "|"):gmatch("(.-)|") do
+    c[#c + 1] = x
+  end
+  return c
+end
+
+local function registered(ext)
+  local r = api:execute("sofia_contact", "*/" .. ext .. "@" .. domain) or ""
+  if r:find("error", 1, true) or r:find("user_not_registered", 1, true) then
+    return false
+  end
+  return r:find("sip:", 1, true) ~= nil
+end
+
+local out = api:execute("callcenter_config", "queue list agents " .. queue) or ""
+for line in out:gmatch("[^\r\n]+") do
+  if line:find("|", 1, true) and line:sub(1, 5) ~= "name|" then
+    local c = cols(line)
+    local uuid, contact, status = c[1] or "", c[5] or "", c[6] or ""
+    local ext = contact:match("user/([^@]+)")
+    if uuid ~= "" and ext then
+      if registered(ext) then
+        api:execute("callcenter_config", "agent set wrap_up_time " .. uuid .. " 0")
+        api:execute("callcenter_config", "agent set ready_time " .. uuid .. " 0")
+        if status == "Available" then
+          api:execute("callcenter_config", "agent set state " .. uuid .. " Waiting")
+        end
+        freeswitch.consoleLog("NOTICE", "skykin_cc_prune keep " .. ext .. "@" .. domain .. "\n")
+      else
+        api:execute("callcenter_config", "agent set status " .. uuid .. " Logged Out")
+        freeswitch.consoleLog("NOTICE", "skykin_cc_prune skip " .. ext .. " not registered\n")
+      end
+    end
+  end
+end
+PRUNEEOF
+
+cat > /etc/freeswitch/scripts/skykin_cc_watch.lua << 'WATCHEOF'
+-- Decline drops the customer call (BYE). Not Busy, not re-queue.
+local api = freeswitch.API()
+local con = freeswitch.EventConsumer("CUSTOM", "callcenter::info")
+freeswitch.consoleLog("NOTICE", "skykin cc watch started\n")
+
+local function skip_cause(cause)
+  cause = string.upper(cause or "")
+  return cause:find("NO_ANSWER", 1, true) or cause:find("NO ANSWER", 1, true)
+      or cause:find("ALLOTTED", 1, true)
+      or cause:find("USER_NOT_REGISTERED", 1, true)
+end
+
+local function drop_caller(id)
+  if not id or id == "" then return end
+  freeswitch.consoleLog("NOTICE", "skykin decline drop member=" .. id .. "\n")
+  api:execute("uuid_kill", id .. " NORMAL_CLEARING")
+end
+
+while true do
+  local e = con:pop(1)
+  if e then
+    local action = e:getHeader("CC-Action") or ""
+    local cause = e:getHeader("CC-Hangup-Cause") or e:getHeader("CC-Cause") or ""
+    if (action == "agent-fail" or action == "bridge-agent-fail") and not skip_cause(cause) then
+      freeswitch.consoleLog("NOTICE", "skykin cc " .. action .. " cause=" .. cause .. "\n")
+      drop_caller(e:getHeader("CC-Member-Session-UUID"))
+      local q = e:getHeader("CC-Queue") or ""
+      if q ~= "" then
+        local list = api:execute("callcenter_config", "queue list members " .. q) or ""
+        for line in list:gmatch("[^\r\n]+") do
+          if line:find("|", 1, true) and not line:find("session_uuid", 1, true) then
+            local cols = {}
+            for col in (line .. "|"):gmatch("(.-)|") do cols[#cols + 1] = col end
+            if cols[4] and cols[4] ~= "" then drop_caller(cols[4]) end
+          end
+        end
+      end
+    end
+  end
+end
+WATCHEOF
+
+cat > /etc/freeswitch/scripts/skykin_cc_drop.lua << 'DROPEOF'
+local api = freeswitch.API()
+local function var(name)
+  if not session then return "" end
+  local v = session:getVariable(name)
+  if v and v ~= "" and v ~= "_undef_" then return v end
+  return ""
+end
+local ok, answered = pcall(function() return session and session:answered() end)
+if ok and answered then return end
+local cause = string.upper(var("hangup_cause") .. " " .. var("proto_specific_hangup_cause") .. " " .. (argv[1] or ""))
+if cause:find("NO_ANSWER", 1, true) or cause:find("ALLOTTED", 1, true)
+    or cause:find("USER_NOT_REGISTERED", 1, true) then
+  freeswitch.consoleLog("NOTICE", "skykin drop skip cause=" .. cause .. "\n")
+  return
+end
+local member = var("cc_member_session_uuid")
+if member == "" then member = var("originating_leg_uuid") end
+if member == "" then member = var("cc_member_uuid") end
+if member == "" then member = var("signal_bond") end
+if member == "" then
+  freeswitch.consoleLog("NOTICE", "skykin drop no-member cause=" .. cause .. "\n")
+  return
+end
+freeswitch.consoleLog("NOTICE", "skykin drop caller=" .. member .. " cause=" .. cause .. "\n")
+api:execute("uuid_kill", member .. " NORMAL_CLEARING")
+DROPEOF
+
+cat > /etc/freeswitch/scripts/skykin_bl_gate.lua << 'GATEEOF'
+-- Drop a blacklisted inbound CID before ring_ready / agent originate.
+-- Matches only the inbound domain (ahununu vs client1 are separate lists).
+if not session then
+  return
+end
+
+local api = freeswitch.API()
+local domain = session:getVariable("domain_name") or ""
+local cid = session:getVariable("caller_id_number")
+  or session:getVariable("ani")
+  or session:getVariable("sip_from_user")
+  or session:getVariable("effective_caller_id_number")
+  or session:getVariable("sip_p_asserted_identity")
+  or session:getVariable("sip_cid_num")
+  or ""
+
+local function digits(s)
+  s = (s or ""):gsub("%D", "")
+  if s:sub(1, 3) == "251" and #s >= 12 then s = s:sub(4) end
+  if #s == 10 and s:sub(1, 1) == "0" then s = s:sub(2) end
+  return s
+end
+
+local want = digits(cid)
+freeswitch.consoleLog("NOTICE", "skykin bl gate cid=" .. tostring(cid)
+  .. " want=" .. want .. " domain=" .. domain .. "\n")
+
+local function file_hit(path)
+  if domain == "" then return false end
+  local f = io.open(path, "r")
+  if not f then return false end
+  for line in f:lines() do
+    if line:sub(1, 1) ~= "#" and line ~= "" then
+      local a, b = line:match("^([^|]+)|([^|]+)")
+      if a == domain then
+        local n = digits(b or "")
+        local k = math.min(#want, #n, 12)
+        if n ~= "" and k >= 7 and want:sub(-k) == n:sub(-k) then
+          f:close()
+          return true
+        end
+      end
+    end
+  end
+  f:close()
+  return false
+end
+
+local function blocked()
+  if #want < 7 or domain == "" then return false end
+  local keys = { want, want:sub(-9), want:sub(-8), want:sub(-7), "251" .. want, "0" .. want }
+  for _, key in ipairs(keys) do
+    if #key >= 7 then
+      local h = (api:execute("hash", "select/skykin_bl/" .. domain .. "~" .. key) or ""):gsub("%s+$", "")
+      if h == "1" or h:match("^1%s") then
+        freeswitch.consoleLog("NOTICE", "skykin bl gate hash key=" .. domain .. "~" .. key .. "\n")
+        return true
+      end
+    end
+  end
+  return file_hit("/var/lib/freeswitch/recordings/skykin_blacklist.txt")
+      or file_hit("/etc/freeswitch/scripts/skykin_blacklist.txt")
+end
+
+if blocked() then
+  freeswitch.consoleLog("NOTICE", "skykin blacklist drop cid=" .. tostring(cid)
+    .. " domain=" .. domain .. "\n")
+  session:setVariable("continue_on_fail", "false")
+  session:setVariable("skykin_blocked", "true")
+  session:execute("hangup", "CALL_REJECTED")
+  error("skykin blocked")
+end
+GATEEOF
+
+cat > /etc/freeswitch/scripts/skykin_bl_hash.lua << 'HASHEOF'
+-- Load domain-scoped blacklist hash keys from the shared file on FreeSWITCH start.
+local api = freeswitch.API()
+
+local function digits(s)
+  s = (s or ""):gsub("%D", "")
+  if s:sub(1, 3) == "251" and #s >= 12 then s = s:sub(4) end
+  if #s == 10 and s:sub(1, 1) == "0" then s = s:sub(2) end
+  return s
+end
+
+local n = 0
+local function load_path(path)
+  local f = io.open(path, "r")
+  if not f then return end
+  for line in f:lines() do
+    if line:sub(1, 1) ~= "#" and line ~= "" then
+      local domain, num = line:match("^([^|]+)|([^|]+)")
+      domain = (domain or ""):gsub("[/%s|~]", "")
+      local want = digits(num)
+      if domain ~= "" and #want >= 7 then
+        local keys = { want, want:sub(-9), want:sub(-8), want:sub(-7), "251" .. want, "0" .. want }
+        for _, key in ipairs(keys) do
+          if #key >= 7 then
+            api:execute("hash", "insert/skykin_bl/" .. domain .. "~" .. key .. "/1")
+          end
+        end
+        n = n + 1
+      end
+    end
+  end
+  f:close()
+end
+
+load_path("/var/lib/freeswitch/recordings/skykin_blacklist.txt")
+load_path("/etc/freeswitch/scripts/skykin_blacklist.txt")
+freeswitch.consoleLog("NOTICE", "skykin bl hash loaded rows=" .. n .. "\n")
+HASHEOF
+
+cat > /etc/freeswitch/scripts/skykin_inbound.lua << 'INBOUNDEOF'
+-- Ring the longest-idle Ready registered agent who is not already on a call.
+-- Decline ends this customer call (does not roll to the next agent).
+-- If every Ready agent is busy, park in callcenter so the caller waits.
+if not session then
+  return
+end
+
+local api = freeswitch.API()
+local domain = session:getVariable("domain_name") or "client1.skykin.local"
+local cid = session:getVariable("caller_id_number")
+    or session:getVariable("ani")
+    or session:getVariable("sip_from_user")
+    or session:getVariable("effective_caller_id_number")
+    or session:getVariable("sip_p_asserted_identity")
+    or session:getVariable("sip_cid_num")
+    or ""
+if session:getVariable("skykin_blocked") == "true" or not session:ready() then
+  session:execute("hangup", "CALL_REJECTED")
+  return
+end
+local function bl_digits(s)
+  s = (s or ""):gsub("%D", "")
+  if s:sub(1, 3) == "251" and #s >= 12 then s = s:sub(4) end
+  if #s == 10 and s:sub(1, 1) == "0" then s = s:sub(2) end
+  return s
+end
+local function bl_file_hit(want, path)
+  if domain == "" then return false end
+  local f = io.open(path, "r")
+  if not f then return false end
+  for line in f:lines() do
+    if line:sub(1, 1) ~= "#" and line ~= "" then
+      local a, b = line:match("^([^|]+)|([^|]+)")
+      if a == domain then
+        local n = bl_digits(b or "")
+        if n ~= "" then
+          local k = math.min(#want, #n, 12)
+          if k >= 7 and want:sub(-k) == n:sub(-k) then
+            f:close()
+            return true
+          end
+        end
+      end
+    end
+  end
+  f:close()
+  return false
+end
+local function blacklisted()
+  local want = bl_digits(cid)
+  if #want < 7 or domain == "" then return false end
+  local keys = { want, want:sub(-9), want:sub(-8), want:sub(-7), "251" .. want, "0" .. want }
+  for _, key in ipairs(keys) do
+    if #key >= 7 then
+      local h = api:execute("hash", "select/skykin_bl/" .. domain .. "~" .. key) or ""
+      h = h:gsub("%s+$", "")
+      if h == "1" or h:match("^1%s") then
+        return true
+      end
+    end
+  end
+  return bl_file_hit(want, "/etc/freeswitch/scripts/skykin_blacklist.txt")
+      or bl_file_hit(want, "/var/lib/freeswitch/recordings/skykin_blacklist.txt")
+end
+if blacklisted() then
+  freeswitch.consoleLog("NOTICE", "skykin blacklist drop cid=" .. cid .. "\n")
+  session:setVariable("continue_on_fail", "false")
+  session:setVariable("skykin_blocked", "true")
+  session:execute("hangup", "CALL_REJECTED")
+  error("skykin blocked")
+end
+
+local queue = "8000@" .. domain
+local rtp_ip = "196.189.236.140"
+
+session:execute("ring_ready")
+session:setVariable("ringback", "${us-ring}")
+session:setVariable("instant_ringback", "true")
+session:setVariable("hangup_after_bridge", "true")
+session:setVariable("continue_on_fail", "true")
+session:setVariable("ignore_early_media", "true")
+session:setVariable("bridge_early_media", "false")
+
+local function cols(line)
+  local c = {}
+  for x in (line .. "|"):gmatch("(.-)|") do c[#c + 1] = x end
+  return c
+end
+
+local function registered(ext)
+  local r = api:execute("sofia_contact", "*/" .. ext .. "@" .. domain) or ""
+  if r:find("error", 1, true) or r:find("user_not_registered", 1, true) then
+    return false
+  end
+  return r:find("sip:", 1, true) ~= nil
+end
+
+local function on_a_call(ext)
+  local chans = api:execute("show", "channels") or ""
+  return chans:find("user/" .. ext .. "@" .. domain, 1, true) ~= nil
+      or chans:find("/" .. ext .. "@" .. domain, 1, true) ~= nil
+end
+
+local function ready_agents(skip)
+  local out = api:execute("callcenter_config", "queue list agents " .. queue) or ""
+  local rows = {}
+  for line in out:gmatch("[^\r\n]+") do
+    if line:find("|", 1, true) and line:sub(1, 5) ~= "name|" then
+      local c = cols(line)
+      local ext = (c[5] or ""):match("user/([^@]+)")
+      local status, state = c[6] or "", c[7] or ""
+      if ext and not skip[ext]
+          and status == "Available" and (state == "Waiting" or state == "Idle")
+          and registered(ext) and not on_a_call(ext) then
+        rows[#rows + 1] = { ext = ext, idle = tonumber(c[20]) or tonumber(c[14]) or 0 }
+      end
+    end
+  end
+  table.sort(rows, function(a, b) return a.idle < b.idle end)
+  return rows
+end
+
+local skip = {}
+while session:ready() do
+  local agents = ready_agents(skip)
+  local dest = agents[1] and agents[1].ext
+  if not dest then
+    freeswitch.consoleLog("NOTICE", "skykin inbound queue wait " .. queue .. "\n")
+    session:execute("callcenter", queue)
+    return
+  end
+  local bridge =
+    "{ignore_early_media=true,bridge_early_media=false,originate_timeout=45}" ..
+    "[leg_timeout=30,media_webrtc=true,rtp_secure_media=optional,rtp_advertise_ip=" ..
+    rtp_ip .. ",include_external_ip=true]user/" .. dest .. "@" .. domain
+  freeswitch.consoleLog("NOTICE", "skykin inbound try " .. dest .. "@" .. domain .. "\n")
+  session:execute("bridge", bridge)
+  if not session:ready() then
+    return
+  end
+  local ok, answered = pcall(function() return session:answered() end)
+  if ok and answered then
+    return
+  end
+  local cause = string.upper(session:getVariable("last_bridge_hangup_cause")
+      or session:getVariable("originate_disposition") or "")
+  local sip = session:getVariable("sip_invite_failure_status") or ""
+  freeswitch.consoleLog("NOTICE", "skykin inbound cause=" .. cause
+    .. " sip=" .. sip .. " dest=" .. dest .. "\n")
+  if sip == "486" or cause:find("USER_BUSY", 1, true)
+      or cause:find("NO_ANSWER", 1, true) or cause:find("ALLOTTED", 1, true)
+      or cause:find("USER_NOT_REGISTERED", 1, true) or sip == "408" then
+    skip[dest] = true
+    session:sleep(200)
+  else
+    freeswitch.consoleLog("NOTICE", "skykin inbound decline drop dest=" .. dest .. "\n")
+    session:hangup("NORMAL_CLEARING")
+    return
+  end
+end
+INBOUNDEOF
+
+
+
+
 # Inbound DIDs from the SIP trunk land in context "public".
 if [ -n "$FS_INBOUND_DID_REGEX" ] && [ -n "$FS_DOMAIN" ]; then
   mkdir -p /etc/freeswitch/dialplan/public
   cat > /etc/freeswitch/dialplan/public/01_skykin_did.xml <<DIDEOF
 <include>
   <extension name="skykin_inbound_did">
-    <condition field="destination_number" expression="${FS_INBOUND_DID_REGEX}">
+    <condition field="destination_number" expression="${FS_INBOUND_DID_REGEX}" break="on-false">
       <action application="set" data="rtcp_audio_interval_msec=0"/>
-      <action application="set" data="send_silence_when_idle=100"/>
-      <action application="set" data="rtp_advertise_ip=${FS_LAN_RTP_IP:-10.0.0.93}"/>
+      <action application="set" data="rtp_advertise_ip=${FS_LAN_RTP_IP}"/>
       <action application="set" data="include_external_ip=false"/>
       <action application="set" data="rtp_secure_media=false"/>
       <action application="set" data="media_webrtc=false"/>
       <action application="set" data="domain_name=${FS_DOMAIN}"/>
       <action application="export" data="domain_name=${FS_DOMAIN}"/>
+      <action application="set" data="call_direction=inbound"/>
+      <action application="export" data="call_direction=inbound"/>
       <action application="set" data="hangup_after_bridge=true"/>
-      <action application="set" data="continue_on_fail=true"/>
+      <action application="set" data="continue_on_fail=false"/>
+      <action application="set" data="ignore_early_media=true"/>
+      <action application="set" data="bridge_early_media=false"/>
+      <action application="set" data="originate_early_media=false"/>
       <action application="set" data="cc_moh_override="/>
       <action application="set" data="record_stereo=true"/>
       <action application="set" data="record_path=/var/lib/freeswitch/recordings/${FS_DOMAIN}/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
       <action application="set" data="record_name=\${uuid}.wav"/>
       <action application="set" data="execute_on_answer=record_session \${record_path}/\${record_name}"/>
-      <action application="callcenter" data="${FS_QUEUE_EXT}@${FS_DOMAIN}"/>
+      <action application="set" data="instant_ringback=true"/>
+      <action application="lua" data="/etc/freeswitch/scripts/skykin_cc_prune.lua ${FS_QUEUE_EXT}@${FS_DOMAIN}"/>
+      <action application="export" data="nolocal:execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua"/>
+      <action application="set" data="cc_export_vars=execute_on_hangup"/>
+      <action application="lua" data="/etc/freeswitch/scripts/skykin_bl_gate.lua"/>
+    </condition>
+    <condition field="${skykin_blocked}" expression="^true$" break="on-true">
+      <action application="hangup" data="CALL_REJECTED"/>
+    </condition>
+    <condition>
+      <action application="ring_ready"/>
+      <action application="lua" data="/etc/freeswitch/scripts/skykin_inbound.lua"/>
     </condition>
   </extension>
 </include>
 DIDEOF
   echo "  Inbound DID ${FS_INBOUND_DID_REGEX} -> queue ${FS_QUEUE_EXT}@${FS_DOMAIN}"
+fi
+
+# Second tenant (ahununu / 757-759): same queue + waiting list as client1.
+FS_DOMAIN2="${FS_DOMAIN2:-}"
+FS_INBOUND_DID2_REGEX="${FS_INBOUND_DID2_REGEX:-}"
+if [ -n "$FS_DOMAIN2" ] && [ -n "$FS_INBOUND_DID2_REGEX" ]; then
+  mkdir -p /etc/freeswitch/dialplan/public
+  cat > /etc/freeswitch/dialplan/public/02_skykin_did_${FS_DOMAIN2}.xml <<DID2EOF
+<include>
+  <extension name="skykin_inbound_did_${FS_DOMAIN2}">
+    <condition field="destination_number" expression="${FS_INBOUND_DID2_REGEX}" break="on-false">
+      <action application="set" data="rtcp_audio_interval_msec=0"/>
+      <action application="set" data="rtp_advertise_ip=${FS_LAN_RTP_IP}"/>
+      <action application="set" data="include_external_ip=false"/>
+      <action application="set" data="rtp_secure_media=false"/>
+      <action application="set" data="media_webrtc=false"/>
+      <action application="set" data="domain_name=${FS_DOMAIN2}"/>
+      <action application="export" data="domain_name=${FS_DOMAIN2}"/>
+      <action application="set" data="call_direction=inbound"/>
+      <action application="set" data="hangup_after_bridge=true"/>
+      <action application="set" data="continue_on_fail=false"/>
+      <action application="set" data="ignore_early_media=true"/>
+      <action application="set" data="bridge_early_media=false"/>
+      <action application="set" data="originate_early_media=false"/>
+      <action application="set" data="cc_moh_override="/>
+      <action application="set" data="record_stereo=true"/>
+      <action application="set" data="record_path=/var/lib/freeswitch/recordings/${FS_DOMAIN2}/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+      <action application="set" data="record_name=\${uuid}.wav"/>
+      <action application="set" data="execute_on_answer=record_session \${record_path}/\${record_name}"/>
+      <action application="set" data="instant_ringback=true"/>
+      <action application="lua" data="/etc/freeswitch/scripts/skykin_cc_prune.lua ${FS_QUEUE_EXT}@${FS_DOMAIN2}"/>
+      <action application="export" data="nolocal:execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua"/>
+      <action application="set" data="cc_export_vars=execute_on_hangup"/>
+      <action application="lua" data="/etc/freeswitch/scripts/skykin_bl_gate.lua"/>
+    </condition>
+    <condition field="${skykin_blocked}" expression="^true$" break="on-true">
+      <action application="hangup" data="CALL_REJECTED"/>
+    </condition>
+    <condition>
+      <action application="ring_ready"/>
+      <action application="lua" data="/etc/freeswitch/scripts/skykin_inbound.lua"/>
+    </condition>
+  </extension>
+</include>
+DID2EOF
+  echo "  Inbound DID ${FS_INBOUND_DID2_REGEX} -> skykin_inbound.lua (welcome inside lua)"
 fi
 
 # Remove vanilla demo dialplans that hijack agent extensions. The stock
@@ -674,8 +1598,44 @@ WWW_GID="${WWW_DATA_GID:-33}"
 if [ -d "$REC_ROOT" ]; then
   [ -n "$FS_DOMAIN" ] && mkdir -p "$REC_ROOT/${FS_DOMAIN}/archive"
   chgrp -R "$WWW_GID" "$REC_ROOT" 2>/dev/null || true
-  find "$REC_ROOT" -type d -exec chmod g+rxs {} + 2>/dev/null || true
-  find "$REC_ROOT" -type f -exec chmod g+r {} + 2>/dev/null || true
+  find "$REC_ROOT" -type d -exec chmod g+rwxs {} + 2>/dev/null || true
+  find "$REC_ROOT" -type f -exec chmod g+rw {} + 2>/dev/null || true
+  touch "$REC_ROOT/skykin_blacklist.txt" 2>/dev/null || true
+  chmod 666 "$REC_ROOT/skykin_blacklist.txt" 2>/dev/null || true
+fi
+
+# Image Lua (repo docker/freeswitch/scripts) overwrites stale heredocs above.
+if [ -d /opt/skykin/fs-scripts ]; then
+  mkdir -p /etc/freeswitch/scripts
+  cp -a /opt/skykin/fs-scripts/. /etc/freeswitch/scripts/
+  echo "  Installed SkyKin Lua from image /opt/skykin/fs-scripts"
+fi
+
+# Host overlay from the live backup. Must run last so a recreate keeps
+# working DID XML, Ethio gateways (SIP/SIP2/SIP757-759), and internal.xml.
+# Populate on ecs-cc: cp -a /opt/skykin/backups/fs-YYYYMMDD-*/live/. /opt/skykin/fs-config/
+LIVE=/opt/skykin/fs-live
+if [ -d "$LIVE" ] && [ -f "$LIVE/skykin_inbound.lua" ]; then
+  echo "  Overlaying live FreeSWITCH config from $LIVE"
+  mkdir -p /etc/freeswitch/scripts \
+    /etc/freeswitch/dialplan/public \
+    /etc/freeswitch/sip_profiles/external \
+    /etc/freeswitch/autoload_configs
+  for f in skykin_inbound.lua skykin_welcome.lua skykin_cc_drop.lua skykin_bl_gate.lua skykin_bl_hash.lua; do
+    [ -f "$LIVE/$f" ] && cp "$LIVE/$f" /etc/freeswitch/scripts/
+  done
+  [ -f "$LIVE/01_skykin_did.xml" ] && cp "$LIVE/01_skykin_did.xml" /etc/freeswitch/dialplan/public/
+  [ -f "$LIVE/02_skykin_did_ahununu.xml" ] && cp "$LIVE/02_skykin_did_ahununu.xml" /etc/freeswitch/dialplan/public/
+  [ -f "$LIVE/01_skykin_ahununu.xml" ] && cp "$LIVE/01_skykin_ahununu.xml" /etc/freeswitch/dialplan/
+  [ -f "$LIVE/01_skykin_client1.skykin.local.xml" ] && cp "$LIVE/01_skykin_client1.skykin.local.xml" /etc/freeswitch/dialplan/
+  [ -f "$LIVE/internal.xml" ] && cp "$LIVE/internal.xml" /etc/freeswitch/sip_profiles/
+  [ -f "$LIVE/external.xml" ] && cp "$LIVE/external.xml" /etc/freeswitch/sip_profiles/
+  for g in SIP.xml SIP2.xml SIP757.xml SIP758.xml SIP759.xml SIP8035.xml SIP8036.xml SIP8037.xml SIP8038.xml SIP8039.xml; do
+    [ -f "$LIVE/$g" ] && cp "$LIVE/$g" /etc/freeswitch/sip_profiles/external/
+  done
+  [ -f "$LIVE/modules.conf.xml" ] && cp "$LIVE/modules.conf.xml" /etc/freeswitch/autoload_configs/
+  [ -f "$LIVE/xml_cdr.conf.xml" ] && cp "$LIVE/xml_cdr.conf.xml" /etc/freeswitch/autoload_configs/
+  [ -f "$LIVE/callcenter.conf.xml" ] && cp "$LIVE/callcenter.conf.xml" /etc/freeswitch/autoload_configs/
 fi
 
 echo "SkyKin FreeSWITCH starting"

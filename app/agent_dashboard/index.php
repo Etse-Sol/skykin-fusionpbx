@@ -3,6 +3,8 @@
 require_once __DIR__ . '/session_bootstrap.php';
 require_once __DIR__ . '/skykin_config.php';
 
+skykin_session_enforce_idle();
+
 // Session expired / not logged in → login page (not a 404)
 // API calls get JSON 401 so the browser can redirect cleanly
 if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
@@ -18,6 +20,10 @@ if (empty($_SESSION['user_uuid']) || empty($_SESSION['authorized'])) {
     }
     header('Location: /?path=' . urlencode($_SERVER['REQUEST_URI'] ?? '/app/agent_dashboard/index.php'));
     exit;
+}
+
+if (!isset($_GET['action'])) {
+    skykin_session_touch();
 }
 
 // Release session lock so background polls / other tabs are not blocked
@@ -56,7 +62,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
              'interceptions'=>0,'internal_help'=>0,'login_count'=>1,'force_signout'=>0,
              'listening_count'=>0,'third_party_count'=>0,'force_advisor_count'=>0,'handle_on_behalf'=>0,
              'ask_help_count'=>0,'call_reason_count'=>0,'queue_waiting'=>0,'agents_online'=>0,
-             'avg_wait'=>0,'sla_rate'=>0,'recent_calls'=>[]];
+             'avg_wait'=>0,'sla_rate'=>0,'recent_calls'=>[],'waiting_callers'=>[]];
 
     try {
         $db = getSkykinDB();
@@ -85,9 +91,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
         if ($extension) {
             // Stats
             $agent_sql = skykin_cdr_agent_sql(':e');
-            $s = $db->prepare("SELECT COUNT(*) as total,
+            $rep = skykin_cdr_reportable_sql();
+            $miss = skykin_cdr_missed_sql();
+            $s = $db->prepare("SELECT SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
                 COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur,
                 COALESCE(SUM(billsec),0) as total_talk,
                 COALESCE(SUM(duration),0) as total_dur,
@@ -116,20 +124,37 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
             }
 
             // Recent calls
-            $s2 = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'HH24:MI') as call_time,
-                direction,caller_id_number,destination_number,caller_destination,billsec,hangup_cause
+            $s2 = $db->prepare("SELECT " . skykin_cdr_time_sql('HH24:MI') . " as call_time,
+                direction,caller_id_number,destination_number,caller_destination,billsec,duration,hangup_cause,start_epoch
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND {$agent_sql}
                 AND start_epoch>=:ts AND start_epoch<=:te
-                ORDER BY start_epoch DESC LIMIT 500");
+                ORDER BY start_epoch DESC LIMIT 1000");
             $s2->execute([':d'=>$domain,':e'=>$extension,':ts'=>$today_start,':te'=>$today_end]);
-            foreach ($s2->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $recent = skykin_cdr_collapse_hunt_legs($s2->fetchAll(PDO::FETCH_ASSOC));
+            foreach (array_slice($recent, 0, 500) as $r) {
                 $dest = (string)$r['destination_number'];
-                $in   = ($dest === $extension || $dest === '8000' || strpos($dest, '+') === 0);
+                $dir  = strtolower((string)($r['direction'] ?? ''));
+                $digits = preg_replace('/\D+/', '', $dest);
+                $in = $dir === 'inbound'
+                    || $dest === $extension
+                    || $dest === '8000'
+                    || strpos($dest, '+') === 0
+                    || (bool)preg_match('/11113875\d$/', (string)$digits);
                 $bill = (int)$r['billsec'];
-                $raw_num = $in
-                    ? ($r['caller_id_number'] ?: $r['caller_destination'] ?: $dest)
-                    : $dest;
+                if ($in) {
+                    $cid = (string)($r['caller_id_number'] ?? '');
+                    $cid_digits = preg_replace('/\D+/', '', $cid);
+                    // Until Ethio sends CLIP, inbound From/RPID is anonymous or our DID/ext.
+                    // Only show a number that looks like a customer mobile.
+                    if (preg_match('/^(0?9\d{8}|2519\d{8})$/', (string)$cid_digits)) {
+                        $raw_num = $cid;
+                    } else {
+                        $raw_num = 'Unknown';
+                    }
+                } else {
+                    $raw_num = $dest;
+                }
                 $clean_num = preg_replace('/@.*$/', '', (string)$raw_num);
                 if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $clean_num)) {
                     $clean_num = $clean_num !== '' ? $clean_num : 'Unknown';
@@ -142,7 +167,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                     'type'       => $in ? 'Inbound' : 'Outbound',
                     'number'     => $clean_num,
                     'duration'   => floor($bill/60).':'.str_pad($bill%60,2,'0',STR_PAD_LEFT),
-                    'status'     => $bill>0 ? 'Answered' : 'Missed',
+                    'status'     => skykin_cdr_result_label($r),
                     'disposition'=> $bill>0 ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
                 ];
             }
@@ -184,6 +209,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'stats') {
                 $sq->execute([':pat' => $pat]);
                 $data['agent_queues'] = $sq->fetchAll(PDO::FETCH_ASSOC) ?: [];
             } catch(Exception $e){ $data['agent_queues_err'] = $e->getMessage(); }
+        }
+
+        $queue_exts = [];
+        foreach (($data['agent_queues'] ?? []) as $q) {
+            if (!empty($q['queue_extension'])) {
+                $queue_exts[] = (string)$q['queue_extension'];
+            }
+        }
+        try {
+            $data['waiting_callers'] = skykin_cc_waiting_callers($domain, $queue_exts);
+            $data['queue_waiting'] = count($data['waiting_callers']);
+        } catch (Throwable $ignored) {
+            $data['waiting_callers'] = [];
         }
     } catch (Exception $e) { $data['db_error']=$e->getMessage(); }
 
@@ -411,7 +449,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'recordings') {
                 $params[':ext'] = $ext;
             }
             $s = $db->prepare(
-                "SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as datetime,
+                "SELECT " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as datetime,
                         caller_id_number, destination_number, direction, billsec,
                         record_path, record_name
                  FROM v_xml_cdr WHERE {$where}
@@ -717,19 +755,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_customer') {
             $cleanPhone = preg_replace('/^(\+251|00251|0)/', '', $customerPhone);
             
             // Look up CRM contact profile
-            $hasContacts = false;
-            try {
-                $db->query("SELECT 1 FROM skykin_contacts LIMIT 1");
-                $hasContacts = true;
-            } catch (Exception $e) {}
-            
-            if ($hasContacts) {
-                $s_c = $db->prepare("SELECT * FROM skykin_contacts 
-                    WHERE phone LIKE :q OR alt_phone LIKE :q 
-                       OR phone LIKE :c OR alt_phone LIKE :c 
-                    ORDER BY contact_id LIMIT 1");
-                $s_c->execute([':q' => '%' . $customerPhone . '%', ':c' => '%' . $cleanPhone . '%']);
-                $data['contact'] = $s_c->fetch(PDO::FETCH_ASSOC) ?: null;
+            skykin_crm_ensure_contacts($db);
+            $data['contact'] = skykin_crm_find_contact($db, $customerPhone);
+            if (!$data['contact']) {
+                $norm = skykin_normalize_phone_storage($customerPhone);
+                if ($norm !== '' && $norm !== $customerPhone) {
+                    $data['contact'] = skykin_crm_find_contact($db, $norm);
+                }
             }
             
             // Create profile fallback if not found
@@ -866,6 +898,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'list_callbacks') {
     error_reporting(0);
     header('Content-Type: application/json');
     $agent_id = $_GET['agent_id'] ?? '';
+    $scope_all = in_array($agent_id, ['all', '*', ''], true) && skykin_user_in_groups(['superadmin', 'admin', 'supervisor']);
     
     try {
         $db = getSkykinDB();
@@ -897,11 +930,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'list_callbacks') {
             $timeFmt = "to_char(callback_time, 'YYYY-MM-DD HH24:MI')";
         }
         
-        $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status 
-            FROM skykin_callbacks 
-            WHERE agent_id = :agent AND status = 'Scheduled' 
-            ORDER BY callback_time ASC LIMIT 100");
-        $s->execute([':agent' => $agent_id]);
+        if ($scope_all) {
+            $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status, agent_id
+                FROM skykin_callbacks
+                WHERE status = 'Scheduled'
+                ORDER BY callback_time ASC LIMIT 200");
+            $s->execute();
+        } else {
+            $s = $db->prepare("SELECT callback_id, customer_name, customer_phone, {$timeFmt} as formatted_time, notes, status, agent_id
+                FROM skykin_callbacks
+                WHERE agent_id = :agent AND status = 'Scheduled'
+                ORDER BY callback_time ASC LIMIT 100");
+            $s->execute([':agent' => $agent_id]);
+        }
         
         echo json_encode(['records' => $s->fetchAll(PDO::FETCH_ASSOC)]);
     } catch (Exception $e) {
@@ -1043,6 +1084,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_agent_status' && $_SERVER
             if ($new_status === 'Available' || $new_status === 'Logged Out') {
                 $res2 = $esl->request('api callcenter_config agent set state ' . $agent_uuid . " 'Waiting'");
                 $esl_state_resp = is_array($res2) ? ($res2['$'] ?? implode(' | ', $res2)) : (string)$res2;
+            }
+            // A leftover reject/busy delay leaves ready_time in the future, so
+            // longest-idle skips this agent even after they click Ready.
+            if ($new_status === 'Available') {
+                $esl->request('api callcenter_config agent set wrap_up_time ' . $agent_uuid . ' 0');
+                $esl->request('api callcenter_config agent set ready_time ' . $agent_uuid . ' 0');
             }
         }
 
@@ -1199,6 +1246,74 @@ if (isset($_GET['action']) && $_GET['action'] === 'cancel_leave_request' && $_SE
     exit;
 }
 
+// ── API: Agent blacklist (block unwanted callers) ──────────────────────────
+if (isset($_GET['action']) && in_array($_GET['action'], ['blacklist_list', 'blacklist_add', 'blacklist_del'], true)) {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $domain_ = skykin_domain_param($_GET['domain'] ?? ($_POST['domain'] ?? null));
+    $agent_  = trim((string)($_SESSION['username'] ?? ($_GET['agent'] ?? '')));
+    if ($_GET['action'] === 'blacklist_list') {
+        $rows = [];
+        foreach (skykin_blacklist_load() as $r) {
+            if (strcasecmp((string)($r['domain'] ?? ''), $domain_) === 0) {
+                $rows[] = $r;
+            }
+        }
+        echo json_encode(['ok' => true, 'rows' => $rows]);
+        exit;
+    }
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    if ($_GET['action'] === 'blacklist_add') {
+        $number = trim((string)($body['number'] ?? $_GET['number'] ?? ''));
+        $reason = trim((string)($body['reason'] ?? 'blocked by agent'));
+        $digits = skykin_blacklist_digits($number);
+        if (strlen($digits) < 7) {
+            echo json_encode(['ok' => false, 'error' => 'Enter a valid phone number']);
+            exit;
+        }
+        if (skykin_blacklist_match($number, $domain_)) {
+            $rows = [];
+            foreach (skykin_blacklist_load() as $r) {
+                if (strcasecmp((string)($r['domain'] ?? ''), $domain_) === 0) {
+                    $rows[] = $r;
+                }
+            }
+            echo json_encode(['ok' => true, 'already' => true, 'rows' => $rows]);
+            exit;
+        }
+        $rows = skykin_blacklist_load();
+        $rows[] = [
+            'domain' => $domain_,
+            'digits' => $digits,
+            'display' => $number,
+            'reason' => $reason,
+            'agent' => $agent_,
+            'ts' => time(),
+        ];
+        $saved = skykin_blacklist_save($rows);
+        echo json_encode([
+            'ok' => $saved,
+            'digits' => $digits,
+            'rows' => $saved ? skykin_blacklist_load() : [],
+            'error' => $saved ? '' : 'Could not save blacklist',
+        ]);
+        exit;
+    }
+    if ($_GET['action'] === 'blacklist_del') {
+        $digits = skykin_blacklist_digits((string)($body['number'] ?? $_GET['number'] ?? ''));
+        $kept = [];
+        foreach (skykin_blacklist_load() as $r) {
+            if (($r['digits'] ?? '') === $digits && (strcasecmp((string)($r['domain'] ?? ''), $domain_) === 0 || ($r['domain'] ?? '') === '*')) {
+                continue;
+            }
+            $kept[] = $r;
+        }
+        echo json_encode(['ok' => skykin_blacklist_save($kept)]);
+        exit;
+    }
+    exit;
+}
+
 // ── API: Get Available Agents (for call transfer target list) ────────────────
 if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
     error_reporting(0);
@@ -1239,6 +1354,178 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_available_agents') {
     } catch (Exception $e) {
         echo json_encode(['agents' => [], 'error' => $e->getMessage()]);
     }
+    exit;
+}
+
+// ── Outbound: B-leg state for answer (ACTIVE) and decline detection ─────────
+// SKYKIN_SAFE_DECLINE_v3
+if (isset($_GET['action']) && $_GET['action'] === 'outbound_live') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $ext = preg_replace('/\D+/', '', (string)($_GET['ext'] ?? ''));
+    $dest = preg_replace('/\D+/', '', (string)($_GET['dest'] ?? ''));
+    $destTail = strlen($dest) >= 9 ? substr($dest, -9) : $dest;
+    $blegLive = false;
+    $agentLive = false;
+    $blegState = '';
+    $agentUuid = '';
+    $callUuid = '';
+    $partnerUuid = '';
+    $rows = [];
+    if ($ext !== '' || $destTail !== '') {
+        $json = json_decode(skykin_fs_api('show channels as json'), true);
+        $rows = (is_array($json) ? ($json['rows'] ?? []) : []);
+    }
+    $isAgentRow = static function (array $row) use ($ext): bool {
+        if ($ext === '') {
+            return false;
+        }
+        $name = strtolower((string)($row['name'] ?? ''));
+        $presence = strtolower((string)($row['presence_id'] ?? ''));
+        $cid = preg_replace('/\D+/', '', (string)($row['cid_num'] ?? $row['cid_number'] ?? ''));
+        $state = strtoupper((string)($row['callstate'] ?? ''));
+        if (in_array($state, ['HANGUP', 'DOWN'], true)) {
+            return false;
+        }
+        return (bool)preg_match('#(^|[/@])' . preg_quote($ext, '#') . '(@|$|-)#', $name)
+            || strpos($presence, $ext . '@') !== false
+            || $cid === $ext;
+    };
+    $isLiveRow = static function (array $row): bool {
+        $state = strtoupper((string)($row['callstate'] ?? ''));
+        return !in_array($state, ['HANGUP', 'DOWN'], true);
+    };
+    $markBleg = static function (array $row) use (&$blegLive, &$blegState): void {
+        $blegLive = true;
+        $blegState = strtoupper((string)($row['callstate'] ?? ''));
+    };
+    $destMatches = static function (array $row) use ($destTail): bool {
+        if ($destTail === '' || strlen($destTail) < 9) {
+            return false;
+        }
+        $fields = [
+            (string)($row['dest'] ?? ''),
+            (string)($row['callee_num'] ?? $row['callee_id_number'] ?? ''),
+            (string)($row['application_data'] ?? ''),
+            (string)($row['name'] ?? ''),
+        ];
+        foreach ($fields as $field) {
+            $digits = preg_replace('/\D+/', '', $field);
+            if ($digits === '') {
+                continue;
+            }
+            if (str_ends_with($digits, $destTail) || str_ends_with($destTail, substr($digits, -9))) {
+                return true;
+            }
+        }
+        return false;
+    };
+    foreach ($rows as $row) {
+        if (!is_array($row) || !$isLiveRow($row) || !$isAgentRow($row)) {
+            continue;
+        }
+        $agentLive = true;
+        $agentUuid = (string)($row['uuid'] ?? '');
+        $callUuid = trim((string)($row['call_uuid'] ?? $agentUuid));
+        $partnerUuid = trim((string)($row['b_uuid'] ?? $row['bridge_uuid'] ?? ''));
+    }
+    if ($partnerUuid !== '') {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !$isLiveRow($row)) {
+                continue;
+            }
+            if ((string)($row['uuid'] ?? '') === $partnerUuid) {
+                $markBleg($row);
+                break;
+            }
+        }
+    }
+    if (!$blegLive && $callUuid !== '') {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !$isLiveRow($row) || $isAgentRow($row)) {
+                continue;
+            }
+            if (trim((string)($row['call_uuid'] ?? '')) === $callUuid) {
+                $markBleg($row);
+                break;
+            }
+        }
+    }
+    if (!$blegLive) {
+        foreach ($rows as $row) {
+            if (!is_array($row) || !$isLiveRow($row) || $isAgentRow($row)) {
+                continue;
+            }
+            $name = strtolower((string)($row['name'] ?? ''));
+            $dir = strtolower((string)($row['direction'] ?? ''));
+            $isGateway = (strpos($name, 'sofia/external/') !== false)
+                || (strpos($name, 'sofia/gateway/') !== false)
+                || (strpos($name, 'gateway/') !== false)
+                || $dir === 'outbound';
+            if ($isGateway && ($destTail === '' || $destMatches($row))) {
+                $markBleg($row);
+            }
+        }
+    }
+    echo json_encode([
+        'agent' => $agentLive,
+        'bleg' => $blegLive,
+        'bleg_state' => $blegState,
+        'channels' => count($rows),
+        'partner_uuid' => $partnerUuid,
+    ]);
+    exit;
+}
+
+// ── Kill FS legs when agent ends ring or mobile declined ────────────────────
+if (isset($_GET['action']) && $_GET['action'] === 'outbound_stop') {
+    error_reporting(0);
+    header('Content-Type: application/json');
+    $ext = preg_replace('/\D+/', '', (string)($_GET['ext'] ?? ''));
+    $dest = preg_replace('/\D+/', '', (string)($_GET['dest'] ?? ''));
+    $destTail = strlen($dest) >= 9 ? substr($dest, -9) : $dest;
+    $killed = [];
+    $callUuid = '';
+    if ($ext !== '') {
+        $json = json_decode(skykin_fs_api('show channels as json'), true);
+        $rows = (is_array($json) ? ($json['rows'] ?? []) : []);
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $uuid = (string)($row['uuid'] ?? '');
+            $name = strtolower((string)($row['name'] ?? ''));
+            $presence = strtolower((string)($row['presence_id'] ?? ''));
+            $cid = preg_replace('/\D+/', '', (string)($row['cid_num'] ?? $row['cid_number'] ?? ''));
+            $isAgent = (bool)preg_match('#(^|[/@])' . preg_quote($ext, '#') . '(@|$|-)#', $name)
+                || strpos($presence, $ext . '@') !== false
+                || $cid === $ext;
+            if ($isAgent && $uuid !== '') {
+                $callUuid = trim((string)($row['call_uuid'] ?? $uuid));
+                skykin_fs_api('uuid_kill ' . $uuid);
+                $killed[] = $uuid;
+            }
+        }
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $uuid = (string)($row['uuid'] ?? '');
+            if ($uuid === '' || in_array($uuid, $killed, true)) {
+                continue;
+            }
+            $sameCall = ($callUuid !== '' && trim((string)($row['call_uuid'] ?? '')) === $callUuid);
+            $name = strtolower((string)($row['name'] ?? ''));
+            $blob = preg_replace('/\D+/', '', $name . ($row['dest'] ?? '') . ($row['callee_num'] ?? ''));
+            $isExternal = (strpos($name, 'external') !== false || strpos($name, 'gateway') !== false);
+            $numMatch = ($destTail !== '' && strlen($destTail) >= 9 && strpos($blob, $destTail) !== false);
+            if ($sameCall || ($isExternal && ($numMatch || $callUuid !== ''))) {
+                skykin_fs_api('uuid_kill ' . $uuid);
+                $killed[] = $uuid;
+            }
+        }
+    }
+    echo json_encode(['ok' => true, 'killed' => $killed]);
     exit;
 }
 
@@ -1427,7 +1714,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_sms' && $_SERVER['REQUES
     exit;
 }
 
-$agent_name = isset($_GET['agent']) ? htmlspecialchars($_GET['agent']) : 'Agent1';
+$agent_name = trim((string)($_GET['agent'] ?? ''));
+if ($agent_name === '') {
+    $agent_name = trim((string)($_SESSION['username'] ?? 'Agent'));
+}
+$agent_name = htmlspecialchars($agent_name);
 $domain = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
 
 // Detect if logged-in user is supervisor/admin
@@ -1555,6 +1846,7 @@ header('Pragma: no-cache');
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta http-equiv="Cache-Control" content="no-store">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1619,7 +1911,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .s-opt .opt-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 
 /* ?? Layout ?? */
-.main { margin-top: 64px; margin-left: 240px; padding: 20px; margin-bottom: 20px; transition: margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+.main { margin-top: 64px; margin-left: 240px; padding: 20px; margin-bottom: 20px; transition: margin-left 0.28s cubic-bezier(0.4, 0, 0.2, 1), margin-right 0.3s ease; }
 .main.sidebar-collapsed { margin-left: 0; }
 @media (max-width: 768px) {
     .main { margin-left: 0 !important; }
@@ -1708,6 +2000,18 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .metric-val.warn { color: #fd7e14; }
 .metric-val.bad  { color: #dc3545; }
 
+.wait-list { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #eee; }
+.wait-list-title { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 8px; }
+.wait-empty { font-size: 12px; color: #aaa; padding: 6px 0; }
+.wait-note { font-size: 11px; color: #aaa; margin-top: 8px; }
+.wait-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f5f5f5; font-size: 13px; }
+.wait-row:last-child { border-bottom: none; }
+.wait-pos { width: 20px; height: 20px; border-radius: 50%; background: #fff4e5; color: #fd7e14; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.wait-num { font-weight: 700; color: #333; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.wait-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.wait-time { color: #fd7e14; font-weight: 700; font-size: 12px; }
+.wait-state { font-size: 10px; font-weight: 700; color: #888; background: #f4f6f8; border-radius: 10px; padding: 2px 7px; }
+
 /* ?? Progress bars ?? */
 .progress-wrap { margin-top: 6px; }
 .progress-label { display: flex; justify-content: space-between; font-size: 11px; color: #888; margin-bottom: 3px; }
@@ -1736,6 +2040,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .badge-in       { background: #d4edda; color: #28a745; }
 .badge-out      { background: #d1ecf1; color: #00B4D8; }
 .badge-missed   { background: #f8d7da; color: #dc3545; }
+.badge-failed   { background: #fff3cd; color: #856404; }
 .badge-transfer { background: #e2d9f3; color: #6f42c1; }
 
 /* ?? Live dot ?? */
@@ -1816,9 +2121,11 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 .phone-popup.open { right: 0; }
 .pp-body { flex-shrink: 0; padding: 0; }
 .phone-popup.call-active .pp-body { padding: 12px 16px; }
+.dial-input-wrap { padding: 10px 16px 0; }
 .dp-panel { flex-shrink: 0; }
-/* Shift main content when panel is open */
-body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right 0.3s ease; }
+/* Shift dashboard content when the dial pad is open (same as supervisor). */
+body.phone-open .main,
+body.phone-open .footer { margin-right: 300px; transition: margin-right 0.3s ease; }
 .pp-header {
     background: linear-gradient(135deg, #0047AB, #00B4D8);
     color: white; padding: 14px 16px;
@@ -1961,7 +2268,6 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     display: block; padding: 14px 22px 22px;
     background: #fff;
 }
-.dp-panel.open { display: block; }
 @keyframes fadeIn { from { opacity:0; transform:translateY(-6px); } to { opacity:1; transform:translateY(0); } }
 .dp-title {
     margin: 0 0 10px; color: #64748b; font-size: 10px; font-weight: 700;
@@ -1970,11 +2276,12 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 .dp-display {
     background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
     padding: 10px 38px 10px 14px; font-size: 20px; font-weight: 650; color: #0f3f79;
-    text-align: center; letter-spacing: 2px; min-height: 46px; position: relative;
-    margin-bottom: 16px; display: flex; align-items: center; justify-content: center;
-    word-break: break-all; box-shadow: inset 0 1px 2px rgba(15,23,42,.03);
+    text-align: center; letter-spacing: 2px; min-height: 46px; width: 100%;
+    margin-bottom: 16px; box-sizing: border-box; outline: none;
+    box-shadow: inset 0 1px 2px rgba(15,23,42,.03);
 }
-.dp-display.empty { color: #94a3b8; font-size: 12px; letter-spacing: 0; font-weight: 500; }
+.dp-display:focus { border-color: #9dc5f0; }
+.dp-display::placeholder { color: #94a3b8; font-size: 12px; letter-spacing: 0; font-weight: 500; }
 .dp-grid {
     display: grid; grid-template-columns: repeat(3, 58px); gap: 10px 18px;
     justify-content: center; margin-bottom: 16px;
@@ -2402,7 +2709,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
         <button class="sb-item"        id="sbAcwBtn"         onclick="sidebarNav('acw')">ACW History</button>
         <button class="sb-item"        id="sbEscalationBtn"  onclick="sidebarNav('escalation')">New Ticket</button>
         <button class="sb-item"        id="sbLookupBtn"      onclick="sidebarNav('lookup')">Customer Lookup</button>
+        <button class="sb-item"        id="sbCrmBtn"         onclick="sidebarNav('crm')">CRM</button>
         <button class="sb-item"        id="sbCallbacksBtn"   onclick="sidebarNav('callbacks')">Callbacks</button>
+        <button class="sb-item"        id="sbBlacklistBtn"   onclick="sidebarNav('blacklist')">Blacklist</button>
         <button class="sb-item"        id="sbAhununuBtn"     onclick="sidebarNav('ahununu')">Ahununu.com</button>
 
         <?php if ($is_supervisor): ?>
@@ -2433,7 +2742,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="tab-btn" id="tabAcwBtn" onclick="switchTab('acw')">ACW History</button>
             <button class="tab-btn" id="tabEscalationBtn" onclick="switchTab('escalation')">New Ticket</button>
             <button class="tab-btn" id="tabLookupBtn" onclick="switchTab('lookup')">Customer Lookup</button>
+            <button class="tab-btn" id="tabCrmBtn" onclick="switchTab('crm')">CRM</button>
             <button class="tab-btn" id="tabCallbacksBtn" onclick="switchTab('callbacks')">Callbacks</button>
+            <button class="tab-btn" id="tabBlacklistBtn" onclick="switchTab('blacklist')">Blacklist</button>
             <button class="tab-btn" id="tabAhununuBtn" onclick="switchTab('ahununu')">&#127760; Ahununu.com</button>
         </div>
 
@@ -2503,6 +2814,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div class="metric-row"><span class="metric-name">Avg Wait Time</span><span class="metric-val" id="avgWait">--</span></div>
             <div class="metric-row"><span class="metric-name">My Position</span><span class="metric-val" id="myPosition">Active</span></div>
             <div class="metric-row"><span class="metric-name">SLA (Target &lt;30s)</span><span class="metric-val good" id="slaRate">--%</span></div>
+            <div class="wait-list">
+                <div class="wait-list-title">Waiting customers</div>
+                <div id="waitingCallers"><div class="wait-empty">No callers waiting</div></div>
+                <div class="wait-note">Next caller is assigned automatically. This list is for visibility only.</div>
+            </div>
         </div>
     </div>
 
@@ -2765,6 +3081,23 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             </div>
         </div>
 
+        <!-- Blacklist Tab -->
+        <div class="tab-panel" id="tabBlacklist" style="display:none">
+            <div class="section-box" style="padding:16px">
+                <div class="section-title"><span class="dot" style="background:#c62828"></span> Blocked callers</div>
+                <p style="font-size:13px;color:#666;margin:0 0 12px">These numbers will not ring agents. Use Remove to allow them again.</p>
+                <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+                    <input type="tel" id="blAddNumber" placeholder="Number e.g. 0902925776" style="flex:1;min-width:180px;padding:8px;border:1px solid #ddd;border-radius:6px">
+                    <input type="text" id="blAddReason" placeholder="Reason" style="flex:1;min-width:140px;padding:8px;border:1px solid #ddd;border-radius:6px">
+                    <button type="button" class="btn-filter" onclick="addBlacklistManual()">Block number</button>
+                </div>
+                <table class="data-table" style="width:100%">
+                    <thead><tr><th>Number</th><th>Reason</th><th>Added by</th><th></th></tr></thead>
+                    <tbody id="blacklistBody"><tr><td colspan="4" class="rec-empty">Loading…</td></tr></tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- New Ticket Tab -->
         <div class="tab-panel" id="tabEscalation" style="display:none">
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 20px;">
@@ -2857,6 +3190,11 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
                     </div>
                 </div>
             </div>
+        </div>
+
+        <!-- CRM Tab -->
+        <div class="tab-panel" id="tabCrm" style="display:none;padding:0">
+            <iframe src="about:blank" id="crmTabFrame" title="CRM" style="width:100%;height:700px;border:none"></iframe>
         </div>
 
         <!-- ?? Ahununu.com Tab ?? -->
@@ -2952,14 +3290,13 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">&#128222; Incoming Call</div>
             <div id="incomingNumber" style="font-size:28px;font-weight:bold;color:#0047AB;margin-bottom:8px">Unknown</div>
             <div style="font-size:12px;color:#666;margin-bottom:24px" id="incomingCidName"></div>
-            <div style="display:flex;gap:12px;justify-content:center;">
+            <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
                 <button onclick="answerCall()" style="background:#28a745;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Answer</button>
                 <button onclick="declineCall()" style="background:#dc3545;color:#fff;border:none;padding:14px 32px;border-radius:30px;font-size:15px;font-weight:bold;cursor:pointer;flex:1">Decline</button>
             </div>
+            <button type="button" onclick="blockCurrentCaller()" style="margin-top:14px;background:#fff;color:#c62828;border:1px solid #ef9a9a;padding:8px 16px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer">Block this number</button>
         </div>
         <div id="callTimer" class="call-timer">00:00</div>
-        <!-- Hidden input syncs with dial pad display -->
-        <input type="tel" class="dial-input" id="dialInput" placeholder="" maxlength="20" style="display:none">
         <div class="call-controls">
             <button class="btn-call"   id="btnCall"   onclick="makeCall()" disabled style="display:none">&#128222; Call</button>
             <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">End call</button>
@@ -2971,6 +3308,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
             <button class="btn-keypad" id="btnKeypad" onclick="toggleCallKeypad()">Keypad</button>
             <button class="btn-phone-action" id="btnPhoneSms" onclick="openSmsModalFromPhone()">Message</button>
             <button class="btn-phone-action" id="btnPhoneCallback" onclick="openCallbackModalFromPhone()">Callback</button>
+            <button class="btn-phone-action" id="btnBlockCaller" onclick="blockCurrentCaller()">Block</button>
             <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">Transfer call</button>
         </div>
     </div>
@@ -2978,7 +3316,7 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
     <!-- Inline Dial Pad -->
     <div class="dp-panel" id="dpPanel">
         <div class="dp-title">Dial a number</div>
-        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
+        <input type="tel" class="dp-display" id="dialInput" placeholder="Enter number..." maxlength="20" autocomplete="off" inputmode="tel">
         <div class="dp-grid">
             <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
             <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
@@ -3005,6 +3343,9 @@ body.phone-open .content-wrapper { margin-right: 300px; transition: margin-right
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js"></script>
 <script>
 <?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
+<script>
 const agentName  = '<?php echo $agent_name; ?>';
 const domain     = '<?php echo $domain; ?>';
 const serverExt  = '<?php echo $agent_ext; ?>';       // resolved server-side from DB
@@ -3377,8 +3718,8 @@ function sidebarNav(tab) {
     const tabToSb = {
         dashboard: 'sbDashboardBtn', callHistory: 'sbCallHistoryBtn',
         recordings: 'sbRecordingsBtn', acw: 'sbAcwBtn',
-        escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn',
-        callbacks: 'sbCallbacksBtn', ahununu: 'sbAhununuBtn'
+        escalation: 'sbEscalationBtn', lookup: 'sbLookupBtn', crm: 'sbCrmBtn',
+        callbacks: 'sbCallbacksBtn', blacklist: 'sbBlacklistBtn', ahununu: 'sbAhununuBtn'
     };
     document.querySelectorAll('.sb-item').forEach(el => el.classList.remove('active'));
     const activeBtn = document.getElementById(tabToSb[tab]);
@@ -3405,14 +3746,30 @@ function sidebarNav(tab) {
     } catch(e) {}
 })();
 
+function agentCrmUrl() {
+    const d = (window.SKYKIN && SKYKIN.domain) ? SKYKIN.domain : (typeof domain !== 'undefined' ? domain : '');
+    const params = new URLSearchParams();
+    params.set('embed', '1');
+    if (d) params.set('domain', d);
+    return '/app/agent_dashboard/crm.php?' + params.toString();
+}
+
 // ?? Customer info panel (ahununu.com) ??????????????
 // Slides in over the dashboard during a call; the Ahununu tab is the
 // full-size view for browsing between calls.
 function openCrmPanel(url) {
+    const target = url || agentCrmUrl();
+    if (target.indexOf('crm.php') !== -1) {
+        switchTab('crm');
+        sidebarNav('crm');
+        const frame = document.getElementById('crmTabFrame');
+        if (frame) frame.src = target;
+        return;
+    }
     const panel = document.getElementById('crmPanel');
     const frame = document.getElementById('crmFrame');
     if (!panel || !frame) return;
-    if (frame.src === 'about:blank') frame.src = url || (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
+    frame.src = target;
     panel.classList.add('open');
 }
 
@@ -3423,7 +3780,7 @@ function closeCrmPanel() {
 
 // ?? Tabs ???????????????????????????????????????????
 function switchTab(tab) {
-    ['dashboard','callHistory','recordings','acw','escalation','lookup','callbacks','ahununu'].forEach(t => {
+    ['dashboard','callHistory','recordings','acw','escalation','lookup','crm','callbacks','blacklist','ahununu'].forEach(t => {
         const panel = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1));
         const btn   = document.getElementById('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Btn');
         if (panel) { panel.classList.remove('active'); panel.style.display = 'none'; }
@@ -3437,6 +3794,11 @@ function switchTab(tab) {
     if (tab === 'acw')        fetchAcwHistory();
     if (tab === 'escalation') fetchCases();
     if (tab === 'callbacks')  fetchCallbacks();
+    if (tab === 'blacklist')  fetchBlacklist();
+    if (tab === 'crm') {
+        const f = document.getElementById('crmTabFrame');
+        if (f && (f.src === 'about:blank' || !f.src)) f.src = agentCrmUrl();
+    }
     if (tab === 'ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -3489,41 +3851,35 @@ function fetchAcwHistory() {
 
 // Dial pad doubles as a DTMF keypad during an active call.
 let dpNumber = '';
-let padOpen  = true;
 function dpKey(k) {
     if (callStartTime && sipBridge.sendDtmf) {
         try { sipBridge.sendDtmf(k); } catch(e) {}
+        return;
     }
+    if (dpNumber.length >= 20) return;
     dpNumber += k;
     updateDpDisplay();
-    document.getElementById('dialInput').value = dpNumber;
 }
 function dpDelete() {
+    if (callStartTime) return;
     dpNumber = dpNumber.slice(0, -1);
     updateDpDisplay();
-    document.getElementById('dialInput').value = dpNumber;
 }
 function updateDpDisplay() {
-    const el = document.getElementById('dpDisplay');
-    if (dpNumber) {
-        el.textContent = dpNumber;
-        el.classList.remove('empty');
-    } else {
-        el.textContent = 'Enter number...';
-        el.classList.add('empty');
-    }
+    const inp = document.getElementById('dialInput');
+    if (inp && inp.value !== dpNumber) inp.value = dpNumber;
 }
 function dpCall() {
-    if (!dpNumber) return;
-    makeCall(dpNumber);
+    const num = document.getElementById('dialInput').value.trim() || dpNumber;
+    if (!num) return;
+    makeCall(num);
 }
 function toggleCallKeypad() {
     const panel = document.getElementById('dpPanel');
     const button = document.getElementById('btnKeypad');
     const opening = panel.style.display === 'none';
-    panel.style.display = opening ? '' : 'none';
+    panel.style.display = opening ? 'block' : 'none';
     button.classList.toggle('active', opening);
-    padOpen = opening;
 }
 
 // ?? Fetch dashboard data ???????????????????????????
@@ -3653,7 +4009,7 @@ function getEmptyData() {
         login_count:1, force_signout:0, listening_count:0, third_party_count:0,
         force_advisor_count:0, handle_on_behalf:0, ask_help_count:0, call_reason_count:0,
         queue_waiting:0, agents_online:0, avg_wait:0, sla_rate:0,
-        recent_calls:[]
+        recent_calls:[], waiting_callers:[]
     };
 }
 
@@ -3684,6 +4040,7 @@ function renderCallPage(page) {
                             c.type==='Outbound' ? 'badge-out' :
                             c.type==='Transfer' ? 'badge-transfer' : 'badge-missed';
         const statusBadge = c.status==='Missed'      ? 'badge-missed' :
+                            c.status==='Failed'      ? 'badge-failed' :
                             c.status==='Transferred' ? 'badge-transfer' : 'badge-in';
         html += `<tr>
             <td>${c.time}</td>
@@ -3738,6 +4095,31 @@ function setTxt(id, val) {
     if (el) el.textContent = val;
 }
 
+function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+        return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+    });
+}
+
+function renderWaitingCallers(list) {
+    const el = document.getElementById('waitingCallers');
+    if (!el) return;
+    if (!list.length) {
+        el.innerHTML = '<div class="wait-empty">No callers waiting</div>';
+        return;
+    }
+    el.innerHTML = list.map(function(c, i) {
+        const number = escHtml(c.number || 'Unknown');
+        const wait = escHtml(c.wait_fmt || (c.wait_seconds || 0) + 's');
+        const state = escHtml(c.state || 'Waiting');
+        return '<div class="wait-row">'
+            + '<span class="wait-pos">' + (i + 1) + '</span>'
+            + '<span class="wait-num">' + number + '</span>'
+            + '<span class="wait-meta"><span class="wait-time">' + wait + '</span>'
+            + '<span class="wait-state">' + state + '</span></span></div>';
+    }).join('');
+}
+
 function updateDashboard(d) {
     setTxt('totalCalls', d.total_calls || 0);
     setTxt('avgDuration', formatDurationHMS(d.avg_duration || 0));
@@ -3775,6 +4157,7 @@ function updateDashboard(d) {
     setTxt('agentsOnline', d.agents_online || 0);
     setTxt('avgWait', (d.avg_wait || 0) + 's');
     setTxt('slaRate', (d.sla_rate || 0) + '%');
+    renderWaitingCallers(d.waiting_callers || []);
 
     const answerRate = d.total_calls > 0 ? Math.round((d.answered_calls / d.total_calls) * 100) : 0;
     const answerRateEl = document.getElementById('answerRate');
@@ -4015,14 +4398,20 @@ function setSipStatus(state, text) {
     } else if (state === 'calling') {
         dot.classList.add('calling'); badge.classList.add('show','calling');
         fab.classList.add('ringing'); openPhonePopup();
-        // Show hang-up button so caller can cancel before answer
+        // Outbound ring: status only — timer starts in startCallUI when answered.
         document.getElementById('btnCall').style.display   = 'none';
         document.getElementById('btnHangup').style.display = 'block';
         document.getElementById('dpPanel').style.display = 'none';
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartTime = null;
+        document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent = '00:00';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
         dot.classList.add('ringing'); badge.classList.add('show'); fab.classList.add('ringing');
+        document.getElementById('callTimer').style.display = 'none';
     } else if (state === 'connecting') {
         dot.classList.add('connecting');
     } else if (state === 'unregistered' || state === 'failed') {
@@ -4035,24 +4424,76 @@ function setSipStatus(state, text) {
     document.getElementById('sipStatusText').textContent = text;
 }
 
+function crmDisplayName(contact) {
+    if (!contact || !contact.full_name) return '';
+    const n = String(contact.full_name).trim();
+    if (contact.contact_id) return n;
+    if (/^Customer\s*\(/i.test(n)) return '';
+    return n;
+}
+
+function applyCrmNameToCallUi(phone, contact) {
+    const num = String(phone || '').trim();
+    const name = crmDisplayName(contact);
+    const incEl = document.getElementById('incomingNumber');
+    const cidEl = document.getElementById('incomingCidName');
+    if (incEl) incEl.textContent = name || num || 'Unknown';
+    if (cidEl) cidEl.textContent = (name && num) ? num : '';
+    if (!name) return;
+    const st = ((document.getElementById('sipStatusText') || {}).textContent || '');
+    if (!/ringing|calling|in call/i.test(st)) return;
+    let mode = 'incall';
+    if (/ringing/i.test(st)) mode = 'ringing';
+    else if (/calling/i.test(st)) mode = 'calling';
+    const label = mode === 'ringing' ? 'Ringing' : (mode === 'calling' ? 'Calling' : 'In Call');
+    setSipStatus(mode, label + ': ' + name);
+}
+
+function fetchCrmContact(phone, cb) {
+    const q = String(phone || '').trim();
+    if (!q || q === 'Unknown') {
+        if (cb) cb(null);
+        return;
+    }
+    fetch('crm.php?api=lookup&phone=' + encodeURIComponent(q), { credentials: 'same-origin' })
+        .then(function(res) { return res.json(); })
+        .then(function(c) {
+            applyCrmNameToCallUi(q, c);
+            if (cb) cb(c);
+        })
+        .catch(function() { if (cb) cb(null); });
+}
+window.fetchCrmContact = fetchCrmContact;
+
 function handleIncoming(callerNumber) {
     lastCallType = 'Inbound';
+    window.lastIncomingNumber = callerNumber || '';
     window._callEnded = false;
     try { document.getElementById('acwModal').classList.remove('show'); } catch (e) {}
-    document.getElementById('incomingNumber').textContent = callerNumber;
+    document.getElementById('incomingNumber').textContent = callerNumber || 'Unknown';
+    const cidEl = document.getElementById('incomingCidName');
+    if (cidEl) cidEl.textContent = '';
     // Show incoming screen inside the phone panel, hide dial pad
     document.getElementById('incomingScreen').style.display = 'block';
-    document.getElementById('dpPanel').style.display        = 'none';
+    document.getElementById('dpPanel').style.display = 'none';
     openPhonePopup();
-    setSipStatus('ringing', 'Ringing: ' + callerNumber);
+    setSipStatus('ringing', 'Ringing: ' + (callerNumber || 'Unknown'));
     startRingtone();
+    if (callerNumber) {
+        fetchCrmContact(callerNumber);
+        if (window.performLookup) {
+            performLookup(callerNumber);
+            switchTab('lookup');
+        }
+    }
 }
+window.handleIncoming = handleIncoming;
 
 // A cancelled / missed ring must not open ACW or hide a newer incoming call.
 function resetMissedRing() {
     try {
         document.getElementById('incomingScreen').style.display = 'none';
-        document.getElementById('dpPanel').style.display = '';
+        document.getElementById('dpPanel').style.display = 'block';
         const ext = localStorage.getItem('sip_ext') || '';
         setSipStatus('registered', 'Registered (' + ext + ')');
     } catch (e) {}
@@ -4067,17 +4508,22 @@ function answerCall() {
 
 function declineCall() {
     document.getElementById('incomingScreen').style.display = 'none';
-    document.getElementById('dpPanel').style.display        = '';
+    document.getElementById('dpPanel').style.display = 'block';
     stopRingtone();
-    if (sipBridge.hangup) sipBridge.hangup();
+    if (sipBridge.decline) sipBridge.decline();
+    else if (sipBridge.hangup) sipBridge.hangup();
     currentSession = null;
 }
 
 function makeCall(number) {
     number = number || document.getElementById('dialInput').value.trim();
     if (!number) return;
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
+    document.getElementById('dialInput').value = number;
     lastDialedNumber = number;
     lastCallType = 'Outbound';
+    fetchCrmContact(number);
+    // Lookup tab opens when the call connects (startCallUI), not while ringing.
     if (sipBridge.makeCall) sipBridge.makeCall(number);
     else showToast('SIP not ready. Open Phone Settings to connect.');
 }
@@ -4156,11 +4602,17 @@ function stopRingback() {
     if (_rbInterval) { clearInterval(_rbInterval); _rbInterval = null; }
     if (_rbCtx) { try { _rbCtx.close(); } catch(e) {} _rbCtx = null; }
 }
+window.stopRingback = stopRingback;
+window.startRingback = startRingback;
 
 function startCallUI(number) {
+    number = number || window.lastDialedNumber || window.lastIncomingNumber || '';
     window._callEnded = false; // Reset so endCall() works for this new call
+    window._outboundRingPhase = false;
     stopRingtone();
+    stopRingback();
     setSipStatus('incall', 'In Call: ' + number);
+    fetchCrmContact(number);
     document.getElementById('btnCall').style.display   = 'none';
     document.getElementById('btnHangup').style.display = 'block';
     document.getElementById('btnHold').style.display   = 'flex';
@@ -4181,6 +4633,7 @@ function startCallUI(number) {
     updateDpDisplay();
     callStartTime = new Date();
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    updateCallTimer();
     
     // Show Call popup actions
     if (document.getElementById('btnPhoneSms')) document.getElementById('btnPhoneSms').style.display = 'block';
@@ -4203,9 +4656,123 @@ function updateCallTimer() {
 }
 
 function hangupCall() {
+    if (window._outboundRingPhase && window.endOutboundRing) {
+        window.endOutboundRing(true);
+        return;
+    }
     if (sipBridge.hangup) sipBridge.hangup();
     // Immediately reset the UI — do not wait for the async SIP Terminated event
     endCall();
+}
+
+function currentCallerNumber() {
+    const el = document.getElementById('incomingNumber');
+    const incoming = ((el && el.textContent) || '').trim();
+    if (incoming && incoming !== 'Unknown') return incoming;
+    const last = String(window.lastIncomingNumber || '').trim();
+    if (last && last !== 'Unknown') return last;
+    const st = ((document.getElementById('sipStatusText') || {}).textContent || '');
+    const m = st.match(/(\+?\d{7,15})/);
+    if (m) return m[1];
+    const wait = document.querySelector('.wait-num');
+    if (wait && (wait.textContent || '').trim()) return wait.textContent.trim();
+    return String(window.lastDialedNumber || '').trim();
+}
+
+function blockCurrentCaller() {
+    const number = currentCallerNumber();
+    if (!number) {
+        showToast('No caller number to block');
+        return;
+    }
+    if (!confirm('Block ' + number + '? They will not ring agents on this line again.')) return;
+    declineCall();
+    const fd = new FormData();
+    fd.append('action', 'add');
+    fd.append('ajax', '1');
+    fd.append('number', number);
+    fd.append('reason', 'blocked by agent');
+    fd.append('domain', domain);
+    fetch('block.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+    }).then(r => r.json()).then(d => {
+        if (d && d.ok) {
+            showToast('Blocked ' + number);
+            if (d.rows) renderBlacklist(d.rows);
+            else fetchBlacklist();
+        } else {
+            showToast((d && d.error) || 'Call declined; could not save block');
+        }
+    }).catch(() => showToast('Call declined; could not save block'));
+}
+
+function renderBlacklist(rows) {
+    const body = document.getElementById('blacklistBody');
+    if (!body) return;
+    rows = rows || [];
+    if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="4" class="rec-empty">No blocked numbers.</td></tr>';
+        return;
+    }
+    body.innerHTML = rows.map(r =>
+        '<tr><td>' + (r.display || r.digits) + '</td><td>' + (r.reason || '') + '</td><td>' + (r.agent || '') +
+        '</td><td><button type="button" class="btn-filter-clear" onclick="delBlacklist(\'' +
+        String(r.digits || '').replace(/'/g, '') + '\')">Remove</button></td></tr>'
+    ).join('');
+}
+
+function fetchBlacklist() {
+    fetch('blacklist.php?json=1&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' })
+        .then(r => r.json()).then(d => {
+            if (d && d.error && !(d.rows && d.rows.length)) {
+                const body = document.getElementById('blacklistBody');
+                if (body) body.innerHTML = '<tr><td colspan="4" class="rec-empty">' + d.error + '</td></tr>';
+                return;
+            }
+            renderBlacklist((d && d.rows) || []);
+        })
+        .catch(err => {
+            const body = document.getElementById('blacklistBody');
+            if (body) body.innerHTML = '<tr><td colspan="4" class="rec-empty">Could not load blacklist</td></tr>';
+        });
+}
+
+function addBlacklistManual() {
+    const number = (document.getElementById('blAddNumber') || {}).value || '';
+    const reason = (document.getElementById('blAddReason') || {}).value || 'blocked by agent';
+    const fd = new FormData();
+    fd.append('action', 'add');
+    fd.append('ajax', '1');
+    fd.append('number', number);
+    fd.append('reason', reason);
+    fd.append('domain', domain);
+    fetch('blacklist.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+    }).then(r => r.json()).then(d => {
+        if (d && d.ok) {
+            document.getElementById('blAddNumber').value = '';
+            renderBlacklist((d && d.rows) || []);
+            fetchBlacklist();
+            showToast('Number blocked');
+        } else showToast((d && d.error) || 'Could not block');
+    });
+}
+
+function delBlacklist(number) {
+    const fd = new FormData();
+    fd.append('action', 'del');
+    fd.append('ajax', '1');
+    fd.append('number', number);
+    fd.append('domain', domain);
+    fetch('blacklist.php', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: fd
+    }).then(r => r.json()).then(() => fetchBlacklist());
 }
 
 function toggleHold() {
@@ -4279,7 +4846,7 @@ function endCall() {
         document.getElementById('callTimer').style.display = 'none';
         document.getElementById('callTimer').textContent   = '00:00';
         document.getElementById('incomingScreen').style.display = 'none';
-        document.getElementById('dpPanel').style.display = '';
+        document.getElementById('dpPanel').style.display = 'block';
     } catch(e) { console.error('endCall UI reset error:', e); }
 
     // ── Secondary UI (optional elements) ───────────────────────────────────
@@ -4554,6 +5121,8 @@ function performLookup(query) {
             // 1. Render Contact Profile
             const contact = data.contact;
             if (contact) {
+                applyCrmNameToCallUi(query, contact);
+                const cid = contact.contact_id ? Number(contact.contact_id) : 0;
                 document.getElementById('lookupProfileBox').innerHTML = `
                     <div class="profile-title">${contact.full_name || 'Unknown Customer'}</div>
                     <div class="profile-item"><span>Phone:</span><span>${contact.phone || '-'}</span></div>
@@ -4563,9 +5132,11 @@ function performLookup(query) {
                     <div class="profile-item"><span>Language:</span><span>${contact.language || 'English'}</span></div>
                     <div class="profile-item"><span>Account Type:</span><span>${contact.account_type || 'Customer'}</span></div>
                     <div style="font-size:12px; margin-top:8px; color:#555; line-height:1.4;"><strong>Notes:</strong><br>${contact.notes || 'None'}</div>
-                    <div style="display:flex; gap: 8px; margin-top: 12px;">
-                        <button class="btn-filter" onclick="openSmsModal('${contact.phone}')" style="flex:1; padding: 6px; font-size:11px;">SMS Update</button>
-                        <button class="btn-filter" onclick="openCallbackModal('${contact.phone}', '${contact.full_name}')" style="flex:1; padding: 6px; font-size:11px; background:#ffc107; color:#333;">Schedule Callback</button>
+                    <div style="display:flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;">
+                        <button class="btn-filter" onclick="openSmsModal('${contact.phone}')" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">SMS Update</button>
+                        <button class="btn-filter" onclick="openCallbackModal('${contact.phone}', '${(contact.full_name || '').replace(/'/g, "\\'")}')" style="flex:1; padding: 6px; font-size:11px; background:#ffc107; color:#333; min-width:90px;">Schedule Callback</button>
+                        ${cid ? `<button class="btn-filter" onclick="openCrmPanel()" style="flex:1; padding: 6px; font-size:11px; min-width:90px;">Open CRM</button>
+                        <button class="btn-filter" onclick="deleteCrmContact(${cid})" style="flex:1; padding: 6px; font-size:11px; background:#fee2e2; color:#b91c1c; min-width:90px;">Delete Contact</button>` : ''}
                     </div>
                 `;
             } else {
@@ -4643,6 +5214,28 @@ function performLookup(query) {
             document.getElementById('lookupDeliveryBody').innerHTML = '<tr><td colspan="4" style="text-align:center; color:#ef4444; padding:12px;">Error loading deliveries.</td></tr>';
             document.getElementById('lookupTicketsBody').innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444; padding:12px;">Error loading tickets.</td></tr>';
         });
+}
+window.performLookup = performLookup;
+
+function deleteCrmContact(contactId) {
+    if (!contactId) return;
+    if (!confirm('Delete this CRM contact?')) return;
+    const domain = (window.SKYKIN && SKYKIN.domain) ? SKYKIN.domain : '';
+    fetch('crm.php?api=delete&id=' + encodeURIComponent(contactId) + '&domain=' + encodeURIComponent(domain), {
+        credentials: 'same-origin'
+    })
+        .then(function(r) { return r.json(); })
+        .then(function(res) {
+            if (!res || !res.ok) {
+                showToast('Delete failed');
+                return;
+            }
+            showToast('Contact deleted');
+            const q = document.getElementById('lookupQuery').value.trim();
+            if (q) performLookup(q);
+            else clearLookup();
+        })
+        .catch(function() { showToast('Delete failed'); });
 }
 
 function clearLookup() {
@@ -5081,6 +5674,120 @@ const {
 
 let ua = null, reg = null, session = null;
 
+// SKYKIN_SAFE_DECLINE_v3
+function stopOutboundPoll() {
+    if (window._outboundPoll) { clearInterval(window._outboundPoll); window._outboundPoll = null; }
+}
+function resetOutboundRingUi() {
+    stopOutboundPoll();
+    window._outboundRingPhase = false;
+    window._outSawBlegRing = false;
+    window._outAnswerTicks = 0;
+    window._outDeclineTicks = 0;
+    window._outMaxCh = 0;
+    window.stopRingback && window.stopRingback();
+    window.stopRingtone && window.stopRingtone();
+    try {
+        document.getElementById('btnHangup').style.display = 'none';
+        document.getElementById('btnCall').style.display = 'block';
+        document.getElementById('phonePopup').classList.remove('call-active');
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartTime = null;
+        document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent = '00:00';
+    } catch (e) {}
+    const ext = localStorage.getItem('sip_ext') || serverExt || '';
+    window.setSipStatus && window.setSipStatus('registered', 'Registered (' + ext + ')');
+}
+function endOutboundRing(agentHangup) {
+    const ext = localStorage.getItem('sip_ext') || serverExt || '';
+    const dest = window._outboundPollDest || window.lastDialedNumber || '';
+    fetch('index.php?action=outbound_stop&ext=' + encodeURIComponent(ext)
+        + '&dest=' + encodeURIComponent(dest)
+        + '&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' }).catch(function() {});
+    const s = session;
+    try {
+        if (s && !(s instanceof Invitation)
+            && s.state !== SessionState.Terminated
+            && s.state !== SessionState.Terminating) {
+            try { s.bye(); } catch (e) { try { s.cancel && s.cancel(); } catch (e2) {} }
+            try { s.dispose && s.dispose(); } catch (e) {}
+        }
+    } catch (e) {}
+    if (session === s) {
+        session = null;
+    }
+    if (agentHangup && callStartTime) {
+        if (window.endCall) window.endCall();
+    } else {
+        resetOutboundRingUi();
+    }
+}
+window.endOutboundRing = endOutboundRing;
+function startOutboundPoll(ext, dest) {
+    stopOutboundPoll();
+    ext = ext || localStorage.getItem('sip_ext') || serverExt || '';
+    dest = dest || window.lastDialedNumber || '';
+    window._outboundPollDest = dest;
+    window._outSawBlegRing = false;
+    window._outAnswerTicks = 0;
+    window._outDeclineTicks = 0;
+    window._outMaxCh = 0;
+    window._outboundPoll = setInterval(function() {
+        if (!session || session instanceof Invitation) { stopOutboundPoll(); return; }
+        if (session.state === SessionState.Terminated || session.state === SessionState.Terminating) {
+            stopOutboundPoll();
+            return;
+        }
+        if (!window._outboundRingPhase && callStartTime) { stopOutboundPoll(); return; }
+        fetch('index.php?action=outbound_live&ext=' + encodeURIComponent(ext)
+            + '&dest=' + encodeURIComponent(dest)
+            + '&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' })
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (!d || d.ok === false) return;
+                var bst = String(d.bleg_state || '').toUpperCase();
+                var ch = (typeof d.channels === 'number') ? d.channels : 0;
+                if (ch >= 2) {
+                    window._outMaxCh = Math.max(window._outMaxCh || 0, ch);
+                }
+                if (d.bleg) {
+                    window._outSawBlegRing = true;
+                }
+                var answered = !!(d.bleg && (bst === 'ACTIVE' || bst === 'ANSWER' || bst === 'EXECUTE'));
+                if (answered && !callStartTime) {
+                    window._outAnswerTicks = (window._outAnswerTicks || 0) + 1;
+                    if (window._outAnswerTicks >= 2) {
+                        window._outboundRingPhase = false;
+                        stopOutboundPoll();
+                        window.stopRingback && window.stopRingback();
+                        enableSenders(session);
+                        if (!session._skykinAudioAttached) {
+                            attachAudio(session);
+                        }
+                        window.startCallUI && window.startCallUI(dest || window.lastDialedNumber || '');
+                        window.showToast && window.showToast('Call connected');
+                    }
+                    return;
+                }
+                window._outAnswerTicks = 0;
+                var partnerGone = window._outboundRingPhase && !answered && (
+                    (window._outSawBlegRing && !d.bleg)
+                    || (window._outMaxCh >= 2 && ch <= 1 && d.agent && !d.bleg)
+                );
+                if (partnerGone) {
+                    window._outDeclineTicks = (window._outDeclineTicks || 0) + 1;
+                    if (window._outDeclineTicks >= 1) {
+                        endOutboundRing(false);
+                    }
+                } else if (!answered) {
+                    window._outDeclineTicks = 0;
+                }
+            }).catch(function() {});
+    }, 400);
+}
+
 // Chrome gathers ICE candidates from every network interface, and the agent PCs
 // carry several virtual adapters (VMware/WSL/Hyper-V) whose STUN queries are
 // never answered. SIP.js will not send an offer or an answer until gathering
@@ -5241,7 +5948,9 @@ function bindSession(s) {
     s.stateChange.addListener(state => {
         if (state === SessionState.Established || state === SessionState.Terminated
             || state === SessionState.Terminating) {
-            window.stopRingback && window.stopRingback();
+            if (s instanceof Invitation) {
+                window.stopRingback && window.stopRingback();
+            }
         }
         if (state === SessionState.Established) {
             s._skykinEstablished = true;
@@ -5249,6 +5958,11 @@ function bindSession(s) {
             const num = s instanceof Invitation
                 ? (s.remoteIdentity?.uri?.user || window.lastDialedNumber || '')
                 : (window.lastDialedNumber || '');
+            if (!(s instanceof Invitation)) {
+                window._outboundRingPhase = true;
+                startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, num);
+                return;
+            }
             window.startCallUI && window.startCallUI(num);
             attachAudio(s);
             window.showToast && window.showToast('Call connected');
@@ -5265,7 +5979,9 @@ function bindSession(s) {
             if (session === s) {
                 session = null;
             }
-            if (s._skykinEstablished) {
+            if (!(s instanceof Invitation) && !callStartTime) {
+                resetOutboundRingUi();
+            } else if (s._skykinEstablished) {
                 if (window.endCall) window.endCall();
             } else {
                 window.stopRingtone && window.stopRingtone();
@@ -5325,6 +6041,15 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
     ua.delegate = {
         onInvite(inv) {
+            // Already talking (or outbound still connecting): 486 so the
+            // other Ready agent can take this inbound. Do not steal the live call.
+            if (session && session !== inv
+                && (session.state === SessionState.Established
+                    || (session.state === SessionState.Establishing
+                        && !(session instanceof Invitation)))) {
+                try { inv.reject({ statusCode: 486 }); } catch (e) {}
+                return;
+            }
             if (session && session !== inv
                 && session.state !== SessionState.Established
                 && session.state !== SessionState.Terminated) {
@@ -5341,7 +6066,13 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || inv.request?.getHeader?.('From')?.match(/"?([^"<]+)"?\s*</)?.[1]
                 || 'Unknown';
             window.lastDialedNumber = num; window.lastCallType = 'Inbound';
-            try { inv.progress(); } catch (e) { console.warn('progress failed', e); }
+            // 180 without SDP. Do not attach WebRTC media (183/SDP) or Ethio
+            // starts the caller timer before Answer. Swallow progress errors:
+            // a failed 100rel/ICE path would 480 the INVITE and the incoming
+            // ring would vanish from the dashboard.
+            try {
+                inv.progress({ statusCode: 180 }).catch(function () {});
+            } catch (e) {}
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }
@@ -5355,6 +6086,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
     if (!uri) return;
 
@@ -5377,8 +6109,13 @@ window.sipBridge.makeCall = function(number) {
             sessionDescriptionHandlerModifiers: SDP_MODIFIERS
         });
         session = inv;
+        window.lastDialedNumber = number;
+        window.lastCallType = 'Outbound';
+        window._outboundRingPhase = true;
+        window._outMaxCh = 0;
         window.setSipStatus && window.setSipStatus('calling', 'Calling ' + number);
         bindSession(inv);
+        startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, number);
         return inv.invite({
             // 180/183 means the far end is actually alerting, so only start the
             // ringback then rather than the moment Call is pressed.
@@ -5386,10 +6123,16 @@ window.sipBridge.makeCall = function(number) {
                 onProgress: function() {
                     window.setSipStatus && window.setSipStatus('calling', 'Ringing ' + number);
                     window.startRingback && window.startRingback();
+                    enableSenders(inv);
+                    startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, number);
                 },
                 onAccept: function() {
-                    window.stopRingback && window.stopRingback();
-                    window.startCallUI && window.startCallUI(number);
+                    // pre_answer 200 — keep media; poll switches UI when B-leg ACTIVE.
+                    enableSenders(inv);
+                    if (!inv._skykinAudioAttached) {
+                        attachAudio(inv);
+                    }
+                    startOutboundPoll(localStorage.getItem('sip_ext') || serverExt, number);
                 }
             }
         }).catch(function(err) {
@@ -5415,6 +6158,23 @@ window.sipBridge.hangup = function() {
             session instanceof Invitation ? session.reject() : session.cancel?.();
         } else { session.bye(); }
     } catch(e) {}
+    session = null;
+};
+
+// Decline an inbound ring with 603 so FreeSWITCH aborts the whole caller
+// (does not roll the call to the other agent). 486 = already in a call.
+window.sipBridge.decline = function() {
+    if (!session) return;
+    try {
+        if (session instanceof Invitation
+            && (session.state === SessionState.Initial
+                || session.state === SessionState.Establishing)) {
+            session.reject({ statusCode: 603 });
+        } else if (window.sipBridge.hangup) {
+            window.sipBridge.hangup();
+            return;
+        }
+    } catch (e) {}
     session = null;
 };
 

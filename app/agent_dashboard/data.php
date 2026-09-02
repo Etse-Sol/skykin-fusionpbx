@@ -104,11 +104,13 @@ try {
     if ($extension) {
         $data['resolved_ext'] = $extension;
         // Total calls today for this extension
+        $rep = skykin_cdr_reportable_sql();
+        $miss = skykin_cdr_missed_sql();
         $stmt = $db->prepare("
             SELECT 
-                COUNT(*) as total,
+                SUM(CASE WHEN {$rep} THEN 1 ELSE 0 END) as total,
                 SUM(CASE WHEN billsec > 0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec = 0 THEN 1 ELSE 0 END) as missed,
+                SUM(CASE WHEN {$miss} THEN 1 ELSE 0 END) as missed,
                 COALESCE(AVG(CASE WHEN billsec > 0 THEN billsec END), 0) as avg_dur,
                 COALESCE(SUM(billsec), 0) as total_talk,
                 COALESCE(SUM(duration), 0) as total_dur,
@@ -167,7 +169,7 @@ try {
         // Recent calls
         $recent_stmt = $db->prepare("
             SELECT 
-                to_char(to_timestamp(start_epoch), 'HH24:MI') as call_time,
+                " . skykin_cdr_time_sql('HH24:MI') . " as call_time,
                 direction,
                 caller_id_number,
                 destination_number,
@@ -195,9 +197,25 @@ try {
         $recent_rows = $recent_stmt->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($recent_rows as $r) {
-            $is_inbound = ($r['destination_number'] == $extension);
+            $digits = preg_replace('/\D+/', '', (string)$r['destination_number']);
+            $is_inbound = (strtolower((string)($r['direction'] ?? '')) === 'inbound')
+                || ($r['destination_number'] == $extension)
+                || ($r['destination_number'] == '8000')
+                || (strpos((string)$r['destination_number'], '+') === 0)
+                || (bool)preg_match('/11113875\d$/', (string)$digits)
+                || (bool)preg_match('/11619803[5-9]$/', (string)$digits);
             $type = $is_inbound ? 'Inbound' : 'Outbound';
-            $number = $is_inbound ? $r['caller_id_number'] : $r['destination_number'];
+            if ($is_inbound) {
+                $cid = (string)($r['caller_id_number'] ?? '');
+                $cid_digits = preg_replace('/\D+/', '', $cid);
+                if (preg_match('/^(0?9\d{8}|2519\d{8})$/', (string)$cid_digits)) {
+                    $number = $cid;
+                } else {
+                    $number = 'Unknown';
+                }
+            } else {
+                $number = $r['destination_number'];
+            }
             $answered = $r['billsec'] > 0;
             $mins = floor($r['billsec'] / 60);
             $secs = $r['billsec'] % 60;
@@ -206,7 +224,7 @@ try {
                 'type'        => $type,
                 'number'      => $number ?: 'Unknown',
                 'duration'    => sprintf('%d:%02d', $mins, $secs),
-                'status'      => $answered ? 'Answered' : 'Missed',
+                'status'      => skykin_cdr_result_label($r),
                 'disposition' => $answered ? 'Completed' : ($r['hangup_cause'] ?? 'No Answer')
             ];
         }

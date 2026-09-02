@@ -26,7 +26,10 @@
 	{/if}
 
 {*//set favorite icon *}
-	<link rel='icon' href='{$settings.theme.favicon}'>
+	<link rel='icon' type='image/png' sizes='32x32' href='/app/agent_dashboard/assets/skykin-favicon.png?v=5'>
+	<link rel='shortcut icon' type='image/png' href='/app/agent_dashboard/assets/skykin-favicon.png?v=5'>
+	<link rel='icon' href='/app/agent_dashboard/assets/favicon.ico?v=5'>
+	<link rel='apple-touch-icon' sizes='180x180' href='/app/agent_dashboard/assets/apple-touch-icon.png?v=5'>
 
 {*//document title *}
 	<title>{$document_title}</title>
@@ -1302,7 +1305,7 @@
 	{if !empty($login_page)}
 		<div id='default_login'>
 			<a href='{$project_path}/'><img id='login_logo' style='width: {$login_logo_width}; height: {$login_logo_height};' src='{$login_logo_source}'></a><br />
-				<div style='text-align:center;margin:8px 0 15px 0;'><span style='color:#0047AB;font-family:Arial;font-size:22px;font-weight:bold;'>SkyKin Technologies</span><br/><span style='color:#888;font-size:12px;'>Call Center Platform</span></div>
+				<div style='text-align:center;margin:8px 0 15px 0;'><span style='color:#0047AB;font-family:Arial;font-size:22px;font-weight:bold;'>Sky Connect</span><br/><span style='color:#888;font-size:12px;'>Call Center Platform</span><br/><span style='color:#aaa;font-size:11px;'>Powered by SkyKin Technology</span></div>
 			{$document_body}
 		</div>
 		<div id='footer_login'>

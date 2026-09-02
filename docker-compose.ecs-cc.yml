@@ -1,0 +1,134 @@
+# SkyKin Call Center — ecs-cc production backup (10.0.0.77)
+# SIP/IPs/passwords stay in .env (copy .env.ecs-cc.example).
+#
+# Start:  docker compose -f docker-compose.ecs-cc.yml up --build -d
+# App:    https://196.189.236.126:8188  (or https://webcc.skyconnectsolutions.et:8188)
+#
+# Recreating skykin-freeswitch re-runs docker/freeswitch/entrypoint.sh, then
+# overlays /opt/skykin/fs-config (copy of the live backup). Do not recreate
+# until that directory exists and contains skykin_inbound.lua plus SIP*.xml.
+# Recreating skykin-web re-applies docker/nginx.conf (/wss/ + 497 port).
+# Do not start this gateway while live (10.0.0.93) still holds the IMS REGISTER.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: skykin-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-fusionpbx}
+      POSTGRES_USER: ${DB_USER:-fusionpbx}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-fusionpbx}
+    volumes:
+      - skykin_pgdata:/var/lib/postgresql/data
+    ports:
+      - "${DB_PUBLISH_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fusionpbx} -d ${DB_NAME:-fusionpbx}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - skykin
+
+  freeswitch:
+    build:
+      context: ./docker/freeswitch
+    container_name: skykin-freeswitch
+    environment:
+      ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
+      ESL_LISTEN_IP: "0.0.0.0"
+      RTP_START_PORT: ${RTP_START_PORT:-16384}
+      RTP_END_PORT: ${RTP_END_PORT:-16584}
+      FS_DOMAIN: ${FS_DOMAIN:-client1.skykin.local}
+      EXTERNAL_SIP_IP: ${EXTERNAL_SIP_IP:-}
+      EXTERNAL_RTP_IP: ${EXTERNAL_RTP_IP:-}
+      FUSIONPBX_DB_HOST: 127.0.0.1
+      FUSIONPBX_DB_PORT: ${DB_PUBLISH_PORT:-5433}
+      FUSIONPBX_DB_NAME: ${DB_NAME:-fusionpbx}
+      FUSIONPBX_DB_USER: ${DB_USER:-fusionpbx}
+      FUSIONPBX_DB_PASSWORD: ${DB_PASSWORD:-fusionpbx}
+      FS_DIRECTORY_USERS: ${FS_DIRECTORY_USERS:-}
+      FS_QUEUE_EXT: ${FS_QUEUE_EXT:-8000}
+      FS_QUEUE_STRATEGY: ${FS_QUEUE_STRATEGY:-longest-idle-agent}
+      FS_QUEUE_AGENTS: ${FS_QUEUE_AGENTS:-}
+      FS_OUTBOUND_GATEWAY: ${FS_OUTBOUND_GATEWAY:-SIP}
+      FS_OUTBOUND_PROXY: ${FS_OUTBOUND_PROXY:-}
+      FS_OUTBOUND_USERNAME: ${FS_OUTBOUND_USERNAME:-}
+      FS_OUTBOUND_PASSWORD: ${FS_OUTBOUND_PASSWORD:-}
+      FS_OUTBOUND_CID: ${FS_OUTBOUND_CID:-}
+      FS_OUTBOUND_REGISTER: ${FS_OUTBOUND_REGISTER:-false}
+      FS_OUTBOUND_REALM: ${FS_OUTBOUND_REALM:-}
+      FS_OUTBOUND_AUTH_USERNAME: ${FS_OUTBOUND_AUTH_USERNAME:-}
+      FS_OUTBOUND_FROM_DOMAIN: ${FS_OUTBOUND_FROM_DOMAIN:-}
+      FS_OUTBOUND_REGISTER_PROXY: ${FS_OUTBOUND_REGISTER_PROXY:-}
+      FS_LAN_RTP_IP: ${FS_LAN_RTP_IP:-}
+      FS_INBOUND_DID_REGEX: ${FS_INBOUND_DID_REGEX:-}
+      CDR_URL: ${CDR_URL:-http://127.0.0.1:8190/app/xml_cdr/xml_cdr_import.php}
+      CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
+    volumes:
+      - skykin_recordings:/var/lib/freeswitch/recordings
+      - ./app/switch/resources/scripts:/usr/share/freeswitch/scripts:ro
+      # Live backup overlay (DID XML, Ethio gateways, inbound Lua). Create this
+      # directory from /opt/skykin/backups/fs-*/live before recreating the container.
+      - /opt/skykin/fs-config:/opt/skykin/fs-live:ro
+    restart: unless-stopped
+    network_mode: host
+    # Image healthcheck uses fs_cli with the default ClueCon password and fails
+    # when ESL_PASSWORD is custom. Host-network RTP also needs UDP 16384-16584
+    # open on the cloud security group or calls connect with no audio.
+    healthcheck:
+      test: ["CMD-SHELL", "fs_cli -H 127.0.0.1 -P 8021 -p $$ESL_PASSWORD -x status | grep -q UP || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    container_name: skykin-web
+    depends_on:
+      db:
+        condition: service_healthy
+      freeswitch:
+        condition: service_started
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-fusionpbx}
+      DB_USER: ${DB_USER:-fusionpbx}
+      DB_PASSWORD: ${DB_PASSWORD:-fusionpbx}
+      ESL_HOST: ${ESL_HOST:-10.0.0.77}
+      ESL_PORT: ${ESL_PORT:-8021}
+      ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
+      # FusionPBX SIP domain only — not the public hostname webcc.skyconnectsolutions.et
+      SKYKIN_DOMAIN: ${SKYKIN_DOMAIN:-${FS_DOMAIN:-}}
+      CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
+      FREESWITCH_WS_UPSTREAM: ${FREESWITCH_WS_UPSTREAM:-10.0.0.77:18081}
+      FREESWITCH_WS_SCHEME: ${FREESWITCH_WS_SCHEME:-http}
+      SERVER_NAME: ${TLS_CN:-skykin.local}
+      TLS_CN: ${TLS_CN:-skykin.local}
+      TLS_SAN_IP: ${TLS_SAN_IP:-}
+      WEB_HTTPS_PORT: ${WEB_HTTPS_PORT:-8188}
+    ports:
+      - "${WEB_PORT:-8190}:80"
+      - "${WEB_HTTPS_PORT:-8188}:443"
+    volumes:
+      - ./app/agent_dashboard:/var/www/fusionpbx/app/agent_dashboard
+      - ./favicon.png:/var/www/fusionpbx/favicon.png:ro
+      - ./favicon.ico:/var/www/fusionpbx/favicon.ico:ro
+      - ./login.php:/var/www/fusionpbx/login.php:ro
+      - ./core/authentication/resources/views:/var/www/fusionpbx/core/authentication/resources/views:ro
+      - ./resources/skykin_favicon.php:/var/www/fusionpbx/resources/skykin_favicon.php:ro
+      - ./resources/require.php:/var/www/fusionpbx/resources/require.php:ro
+      - skykin_recordings:/var/lib/freeswitch/recordings
+    networks:
+      - skykin
+    restart: unless-stopped
+
+networks:
+  skykin:
+    driver: bridge
+    # sms-nginx on this network must upstream to sms-web / sms-api, not web / api.
+
+volumes:
+  skykin_pgdata:
+  skykin_recordings:

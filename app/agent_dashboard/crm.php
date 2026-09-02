@@ -10,6 +10,7 @@ skykin_require_login($is_api);
 $logged_in_user   = $_SESSION['username']    ?? '';
 $logged_in_domain = skykin_default_domain();
 $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$embed   = !empty($_GET['embed']);
 
 function getDB() {
     static $db = null;
@@ -77,20 +78,20 @@ if (isset($_GET['api'])) {
         if ($_GET['api'] === 'lookup') {
             $phone = $_GET['phone'] ?? '';
             if (!$phone) { echo json_encode(null); exit; }
-            // Strip common prefixes for flexible matching
-            $clean = preg_replace('/^(\+251|00251|0)/', '', $phone);
-            $s = $db->prepare("SELECT * FROM skykin_contacts
-                WHERE phone LIKE :q OR alt_phone LIKE :q
-                   OR phone LIKE :c OR alt_phone LIKE :c
-                ORDER BY contact_id LIMIT 1");
-            $s->execute([':q'=>'%'.$phone.'%', ':c'=>'%'.$clean.'%']);
-            $row = $s->fetch(PDO::FETCH_ASSOC);
+            $row = skykin_crm_find_contact($db, $phone);
+            if (!$row) {
+                $norm = skykin_normalize_phone_storage($phone);
+                if ($norm !== '' && $norm !== $phone) {
+                    $row = skykin_crm_find_contact($db, $norm);
+                }
+            }
             // Also get call history for this contact
             if ($row) {
+                $clean = preg_replace('/^(\+251|00251|0)/', '', $phone);
                 $isSQLite = ($db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite');
                 $timeExpr = $isSQLite
                     ? "datetime(start_epoch, 'unixepoch', 'localtime')"
-                    : "to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI')";
+                    : skykin_cdr_time_sql('YYYY-MM-DD HH24:MI');
                 $s2 = $db->prepare("SELECT
                     {$timeExpr} as call_time,
                     direction, billsec, destination_number, hangup_cause
@@ -133,7 +134,7 @@ if (isset($_GET['api'])) {
                     phone=:ph, alt_phone=:ap, full_name=:fn, email=:em,
                     company=:co, language=:la, account_type=:at, notes=:no,
                     updated_at={$nowFunc} WHERE contact_id=:id");
-                $s->execute([':ph'=>$body['phone']??'',':ap'=>$body['alt_phone']??'',
+                $s->execute([':ph'=>skykin_normalize_phone_storage($body['phone']??''),':ap'=>skykin_normalize_phone_storage($body['alt_phone']??''),
                     ':fn'=>$body['full_name']??'',':em'=>$body['email']??'',
                     ':co'=>$body['company']??'',':la'=>$body['language']??'English',
                     ':at'=>$body['account_type']??'Customer',':no'=>$body['notes']??'',':id'=>$id]);
@@ -142,7 +143,7 @@ if (isset($_GET['api'])) {
                 $s = $db->prepare("INSERT INTO skykin_contacts
                     (phone,alt_phone,full_name,email,company,language,account_type,notes)
                     VALUES (:ph,:ap,:fn,:em,:co,:la,:at,:no)");
-                $s->execute([':ph'=>$body['phone']??'',':ap'=>$body['alt_phone']??'',
+                $s->execute([':ph'=>skykin_normalize_phone_storage($body['phone']??''),':ap'=>skykin_normalize_phone_storage($body['alt_phone']??''),
                     ':fn'=>$body['full_name']??'',':em'=>$body['email']??'',
                     ':co'=>$body['company']??'',':la'=>$body['language']??'English',
                     ':at'=>$body['account_type']??'Customer',':no'=>$body['notes']??'']);
@@ -153,9 +154,14 @@ if (isset($_GET['api'])) {
 
         // Delete contact
         if ($_GET['api'] === 'delete' && isset($_GET['id'])) {
-            $s = $db->prepare("DELETE FROM skykin_contacts WHERE contact_id=:id");
-            $s->execute([':id'=>(int)$_GET['id']]);
-            echo json_encode(['ok'=>true]);
+            $id = (int)$_GET['id'];
+            if ($id <= 0) {
+                echo json_encode(['ok' => false, 'error' => 'Invalid contact id']);
+                exit;
+            }
+            $s = $db->prepare('DELETE FROM skykin_contacts WHERE contact_id=:id');
+            $s->execute([':id' => $id]);
+            echo json_encode(['ok' => true, 'deleted' => $s->rowCount()]);
             exit;
         }
 
@@ -166,9 +172,10 @@ if (isset($_GET['api'])) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SkyKin – CRM</title>
+<title>Sky Connect – CRM</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
@@ -203,7 +210,13 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .contact-item{padding:14px 16px;border-bottom:1px solid #21262d;cursor:pointer;transition:.15s}
 .contact-item:hover{background:#f0f2f5}
 .contact-item.selected{background:#388bfd18;border-left:3px solid #58a6ff}
-.ct-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
+.ct-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;gap:8px}
+.ct-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.btn-icon-delete{background:transparent;border:none;color:#dc2626;cursor:pointer;padding:4px 6px;border-radius:6px;font-size:14px;line-height:1}
+.btn-icon-delete:hover{background:#fee2e2}
+.form-actions{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:4px;align-items:stretch}
+.form-actions .btn-save{margin-top:0}
+.form-actions .btn-delete{margin-top:0;width:auto;min-width:120px;white-space:nowrap}
 .ct-name{font-size:14px;font-weight:600}
 .ct-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
 .ct-badge.VIP{background:#d2992233;color:#d29922}
@@ -301,6 +314,11 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 .ch-row{background:#f8fafc;border-radius:9px;padding:9px 11px}
 .empty-state{color:var(--sk-muted)}
 
+body.embed-mode{background:var(--sk-canvas)}
+body.embed-mode .topbar{display:none}
+body.embed-mode .layout{height:calc(100vh - 62px)}
+body.embed-mode .crm-footer{display:none}
+
 @media(max-width:850px){
   .topbar{padding:0 14px}.brand span,.topbar-right .user-pill{display:none}
   .nav-links{overflow-x:auto}.nav-links a{white-space:nowrap;padding:8px}
@@ -309,11 +327,12 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
 }
 </style>
 </head>
-<body>
+<body<?php echo $embed ? ' class="embed-mode"' : ''; ?>>
 
+<?php if (!$embed): ?>
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand"><span class="brand-sky">SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
+    <div class="brand"><span class="brand-sky">Sky</span> Connect <span class="role-badge">SUPERVISOR</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php">Reports</a>
@@ -328,6 +347,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
     <a href="/logout.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
   </div>
 </div>
+<?php endif; ?>
 
 <div class="toolbar">
   <input type="text" id="searchBox" placeholder="Search by name, phone, company..." oninput="loadContacts()" autofocus>
@@ -369,8 +389,10 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
         </select>
       </div>
       <div class="form-field"><label>Notes</label><textarea id="fNotes" placeholder="Any notes about this customer..."></textarea></div>
-      <button class="btn-save" onclick="saveContact()">Save Contact</button>
-      <button class="btn-delete" id="btnDelete" onclick="deleteContact()" style="display:none">Delete Contact</button>
+      <div class="form-actions">
+        <button class="btn-save" type="button" onclick="saveContact()">Save Contact</button>
+        <button class="btn-delete" type="button" id="btnDelete" onclick="deleteContact()" style="display:none">Delete</button>
+      </div>
 
       <!-- Call history for this contact -->
       <div class="call-history" id="callHistorySection" style="display:none">
@@ -380,6 +402,7 @@ body{background:var(--sk-canvas);color:var(--sk-text);font-size:14px}
     </div>
   </div>
 </div>
+<div class="crm-footer" style="text-align:center;font-size:11px;color:#aaa;padding:16px 24px">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 
 <script>
 const DOMAIN = '<?php echo $domain; ?>';
@@ -394,17 +417,31 @@ async function loadContacts() {
     if (!allContacts.length) { list.innerHTML='<div class="empty-state">No contacts found</div>'; return; }
     const langColors = {Amharic:'#f85149',English:'#3fb950',Oromo:'#58a6ff',Tigrinya:'#d29922',Other:'#8b949e'};
     list.innerHTML = allContacts.map(c => `
-      <div class="contact-item" onclick='editContact(${JSON.stringify(JSON.stringify(c)).slice(1,-1)})'>
+      <div class="contact-item" data-id="${c.contact_id}" onclick="editContactById(${c.contact_id})">
         <div class="ct-top">
-          <span class="ct-name">${c.full_name}</span>
-          <span class="ct-badge ${c.account_type}">${c.account_type}</span>
+          <span class="ct-name">${escapeHtml(c.full_name)}</span>
+          <div class="ct-actions">
+            <span class="ct-badge ${escapeHtml(c.account_type)}">${escapeHtml(c.account_type)}</span>
+            <button type="button" class="btn-icon-delete" title="Delete contact"
+              onclick="deleteContactById(${c.contact_id}, event)">&#128465;</button>
+          </div>
         </div>
         <div class="ct-meta">
-          <span>${c.phone}</span>
-          <span><span class="lang-dot lang-${c.language}" style="background:${langColors[c.language]||'#8b949e'}"></span>${c.language}</span>
-          ${c.company?`<span>${c.company}</span>`:''}
+          <span>${escapeHtml(c.phone)}</span>
+          <span><span class="lang-dot lang-${escapeHtml(c.language)}" style="background:${langColors[c.language]||'#8b949e'}"></span>${escapeHtml(c.language)}</span>
+          ${c.company?`<span>${escapeHtml(c.company)}</span>`:''}
         </div>
       </div>`).join('');
+}
+
+function escapeHtml(s) {
+    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function editContactById(id) {
+    const c = allContacts.find(x => String(x.contact_id) === String(id));
+    if (!c) return;
+    editContact(c);
 }
 
 function newContact() {
@@ -425,10 +462,13 @@ function newContact() {
     document.getElementById('callHistorySection').style.display = 'none';
 }
 
-function editContact(jsonStr) {
-    const c = JSON.parse(jsonStr);
-    document.querySelectorAll('.contact-item').forEach(e=>e.classList.remove('selected'));
-    event.currentTarget.classList.add('selected');
+function editContact(c) {
+    if (typeof c === 'string') {
+        try { c = JSON.parse(c); } catch (e) { return; }
+    }
+    document.querySelectorAll('.contact-item').forEach(e => {
+        e.classList.toggle('selected', String(e.dataset.id) === String(c.contact_id));
+    });
     document.getElementById('panelEmpty').style.display = 'none';
     document.getElementById('panelForm').style.display  = 'block';
     document.getElementById('panelTitle').textContent   = 'Edit Contact';
@@ -480,17 +520,30 @@ async function saveContact() {
     else alert('Error: '+(r.error||'Unknown'));
 }
 
-async function deleteContact() {
-    const id = document.getElementById('fId').value;
+async function deleteContactById(id, ev) {
+    if (ev) { ev.stopPropagation(); ev.preventDefault(); }
     if (!id) return;
-    if (!confirm('Delete this contact?')) return;
-    await fetch(`crm.php?api=delete&id=${id}&domain=${DOMAIN}`);
+    const c = allContacts.find(x => String(x.contact_id) === String(id));
+    const label = c ? (c.full_name + ' (' + c.phone + ')') : ('contact #' + id);
+    if (!confirm('Delete ' + label + '?')) return;
+    const resp = await fetch(`crm.php?api=delete&id=${encodeURIComponent(id)}&domain=${DOMAIN}`);
+    const r = await resp.json().catch(() => ({}));
+    if (!r.ok) { alert('Delete failed: ' + (r.error || 'Unknown error')); return; }
     document.getElementById('panelForm').style.display = 'none';
     document.getElementById('panelEmpty').style.display = 'block';
     loadContacts();
 }
 
+async function deleteContact() {
+    const id = document.getElementById('fId').value;
+    await deleteContactById(id);
+}
+
 loadContacts();
 </script>
+<script>
+<?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
 </body>
 </html>

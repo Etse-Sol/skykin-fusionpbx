@@ -9,6 +9,7 @@ skykin_require_groups(['superadmin', 'admin', 'supervisor'], $is_api);
 $logged_in_user   = $_SESSION['username']    ?? '';
 $logged_in_domain = skykin_default_domain();
 $domain  = htmlspecialchars(skykin_domain_param($_GET['domain'] ?? null));
+$embed   = !empty($_GET['embed']);
 $today   = date('Y-m-d');
 
 // ── DB helper ──────────────────────────────────────────────────────────────
@@ -55,35 +56,21 @@ if (isset($_GET['api'])) {
 
     try {
         $db = getDB();
+        $repSql = skykin_cdr_reportable_sql();
+        $missSql = skykin_cdr_missed_sql();
+        $ansSql = skykin_cdr_answered_sql();
 
         // ── Daily call volume ──────────────────────────────────────────────
         if ($api === 'daily_volume') {
-            $s = $db->prepare("SELECT
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as day,
-                COUNT(*) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound'  THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local'    THEN 1 ELSE 0 END) as local,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
-                GROUP BY day ORDER BY day");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_daily_volume($rows));
             exit;
         }
 
         // ── Hourly heatmap ────────────────────────────────────────────────
         if ($api === 'hourly_heatmap') {
-            $s = $db->prepare("SELECT
-                EXTRACT(DOW FROM to_timestamp(start_epoch))::int as dow,
-                EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
-                COUNT(*) as total
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
-                GROUP BY dow, hour ORDER BY dow, hour");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_hourly_heatmap($rows));
             exit;
         }
 
@@ -98,35 +85,24 @@ if (isset($_GET['api'])) {
             $exts = $s->fetchAll(PDO::FETCH_ASSOC);
             $rows = [];
             foreach ($exts as $ex) {
-                $ext = $ex['extension'];
-                $s2 = $db->prepare("SELECT
-                    COUNT(*) as total,
-                    SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                    SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-                    COALESCE(SUM(billsec),0) as total_talk,
-                    ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
-                    SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
-                    SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                    SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local
-                    FROM v_xml_cdr WHERE domain_name=:d
-                    AND (caller_id_number=:e OR destination_number=:e)
-                    AND start_epoch>=:ts AND start_epoch<=:te");
-                $s2->execute([':d'=>$dom,':e'=>$ext,':ts'=>$ts,':te'=>$te]);
-                $r = $s2->fetch(PDO::FETCH_ASSOC);
-                $answered = (int)($r['answered'] ?? 0);
-                $total    = (int)($r['total']    ?? 0);
+                $st = skykin_cdr_agent_stats($db, $dom, (string)$ex['extension'], $ts, $te);
+                $answered = (int)($st['answered'] ?? 0);
+                $total    = (int)($st['total'] ?? 0);
+                if ($total < 1 && $answered < 1) {
+                    continue;
+                }
                 $rows[] = [
-                    'ext'        => $ext,
+                    'ext'        => $ex['extension'],
                     'name'       => $ex['name'],
                     'total'      => $total,
                     'answered'   => $answered,
-                    'missed'     => (int)($r['missed']     ?? 0),
-                    'inbound'    => (int)($r['inbound']    ?? 0),
-                    'outbound'   => (int)($r['outbound']   ?? 0),
-                    'local'      => (int)($r['local']      ?? 0),
-                    'total_talk' => (int)($r['total_talk'] ?? 0),
-                    'avg_dur'    => (int)($r['avg_dur']    ?? 0),
-                    'answer_rate'=> $total > 0 ? round($answered/$total*100,1) : 0,
+                    'missed'     => (int)($st['missed'] ?? 0),
+                    'inbound'    => 0,
+                    'outbound'   => 0,
+                    'local'      => 0,
+                    'total_talk' => (int)($st['total_talk'] ?? 0),
+                    'avg_dur'    => (int)($st['avg_dur'] ?? 0),
+                    'answer_rate'=> $total > 0 ? round($answered / $total * 100, 1) : 0,
                 ];
             }
             // Sort by total calls desc
@@ -137,58 +113,54 @@ if (isset($_GET['api'])) {
 
         // ── Summary KPIs ──────────────────────────────────────────────────
         if ($api === 'summary') {
-            $s = $db->prepare("SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local,
-                COALESCE(SUM(billsec),0) as total_talk,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur,
-                ROUND(AVG(CASE WHEN billsec=0 THEN 1 ELSE 0 END)*100::numeric,1) as abandon_rate
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetch(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_period_metrics($rows));
             exit;
         }
 
         // ── Hourly volume ─────────────────────────────────────────────────
         if ($api === 'hourly_volume') {
-            $s = $db->prepare("SELECT
-                EXTRACT(HOUR FROM to_timestamp(start_epoch))::int as hour,
-                COUNT(*) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed
-                FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
-                GROUP BY hour ORDER BY hour");
-            $s->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te);
+            echo json_encode(skykin_cdr_hourly_volume($rows));
             exit;
         }
 
         // ── Filtered call details ──────────────────────────────────────────
         if ($api === 'call_list') {
             $type = $_GET['type'] ?? 'all';
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
-            $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
-            if ($type === 'answered') {
-                $where .= " AND billsec>0";
-            } elseif ($type === 'missed') {
-                $where .= " AND billsec=0";
-            } elseif (in_array($type, ['inbound','outbound','local'], true)) {
-                $where .= " AND direction=:dir";
-                $params[':dir'] = $type;
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te, '', [], 2000);
+            $out = [];
+            foreach ($rows as $r) {
+                $result = strtolower(skykin_cdr_result_label($r));
+                $dir = strtolower(trim((string)($r['direction'] ?? '')));
+                if ($type === 'answered' && $result !== 'answered') {
+                    continue;
+                }
+                if ($type === 'missed' && $result !== 'missed') {
+                    continue;
+                }
+                if ($type === 'failed' && $result !== 'failed') {
+                    continue;
+                }
+                if (in_array($type, ['inbound', 'outbound', 'local'], true) && $dir !== $type) {
+                    continue;
+                }
+                $out[] = [
+                    'call_time' => $r['call_time'] ?? '',
+                    'caller_id_name' => $r['caller_id_name'] ?? '',
+                    'caller_id_number' => $r['caller_id_number'] ?? '',
+                    'destination_number' => $r['destination_number'] ?? '',
+                    'direction' => $r['direction'] ?? '',
+                    'duration' => $r['duration'] ?? 0,
+                    'billsec' => $r['billsec'] ?? 0,
+                    'hangup_cause' => $r['hangup_cause'] ?? '',
+                    'result' => $result,
+                ];
+                if (count($out) >= 500) {
+                    break;
+                }
             }
-            $s = $db->prepare("SELECT
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
-                caller_id_name, caller_id_number, destination_number,
-                direction, duration, billsec, hangup_cause,
-                CASE WHEN billsec>0 THEN 'answered' ELSE 'missed' END as result
-                FROM v_xml_cdr WHERE {$where}
-                ORDER BY start_epoch DESC LIMIT 500");
-            $s->execute($params);
-            echo json_encode($s->fetchAll(PDO::FETCH_ASSOC));
+            echo json_encode($out);
             exit;
         }
 
@@ -196,9 +168,9 @@ if (isset($_GET['api'])) {
         if ($api === 'queue_sla') {
             $s = $db->prepare("SELECT
                 destination_number as queue_num,
-                COUNT(*) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_dur
+                SUM(CASE WHEN {$repSql} THEN 1 ELSE 0 END) as total,
+                SUM(CASE WHEN {$ansSql} THEN 1 ELSE 0 END) as answered,
+                ROUND(AVG(CASE WHEN {$ansSql} THEN billsec ELSE NULL END)::numeric,0) as avg_dur
                 FROM v_xml_cdr WHERE domain_name=:d
                 AND start_epoch>=:ts AND start_epoch<=:te
                 AND (destination_number ~ '^[89][0-9]{3}$' OR destination_number LIKE '800%')
@@ -217,41 +189,39 @@ if (isset($_GET['api'])) {
             }
 
             $type = $_GET['type'] ?? 'all';
-            $summaryStmt = $db->prepare("SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-                SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-                SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) as inbound,
-                SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) as outbound,
-                SUM(CASE WHEN direction='local' THEN 1 ELSE 0 END) as local,
-                COALESCE(SUM(billsec),0) as total_talk,
-                ROUND(AVG(CASE WHEN billsec>0 THEN billsec ELSE NULL END)::numeric,0) as avg_talk
-                FROM v_xml_cdr
-                WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te");
-            $summaryStmt->execute([':d'=>$dom,':ts'=>$ts,':te'=>$te]);
-            $summary = $summaryStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $rows = skykin_cdr_fetch_period($db, $dom, $ts, $te, '', [], 5000);
+            $summary = skykin_cdr_period_metrics($rows);
 
-            $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
-            $params = [':d'=>$dom,':ts'=>$ts,':te'=>$te];
-            if ($type === 'answered') {
-                $where .= " AND billsec>0";
-            } elseif ($type === 'missed') {
-                $where .= " AND billsec=0";
-            } elseif (in_array($type, ['inbound','outbound','local'], true)) {
-                $where .= " AND direction=:dir";
-                $params[':dir'] = $type;
+            $details = [];
+            foreach ($rows as $r) {
+                $result = skykin_cdr_result_label($r);
+                $dir = strtolower(trim((string)($r['direction'] ?? '')));
+                if ($type === 'answered' && $result !== 'Answered') {
+                    continue;
+                }
+                if ($type === 'missed' && $result !== 'Missed') {
+                    continue;
+                }
+                if ($type === 'failed' && $result !== 'Failed') {
+                    continue;
+                }
+                if (in_array($type, ['inbound', 'outbound', 'local'], true) && $dir !== $type) {
+                    continue;
+                }
+                $details[] = [
+                    'call_date' => $r['call_day'] ?? date('Y-m-d', (int)($r['start_epoch'] ?? 0)),
+                    'call_time' => preg_replace('/^.* /', '', (string)($r['call_time'] ?? '')),
+                    'caller_id_name' => $r['caller_id_name'] ?? '',
+                    'caller_id_number' => $r['caller_id_number'] ?? '',
+                    'destination_number' => $r['destination_number'] ?? '',
+                    'direction' => $r['direction'] ?? '',
+                    'result' => $result,
+                    'duration' => $r['duration'] ?? 0,
+                    'billsec' => $r['billsec'] ?? 0,
+                    'hangup_cause' => $r['hangup_cause'] ?? '',
+                    'record_name' => $r['record_name'] ?? '',
+                ];
             }
-            $detailStmt = $db->prepare("SELECT
-                to_char(to_timestamp(start_epoch),'YYYY-MM-DD') as call_date,
-                to_char(to_timestamp(start_epoch),'HH24:MI:SS') as call_time,
-                caller_id_name, caller_id_number, destination_number,
-                direction,
-                CASE WHEN billsec>0 THEN 'Answered' ELSE 'Missed' END as result,
-                duration, billsec, hangup_cause, record_name
-                FROM v_xml_cdr WHERE {$where}
-                ORDER BY start_epoch DESC LIMIT 5000");
-            $detailStmt->execute($params);
-            $details = $detailStmt->fetchAll(PDO::FETCH_ASSOC);
 
             $total = (int)($summary['total'] ?? 0);
             $answered = (int)($summary['answered'] ?? 0);
@@ -260,7 +230,7 @@ if (isset($_GET['api'])) {
             $missedRate = $total ? round($missed / $total * 100, 1) : 0;
 
             $rows = [];
-            $rows[] = '<row r="1" ht="30" customHeight="1">'.xlsxTextCell('A1','SKYKIN CALL REPORT',1).'</row>';
+            $rows[] = '<row r="1" ht="30" customHeight="1">'.xlsxTextCell('A1','SKY CONNECT CALL REPORT',1).'</row>';
             $rows[] = '<row r="2" ht="22" customHeight="1">'.xlsxTextCell(
                 'A2', 'Period: '.$from.' to '.$to.'   |   Detail filter: '.ucfirst($type), 2
             ).'</row>';
@@ -423,9 +393,10 @@ if (isset($_GET['api'])) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SkyKin – Reports</title>
+<title>Sky Connect – Reports</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -437,6 +408,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .topbar-left{display:flex;align-items:center;gap:20px}
 .brand{font-weight:700;font-size:17px;color:#fff;letter-spacing:.5px}
 .brand span{color:rgba(255,255,255,.8);font-weight:400}
+.sk-footer{text-align:center;font-size:11px;color:#aaa;padding:20px 24px}
 .nav-links{display:flex;gap:4px}
 .nav-links a{color:rgba(255,255,255,.75);text-decoration:none;padding:6px 14px;border-radius:6px;font-size:13px;transition:.2s}
 .nav-links a:hover,.nav-links a.active{background:rgba(255,255,255,.2);color:#fff}
@@ -519,13 +491,21 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 .result-badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700}
 .result-badge.answered{background:#dcfce7;color:#15803d}
 .result-badge.missed{background:#fee2e2;color:#b91c1c}
+.result-badge.failed{background:#ffedd5;color:#c2410c}
+.result-badge.failed,.result-badge.missed,.result-badge.answered{text-transform:capitalize}
+
+body.embed-mode{background:#f0f2f5}
+body.embed-mode .topbar{display:none}
+body.embed-mode .sk-footer{display:none}
+body.embed-mode .page{padding-top:12px}
 </style>
 </head>
-<body>
+<body<?php echo $embed ? ' class="embed-mode"' : ''; ?>>
 
+<?php if (!$embed): ?>
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand">SkyKin<span> Technologies</span></div>
+    <div class="brand">Sky <span>Connect</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php" class="active">Reports</a>
@@ -540,6 +520,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
     <a href="/logout.php" style="color:#f85149;font-size:12px;text-decoration:none">Logout</a>
   </div>
 </div>
+<?php endif; ?>
 
 <!-- Filters -->
 <div class="filters">
@@ -621,6 +602,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
       <button class="detail-tab active" data-type="all" onclick="loadDetails('all')">All</button>
       <button class="detail-tab" data-type="answered" onclick="loadDetails('answered')">Answered</button>
       <button class="detail-tab" data-type="missed" onclick="loadDetails('missed')">Missed</button>
+      <button class="detail-tab" data-type="failed" onclick="loadDetails('failed')">Failed</button>
       <button class="detail-tab" data-type="inbound" onclick="loadDetails('inbound')">Inbound</button>
       <button class="detail-tab" data-type="outbound" onclick="loadDetails('outbound')">Outbound</button>
       <button class="detail-tab" data-type="local" onclick="loadDetails('local')">Local</button>
@@ -634,6 +616,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
   </div>
 
 </div><!-- /page -->
+<div class="sk-footer">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 
 <script>
 const DOMAIN = '<?php echo $domain; ?>';
@@ -840,5 +823,9 @@ async function loadAll() {
 // Initial load
 loadAll();
 </script>
+<script>
+<?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
 </body>
 </html>

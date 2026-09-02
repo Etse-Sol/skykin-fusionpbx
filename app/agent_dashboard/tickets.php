@@ -101,9 +101,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'list_tickets') {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Department Tickets Dashboard - SkyKin</title>
+<title>Department Tickets Dashboard - Sky Connect</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #333; }
@@ -217,7 +218,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 
 <!-- HEADER -->
 <div class="header">
-    <div class="logo">SKY<span>KIN</span> Technologies</div>
+    <div class="logo">Sky <span>Connect</span></div>
     <div class="header-right">
         <span>Logged in: <strong><?php echo htmlspecialchars($logged_in_user); ?></strong></span>
         <a href="/app/agent_dashboard/index.php">Back to Dashboard</a>
@@ -306,7 +307,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; background: #f0f2f5; color: #
 </div>
 
 <div class="footer">
-    SkyKin Technologies &copy; <?php echo date('Y'); ?> | Department Tickets Dashboard
+    Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology | Department Tickets
 </div>
 
 <!-- Toast -->
@@ -448,5 +449,9 @@ function updateStatus(caseId, status) {
 // Initial fetch
 fetchTickets();
 </script>
+<script>
+<?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
 </body>
 </html>

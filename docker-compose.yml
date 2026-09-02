@@ -7,6 +7,11 @@
 #
 # Hybrid (FreeSWITCH on host/VM) — use:
 #   docker compose -f docker-compose.yml -f docker-compose.hybrid.yml up --build -d
+#
+# Production ecs-cc (host-network FreeSWITCH, HTTPS 8188) — use:
+#   docker compose -f docker-compose.ecs-cc.yml up --build -d
+# Copy .env.ecs-cc.example to .env first. Recreating skykin-freeswitch is
+# safe only after /opt/skykin/fs-config is populated from a live backup.
 
 services:
   db:
@@ -56,7 +61,8 @@ services:
       FS_QUEUE_EXT: ${FS_QUEUE_EXT:-8000}
       FS_QUEUE_STRATEGY: ${FS_QUEUE_STRATEGY:-longest-idle-agent}
       FS_QUEUE_AGENTS: ${FS_QUEUE_AGENTS:-}
-      # Ethio Telecom IP trunk (register=false). Source IP for whitelist: host LAN IP.
+      # Ethio Telecom IMS trunk. register=true. SIP whitelist is not enough:
+      # they must also allow FS_LAN_RTP_IP as a media/RTP source.
       FS_OUTBOUND_GATEWAY: ${FS_OUTBOUND_GATEWAY:-SIP}
       FS_OUTBOUND_PROXY: ${FS_OUTBOUND_PROXY:-}
       FS_OUTBOUND_USERNAME: ${FS_OUTBOUND_USERNAME:-}
@@ -95,8 +101,16 @@ services:
     networks:
       - skykin
     restart: unless-stopped
+    # Image healthcheck uses fs_cli with the default ClueCon password and fails
+    # when ESL_PASSWORD is custom. $$ so compose passes $ESL_PASSWORD into the container.
+    healthcheck:
+      test: ["CMD-SHELL", "fs_cli -H 127.0.0.1 -P 8021 -p $$ESL_PASSWORD -x status | grep -q UP || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     # Linux production tip: uncomment the next line and remove the ports: block
     # so FreeSWITCH owns the host network stack (best for SIP/RTP).
+    # Host-network RTP still needs the cloud security group to allow UDP 16384-16584.
     # network_mode: host
 
   web:
@@ -116,9 +130,11 @@ services:
       ESL_HOST: ${ESL_HOST:-freeswitch}
       ESL_PORT: ${ESL_PORT:-8021}
       ESL_PASSWORD: ${ESL_PASSWORD:-ClueCon}
-      # SIP/telephony domain the extensions live in. Set this when the web host
-      # is a bare IP but agents register into a named domain (e.g. FS_DOMAIN).
+      # SIP/telephony domain the extensions live in (FusionPBX domain name).
+      # Never set this to the public web hostname (e.g. webcc.skyconnectsolutions.et)
+      # or the softphone REGISTERs as 101@webcc… and FreeSWITCH cannot find the user.
       SKYKIN_DOMAIN: ${SKYKIN_DOMAIN:-${FS_DOMAIN:-}}
+      SKYKIN_TZ: ${SKYKIN_TZ:-Africa/Addis_Ababa}
       # Must match the freeswitch service's CDR_CRED: FusionPBX validates incoming
       # CDR posts against this value.
       CDR_CRED: ${CDR_CRED:-fusionpbx:fusionpbx}
@@ -129,6 +145,7 @@ services:
       SERVER_NAME: ${TLS_CN:-skykin.local}
       TLS_CN: ${TLS_CN:-skykin.local}
       TLS_SAN_IP: ${TLS_SAN_IP:-}
+      WEB_HTTPS_PORT: ${WEB_HTTPS_PORT:-8443}
     ports:
       - "${WEB_PORT:-8080}:80"
       - "${WEB_HTTPS_PORT:-8443}:443"
@@ -142,6 +159,9 @@ services:
 networks:
   skykin:
     driver: bridge
+    # Other stacks attached to this network (sms-nginx) must not proxy to
+    # service names `web` / `api` — those resolve to this project's containers.
+    # Use unique container_name values (sms-web, sms-api) in those upstreams.
 
 volumes:
   skykin_pgdata:

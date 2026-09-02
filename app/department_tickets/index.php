@@ -196,13 +196,17 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <link rel="icon" type="image/png" sizes="32x32" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">
+    <link rel="shortcut icon" type="image/png" href="/app/agent_dashboard/assets/skykin-favicon.png?v=5">
+    <link rel="icon" href="/app/agent_dashboard/assets/favicon.ico?v=5">
+    <link rel="apple-touch-icon" sizes="180x180" href="/app/agent_dashboard/assets/apple-touch-icon.png?v=5">
     <meta charset="UTF-8">
     <!-- Use the live page location so fetch() keeps the exact scheme, host AND port
          (e.g. :8088). Building this server-side from HTTP_HOST dropped the port and
          sent requests to :443 with a mismatched TLS cert -> "Failed to fetch". -->
     <script>const SELF_URL = window.location.pathname;</script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Department Tickets - SkyKin Technologies</title>
+    <title>Department Tickets - Sky Connect</title>
     <style>
         :root {
             /* ── Light theme matching Agent Dashboard ── */
@@ -794,7 +798,7 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
     <!-- HEADER -->
     <header>
         <div class="header-container">
-            <div class="logo">SKY<span>KIN</span> Technologies</div>
+            <div class="logo">Sky <span>Connect</span></div>
             
             <div class="header-meta">
                 <!-- Auto-Refresh Toggle -->
@@ -902,7 +906,7 @@ $self_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 
 
     <!-- FOOTER -->
     <footer class="site-footer">
-        SkyKin Technologies &copy; <?php echo date('Y'); ?> | Department Ticket Portal (Standalone)
+        Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology | Department Tickets
     </footer>
 
     <!-- TOAST POPUP -->

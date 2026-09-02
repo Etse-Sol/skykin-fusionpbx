@@ -181,26 +181,13 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             return !isset($supervisorExts[$e['extension']]);
         });
 
-        // Today's CDR stats per extension — resolve SIP usernames to extension numbers
-        $s2 = $db->prepare("SELECT
-            COALESCE(
-                NULLIF(CASE WHEN direction IN ('outbound','local') THEN caller_id_number END, ''),
-                (SELECT a.agent_id FROM v_call_center_agents a
-                  WHERE a.call_center_agent_uuid::text = v_xml_cdr.cc_agent LIMIT 1),
-                CASE WHEN destination_number ~ '^[0-9]{2,6}$' THEN destination_number END,
-                caller_id_number
-            ) as ext,
-            COUNT(*) as total,
-            SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-            COALESCE(SUM(billsec),0) as total_talk,
-            COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur
-            FROM v_xml_cdr WHERE domain_name=:d
-            AND start_epoch>=:ts AND start_epoch<=:te
-            GROUP BY 1");
-        $s2->execute([':d'=>$domain,':ts'=>$today_start,':te'=>$today_end]);
+        // Per-extension CDR stats (same attribution as agent dashboard — includes inbound).
         $stats = [];
-        foreach($s2->fetchAll(PDO::FETCH_ASSOC) as $r) $stats[$r['ext']] = $r;
+        foreach ($exts as $e) {
+            $stats[$e['extension']] = skykin_cdr_agent_stats(
+                $db, $domain, (string)$e['extension'], $today_start, $today_end
+            );
+        }
 
         // Call center agent status — key by agent_id AND by extension extracted from contact.
         // BUGFIX: previously keyed only by agent_name ("Agent 1"), then looked up by
@@ -298,11 +285,9 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
             $ac   = $activeCalls[$ext] ?? null;
 
             // Determine live status:
-            // 1) Active channel  → incall
-            // 2) FreeSWITCH CC  → status + state (authoritative while agent is in queue)
-            // 3) DB CC status   → Available / On Break / Logged Out
-            // 4) SIP registered → ready
-            // 5) else offline
+            // Not SIP-registered → Offline (ignore stale CC "Available").
+            // Registered + CC Available / Waiting → Ready
+            // Active channel → In Call
             $status = 'offline';
             $cc_label = $cc['agent_status'] ?? 'Unknown';
             $s_map = [
@@ -311,24 +296,29 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 'Idle' => 'ready', 'Waiting' => 'ready', 'Receiving' => 'incall',
                 'In a queue call' => 'incall',
             ];
+            $is_reg = isset($registered[$ext]);
 
-            if ($fsCc) {
+            if ($ac) {
+                $status = 'incall';
+            } elseif (!$is_reg) {
+                $status = 'offline';
+            } elseif ($fsCc) {
                 $fs_status = trim((string)($fsCc['status'] ?? ''));
                 $fs_state  = trim((string)($fsCc['state'] ?? ''));
                 if ($fs_status !== '') $cc_label = $fs_status;
-                // FreeSWITCH state overrides status for in-call / receiving
                 if (stripos($fs_state, 'In a queue call') !== false || stripos($fs_state, 'Receiving') !== false) {
                     $status = 'incall';
                 } elseif ($fs_status !== '') {
                     $status = $s_map[$fs_status] ?? strtolower(str_replace(' ', '_', $fs_status));
+                } else {
+                    $status = 'ready';
                 }
             } elseif ($cc) {
                 $status = $s_map[$cc['agent_status']] ?? strtolower(str_replace(' ', '_', $cc['agent_status']));
-            } elseif (isset($registered[$ext])) {
+            } else {
                 $status = 'ready';
                 $cc_label = 'Registered';
             }
-            if ($ac) $status = 'incall';
 
             $call_duration = 0;
             if ($ac && $ac['start_epoch']) {
@@ -371,6 +361,7 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
     try {
         $db = getDB();
         $queues = [];
+        $waiting_callers = [];
         try {
             // FusionPBX uses v_call_center_queues (not v_call_queues). Waiting
             // callers live in FreeSWITCH mod_callcenter, not a Postgres table.
@@ -384,45 +375,35 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             $s->execute([':d' => $domain]);
             $queue_rows = $s->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
+            $queue_exts = [];
             foreach ($queue_rows as $qr) {
-                $waiting = 0;
-                $qkey = trim((string)($qr['extension'] ?? ''));
-                if ($qkey !== '') {
-                    $qkey .= '@' . $domain;
-                    $members = skykin_fs_api('callcenter_config queue list members ' . $qkey);
-                    foreach (preg_split("/\r\n|\n|\r/", $members) as $line) {
-                        $line = trim($line);
-                        if ($line === '' || stripos($line, '+OK') === 0) {
-                            continue;
-                        }
-                        if (stripos($line, 'queue|') === 0 || stripos($line, 'name|') === 0) {
-                            continue; // header
-                        }
-                        if (strpos($line, '|') !== false) {
-                            $waiting++;
-                        }
-                    }
+                $qext = trim((string)($qr['extension'] ?? ''));
+                if ($qext !== '') {
+                    $queue_exts[] = $qext;
                 }
+            }
+            $waiting_callers = skykin_cc_waiting_callers($domain, $queue_exts);
+            $by_queue = [];
+            foreach ($waiting_callers as $c) {
+                $qe = (string)($c['queue'] ?? '');
+                $by_queue[$qe] = ($by_queue[$qe] ?? 0) + 1;
+            }
+            foreach ($queue_rows as $qr) {
+                $qext = (string)($qr['extension'] ?? '');
                 $queues[] = [
                     'name' => (string)($qr['name'] ?? ''),
-                    'extension' => (string)($qr['extension'] ?? ''),
-                    'waiting' => $waiting,
+                    'extension' => $qext,
+                    'waiting' => (int)($by_queue[$qext] ?? 0),
                 ];
             }
         } catch(Exception $ignored){}
 
-        // Today totals
-        $s2 = $db->prepare("SELECT COUNT(*) as total,
-            SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_talk,
-            COALESCE(AVG(duration-billsec),0) as avg_wait
-            FROM v_xml_cdr WHERE domain_name=:d
-            AND start_epoch>=:ts AND start_epoch<=:te");
-        $s2->execute([':d'=>$domain,':ts'=>$today_start,':te'=>$today_end]);
-        $totals = $s2->fetch(PDO::FETCH_ASSOC);
-
-        $total    = (int)($totals['total']??0);
-        $answered = (int)($totals['answered']??0);
+        // Today totals (hunt legs collapsed to one missed per caller attempt)
+        $today_rows = skykin_cdr_fetch_period($db, $domain, $today_start, $today_end);
+        $tm = skykin_cdr_period_metrics($today_rows);
+        $total    = (int)($tm['total'] ?? 0);
+        $answered = (int)($tm['answered'] ?? 0);
+        $missed   = (int)($tm['missed'] ?? 0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
         // Agents online — SIP registrations, which only FreeSWITCH knows about.
@@ -433,14 +414,15 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $online = ['cnt' => $online_count];
 
         echo json_encode([
-            'queues'         => $queues,
-            'total_today'    => $total,
-            'answered_today' => $answered,
-            'missed_today'   => $total - $answered,
-            'avg_talk'       => (int)($totals['avg_talk']??0),
-            'avg_wait'       => (int)($totals['avg_wait']??0),
-            'sla'            => $sla,
-            'agents_online'  => (int)($online['cnt']??0),
+            'queues'           => $queues,
+            'waiting_callers'  => $waiting_callers ?? [],
+            'total_today'      => $total,
+            'answered_today'   => $answered,
+            'missed_today'     => $missed,
+            'avg_talk'         => (int)($tm['avg_dur'] ?? 0),
+            'avg_wait'         => 0,
+            'sla'              => $sla,
+            'agents_online'    => (int)($online['cnt']??0),
         ]);
     } catch(Exception $e) { echo json_encode(['error'=>$e->getMessage()]); }
     exit;
@@ -456,36 +438,34 @@ if (isset($_GET['action']) && $_GET['action']==='leaderboard') {
     $te = strtotime($to.' 23:59:59');
     try {
         $db = getDB();
-        $s = $db->prepare("SELECT
-            CASE WHEN direction='outbound' OR direction='local' THEN caller_id_number ELSE destination_number END as ext,
-            COUNT(*) as total,
-            SUM(CASE WHEN billsec>0 THEN 1 ELSE 0 END) as answered,
-            SUM(CASE WHEN billsec=0 THEN 1 ELSE 0 END) as missed,
-            COALESCE(SUM(billsec),0) as total_talk,
-            COALESCE(AVG(CASE WHEN billsec>0 THEN billsec END),0) as avg_dur,
-            COALESCE(MAX(CASE WHEN billsec>0 THEN billsec END),0) as max_dur
-            FROM v_xml_cdr WHERE domain_name=:d
-            AND start_epoch>=:ts AND start_epoch<=:te
-            GROUP BY 1 ORDER BY answered DESC LIMIT 20");
-        $s->execute([':d'=>$domain,':ts'=>$ts,':te'=>$te]);
-        $rows = $s->fetchAll(PDO::FETCH_ASSOC);
-
-        // Enrich with names — join v_domains since v_extensions uses domain_uuid
-        $names = [];
         $sn = $db->prepare("SELECT e.extension, e.effective_caller_id_name
             FROM v_extensions e JOIN v_domains d ON d.domain_uuid=e.domain_uuid
-            WHERE d.domain_name=:d");
+            WHERE d.domain_name=:d ORDER BY e.extension");
         $sn->execute([':d'=>$domain]);
-        foreach($sn->fetchAll(PDO::FETCH_ASSOC) as $r) $names[$r['extension']] = $r['effective_caller_id_name'];
+        $ext_rows = $sn->fetchAll(PDO::FETCH_ASSOC);
 
-        foreach($rows as &$r) {
-            $r['name']     = $names[$r['ext']] ?? 'Ext '.$r['ext'];
-            $r['total']    = (int)$r['total'];
-            $r['answered'] = (int)$r['answered'];
-            $r['missed']   = (int)$r['missed'];
-            $r['total_talk']=(int)$r['total_talk'];
-            $r['avg_dur']  = (int)$r['avg_dur'];
+        $rows = [];
+        foreach ($ext_rows as $er) {
+            $st = skykin_cdr_agent_stats($db, $domain, (string)$er['extension'], $ts, $te);
+            $answered = (int)($st['answered'] ?? 0);
+            if ($answered < 1 && (int)($st['total'] ?? 0) < 1) {
+                continue;
+            }
+            $rows[] = [
+                'ext' => $er['extension'],
+                'name' => $er['effective_caller_id_name'] ?: ('Ext ' . $er['extension']),
+                'total' => (int)($st['total'] ?? 0),
+                'answered' => $answered,
+                'missed' => (int)($st['missed'] ?? 0),
+                'total_talk' => (int)($st['total_talk'] ?? 0),
+                'avg_dur' => (int)($st['avg_dur'] ?? 0),
+                'max_dur' => (int)($st['max_dur'] ?? 0),
+            ];
         }
+        usort($rows, static function ($a, $b) {
+            return $b['answered'] <=> $a['answered'];
+        });
+        $rows = array_slice($rows, 0, 20);
         echo json_encode(['rows'=>$rows]);
     } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
     exit;
@@ -503,7 +483,7 @@ if (isset($_GET['action']) && $_GET['action']==='acw_all') {
             call_type VARCHAR(20), duration INTEGER, disposition VARCHAR(100),
             call_reason VARCHAR(200), notes TEXT, recording_filename VARCHAR(255),
             created_at TIMESTAMP DEFAULT NOW())");
-        $s = $db->prepare("SELECT to_char(created_at,'YYYY-MM-DD HH24:MI') as created_at,
+        $s = $db->prepare("SELECT " . skykin_db_time_sql('YYYY-MM-DD HH24:MI', 'created_at') . " as created_at,
             agent_id,caller_id,call_type,duration,disposition,call_reason,notes
             FROM skykin_acw WHERE DATE(created_at)>=:f AND DATE(created_at)<=:t
             ORDER BY created_at DESC LIMIT 200");
@@ -613,7 +593,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'leave_requests') {
         $db = getDB();
         ensureLeaveRequestsTable($db);
         $s = $db->prepare("SELECT id, agent_ext, agent_name, request_type, reason, status,
-            to_char(requested_at, 'YYYY-MM-DD HH24:MI') as requested_at
+            " . skykin_db_time_sql('YYYY-MM-DD HH24:MI', 'requested_at') . " as requested_at
             FROM skykin_leave_requests
             WHERE domain = :d AND status = 'pending'
             ORDER BY requested_at ASC");
@@ -706,25 +686,129 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
 
         $where = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
-        if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
-        $s = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
-            caller_id_number, destination_number, direction, billsec, duration, hangup_cause
-            FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 500");
+        if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q OR caller_destination LIKE :q OR last_arg LIKE :q)"; $params[':q']='%'.$search.'%'; }
+        $s = $db->prepare("SELECT start_epoch,
+            " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
+            caller_id_number, destination_number, caller_destination, direction, billsec, duration,
+            hangup_cause, last_arg, cc_agent, cc_agent_bridged
+            FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 1500");
         $s->execute($params);
+        $raw = skykin_cdr_collapse_hunt_legs($s->fetchAll(PDO::FETCH_ASSOC));
+        $raw = array_slice($raw, 0, 500);
         $rows = [];
-        foreach($s->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $b=(int)$r['billsec'];
-            // Resolve SIP usernames to extension numbers
-            $caller = preg_replace('/@.*$/', '', $r['caller_id_number']);
-            $dest   = preg_replace('/@.*$/', '', $r['destination_number']);
+        $agent_label = [];
+        try {
+            $sa = $db->prepare("SELECT agent_name, agent_id, agent_contact FROM v_call_center_agents ca
+                JOIN v_domains d ON d.domain_uuid=ca.domain_uuid WHERE d.domain_name=:d");
+            $sa->execute([':d'=>$domain_]);
+            foreach ($sa->fetchAll(PDO::FETCH_ASSOC) as $ag) {
+                $lab = trim((string)($ag['agent_name'] ?? ''));
+                if ($ag['agent_id'] !== '' && $ag['agent_id'] !== null) {
+                    $agent_label[(string)$ag['agent_id']] = $lab !== '' ? $lab : (string)$ag['agent_id'];
+                }
+                if (preg_match('/(?:user\/)?(\d+)@/i', (string)($ag['agent_contact'] ?? ''), $m)) {
+                    $agent_label[$m[1]] = $lab !== '' ? $lab.' ('.$m[1].')' : $m[1];
+                }
+            }
+        } catch (Exception $ignore) {}
+        $agent_guess = [];
+        $parsed = [];
+        foreach ($raw as $r) {
+            $b = (int)$r['billsec'];
+            $caller = preg_replace('/@.*$/', '', (string)$r['caller_id_number']);
+            $dest   = trim(preg_replace('/@.*$/', '', (string)$r['destination_number']));
+            $cdest  = preg_replace('/@.*$/', '', (string)($r['caller_destination'] ?? ''));
+            $arg    = (string)($r['last_arg'] ?? '');
+            $cc     = (string)($r['cc_agent'] ?? '');
+            $uuid_map = [
+                '64c5f323-cd40-48ef-a97f-22d546be8b57'=>'101',
+                '031ab55a-74f4-4c4a-9252-faaa4a1f4e5e'=>'102',
+            ];
+            if (isset($uuid_map[strtolower($cc)])) $cc = $uuid_map[strtolower($cc)];
+            if (preg_match('/(?:user\/)?(\d{2,4})@/', $cc, $m)) $cc = $m[1];
             if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $caller))
-                $caller = $uname_ext[strtolower($caller)] ?? 'Unknown';
-            if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $dest))
-                $dest   = $uname_ext[strtolower($dest)]   ?? 'Unknown';
-            $rows[] = ['time'=>$r['call_time'],'caller'=>$caller,
-                'destination'=>$dest,'direction'=>$r['direction'],
+                $caller = $uname_ext[strtolower($caller)] ?? $caller;
+            $dest_digits = preg_replace('/\D+/', '', $dest);
+            $agent_ext = '';
+            if (preg_match('/user\/(\d{2,4})@/', $arg, $m)) $agent_ext = $m[1];
+            elseif (preg_match('/^1\d{2}$/', $cc)) $agent_ext = $cc;
+            elseif (preg_match('/^(101|102)$/', $dest_digits)) $agent_ext = $dest_digits;
+            elseif (preg_match('/^1\d{2}$/', $dest)) $agent_ext = $dest;
+            elseif (preg_match('/^1\d{2}$/', $caller)) $agent_ext = $caller;
+            elseif (preg_match('/(?:user\/)?(\d{2,4})@/', (string)($r['cc_agent_bridged'] ?? ''), $m)) $agent_ext = $m[1];
+            $ck = preg_replace('/\D+/', '', $caller);
+            if (strlen($ck) >= 9) $ck = substr($ck, -9);
+            $bucket = (string)intdiv((int)($r['start_epoch'] ?? 0), 60);
+            if ($agent_ext !== '') {
+                $didk = preg_replace('/\D+/', '', $cdest);
+                if ($didk === '' && preg_match('/11113875[56]$/', $dest_digits)) $didk = $dest_digits;
+                if (strlen($didk) >= 9) $didk = substr($didk, -9);
+                if ($ck !== '') {
+                    $agent_guess[$ck.'|'.$bucket] = $agent_ext;
+                    $agent_guess[$ck.'|'.(string)($r['call_time'] ?? '')] = $agent_ext;
+                }
+                if ($didk !== '') {
+                    $agent_guess['did|'.$didk.'|'.$bucket] = $agent_ext;
+                    $agent_guess['did|'.$didk.'|'.(string)($r['call_time'] ?? '')] = $agent_ext;
+                }
+                $agent_guess['t|'.$bucket] = $agent_ext;
+                $agent_guess['t|'.(string)($r['call_time'] ?? '')] = $agent_ext;
+            }
+            $parsed[] = [
+                'r'=>$r,'b'=>$b,'caller'=>$caller,'dest'=>$dest,'cdest'=>$cdest,
+                'agent_ext'=>$agent_ext,'dest_digits'=>$dest_digits,'ck'=>$ck,'bucket'=>$bucket,
+            ];
+        }
+        foreach ($parsed as $p) {
+            $r = $p['r'];
+            $b = $p['b']; $caller = $p['caller']; $dest = $p['dest'];
+            $cdest = $p['cdest']; $agent_ext = $p['agent_ext'];
+            $dest_digits = $p['dest_digits'];
+            if (preg_match('/^(101|102)$/', $dest_digits)) {
+                $cdest_digits = preg_replace('/\D+/', '', $cdest);
+                if (preg_match('/^[\+\d\(\)\-\s#\*]{3,}$/', $cdest) && !preg_match('/^(101|102)$/', $cdest_digits))
+                    $dest = $cdest;
+                else
+                    continue;
+            }
+            if ($agent_ext === '') {
+                $didk = $dest_digits;
+                if (strlen($didk) >= 9) $didk = substr($didk, -9);
+                $agent_ext = $agent_guess[$p['ck'].'|'.$p['bucket']]
+                    ?? $agent_guess[$p['ck'].'|'.(string)($r['call_time'] ?? '')]
+                    ?? $agent_guess['did|'.$didk.'|'.$p['bucket']]
+                    ?? $agent_guess['did|'.$didk.'|'.(string)($r['call_time'] ?? '')]
+                    ?? $agent_guess['t|'.$p['bucket']]
+                    ?? $agent_guess['t|'.(string)($r['call_time'] ?? '')]
+                    ?? '';
+            }
+            $dir = strtolower(trim((string)($r['direction'] ?? '')));
+            $is_did = (bool)preg_match('/11113875[56]$/', $dest_digits)
+                || (bool)preg_match('/11113875[56]$/', preg_replace('/\D+/', '', $cdest));
+            if ($dir === '' || $dir === 'null') {
+                if ($is_did || $dest === '8000') $dir = 'inbound';
+                elseif (preg_match('/^1\d{2}$/', $caller) && !preg_match('/^1\d{2}$/', $dest)) $dir = 'outbound';
+                else $dir = 'inbound';
+            }
+            if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $dest)) {
+                if (preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $cdest)) $dest = $cdest;
+                else continue;
+            }
+            if (strcasecmp($dest, 'unknown') === 0) {
+                if (preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $cdest)) $dest = $cdest;
+                else continue;
+            }
+            $agent = '';
+            if ($agent_ext !== '') {
+                $agent = trim((string)($agent_label[$agent_ext] ?? ''));
+                if ($agent === '') $agent = $agent_ext;
+            }
+            $rows[] = ['time'=>$r['call_time'],'caller'=>$caller !== '' ? $caller : '—',
+                'destination'=>$dest,'agent'=>$agent !== '' ? $agent : '—',
+                'direction'=>$dir,
                 'duration'=>floor($b/60).':'.str_pad($b%60,2,'0',STR_PAD_LEFT),
-                'status'=>$b>0?'Answered':'Missed','cause'=>$r['hangup_cause']??''];
+                'status'=>skykin_cdr_result_label($r),
+                'cause'=>$r['hangup_cause']??''];
         }
         echo json_encode(['rows'=>$rows]);
     } catch(Exception $e) { echo json_encode(['rows'=>[],'error'=>$e->getMessage()]); }
@@ -746,7 +830,7 @@ if (isset($_GET['action']) && $_GET['action']==='recordings_all') {
         $where  = "domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te AND (record_path IS NOT NULL OR record_name IS NOT NULL)";
         $params = [':d'=>$domain_,':ts'=>$ts,':te'=>$te];
         if ($search) { $where.=" AND (caller_id_number LIKE :q OR destination_number LIKE :q)"; $params[':q']='%'.$search.'%'; }
-        $s = $db->prepare("SELECT to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+        $s = $db->prepare("SELECT " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
             caller_id_number, destination_number, direction, billsec,
             record_path, record_name, hangup_cause
             FROM v_xml_cdr WHERE $where ORDER BY start_epoch DESC LIMIT 300");
@@ -793,7 +877,7 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
     try {
         $db = getDB();
         $s = $db->prepare("SELECT
-            to_char(to_timestamp(start_epoch),'YYYY-MM-DD HH24:MI') as call_time,
+            " . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
             caller_id_number, destination_number, direction, billsec, duration,
             hangup_cause
             FROM v_xml_cdr WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
@@ -830,13 +914,43 @@ if (isset($_GET['action']) && $_GET['action']==='voice_quality') {
     exit;
 }
 
+if (isset($_GET['action']) && $_GET['action'] === 'get_settings') {
+    header('Content-Type: application/json');
+    echo json_encode([
+        'ok' => true,
+        'session_idle_minutes' => skykin_idle_timeout_minutes(),
+    ]);
+    exit;
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'save_settings' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json');
+    $body = json_decode(file_get_contents('php://input'), true) ?: [];
+    $minutes = (int) ($body['session_idle_minutes'] ?? 0);
+    if ($minutes < 0) {
+        $minutes = 0;
+    }
+    if ($minutes > 1440) {
+        $minutes = 1440;
+    }
+    try {
+        $who = (string) ($_SESSION['username'] ?? '');
+        skykin_setting_set('session_idle_minutes', (string) $minutes, $who);
+        echo json_encode(['ok' => true, 'session_idle_minutes' => $minutes]);
+    } catch (Exception $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+    }
+    exit;
+}
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>SkyKin Supervisor – <?php echo $domain; ?></title>
+<title>Sky Connect Supervisor – <?php echo $domain; ?></title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
@@ -940,6 +1054,12 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .queue-health-value{display:block;font-size:16px;font-weight:700;color:#333}
 .queue-health-label{display:block;font-size:9px;color:#999;margin-top:3px}
 .live-agents-panel{background:#fff;border:1px solid #edf0f5;border-radius:12px;box-shadow:0 1px 6px rgba(0,0,0,.06);overflow:hidden}
+.wait-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #f5f5f5;font-size:13px}
+.wait-row:last-child{border-bottom:none}
+.wait-pos{width:22px;height:22px;border-radius:50%;background:#fff4e5;color:#fd7e14;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.wait-num{font-weight:700;color:#333;flex:1}
+.wait-time{color:#fd7e14;font-weight:700;font-size:12px}
+.wait-state{font-size:10px;font-weight:700;color:#888;background:#f4f6f8;border-radius:10px;padding:2px 7px}
 .live-agents-header{padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between;gap:12px}
 .live-agents-tools{display:flex;align-items:center;gap:10px}
 
@@ -961,6 +1081,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .badge-in{background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-out{background:#f3e5f5;color:#6a1b9a;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-answered{background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
+.badge-failed{background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-missed{background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .rank-medal{font-size:16px}
 
@@ -1033,6 +1154,25 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 .btn-hangup{grid-column:3 / span 8;background:#c92a3d;border:1px solid #c92a3d;color:#fff;padding:11px 0;border-radius:9px;cursor:pointer;font-size:13px;font-weight:650;display:none}
 .btn-hold,.btn-mute,.btn-keypad{grid-column:span 4;min-height:54px;background:#fff;border:1px solid #dfe5ec;color:#334155;padding:8px 4px;border-radius:9px;cursor:pointer;font-size:11px;font-weight:600;display:none;align-items:center;justify-content:center;flex-direction:column;gap:4px}
 .btn-hold.active,.btn-mute.muted,.btn-keypad.active{background:#eef6ff;border-color:#8eb9e6;color:#0047ab}
+.btn-transfer{grid-column:span 12;min-height:38px;background:#fff;border:1px solid #dfe5ec;color:#334155;border-radius:9px;padding:9px 8px;cursor:pointer;display:none;font-size:12px;font-weight:700}
+.btn-transfer.visible,.btn-transfer.show-xfer{display:block}
+.btn-transfer:hover{background:#eef6ff;border-color:#8eb9e6;color:#0047ab}
+.transfer-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.65);z-index:1100;align-items:center;justify-content:center}
+.transfer-overlay.show{display:flex}
+.transfer-modal{background:#fff;border-radius:14px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.3);overflow:hidden}
+.transfer-hdr{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#6366f1,#4f46e5)}
+.transfer-hdr h3{font-size:14px;font-weight:700;color:#fff;margin:0}
+.transfer-hdr button{background:rgba(255,255,255,.2);border:none;cursor:pointer;font-size:16px;color:#fff;width:26px;height:26px;border-radius:50%}
+.transfer-body{padding:16px;display:flex;flex-direction:column;gap:12px;max-height:400px;overflow-y:auto}
+.transfer-ext-row{display:flex;gap:8px;align-items:center}
+.transfer-ext-row input{flex:1;padding:8px 10px;border:1px solid #ddd;border-radius:8px;font-size:14px}
+.transfer-ext-row button{background:#6366f1;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700}
+.transfer-agent-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #e9ecef;border-radius:8px;cursor:pointer}
+.transfer-agent-item:hover{background:#f5f3ff;border-color:#6366f1}
+.transfer-agent-name{font-size:13px;font-weight:600;color:#1e293b;display:block}
+.transfer-agent-ext{font-size:11px;color:#64748b}
+.transfer-agent-badge{background:#d1fae5;color:#059669;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px}
+.transfer-loading{text-align:center;color:#888;font-size:13px;padding:20px}
 .call-timer{text-align:center;font-size:22px;font-weight:bold;color:#0047AB;display:none;padding:4px 0}
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:700;align-items:center;justify-content:center}
 .modal-overlay.show{display:flex}
@@ -1042,10 +1182,17 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 .form-group label{font-size:12px;color:#666;display:block;margin-bottom:4px}
 .form-group input{width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;box-sizing:border-box}
 .btn-save-settings{background:#0047AB;color:#fff;border:none;padding:10px 24px;border-radius:6px;cursor:pointer;font-size:14px;width:100%;margin-top:8px}
+.dial-input-wrap{display:flex;gap:6px;margin-bottom:8px}
+.dial-input{flex:1;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:15px;letter-spacing:2px;outline:none;color:#0047AB;box-sizing:border-box}
+.dial-input:focus{border-color:#0047AB}
+.dial-input::placeholder{color:#ccc;letter-spacing:0;font-size:13px}
+.btn-dialpad{background:#f0f2f5;border:1px solid #ddd;border-radius:8px;width:40px;cursor:pointer;font-size:18px;color:#555;display:flex;align-items:center;justify-content:center}
+.btn-dialpad:hover{background:#e2e8f0}
 .dp-panel{display:block;padding:14px 22px 22px;background:#fff}
 .dp-title{margin:0 0 10px;color:#64748b;font-size:10px;font-weight:700;letter-spacing:1.2px;text-align:center;text-transform:uppercase}
-.dp-display{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:20px;font-weight:650;color:#0f3f79;text-align:center;letter-spacing:2px;min-height:46px;margin-bottom:16px;display:flex;align-items:center;justify-content:center}
-.dp-display.empty{color:#94a3b8;font-size:12px;letter-spacing:0;font-weight:500}
+.dp-display{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:20px;font-weight:650;color:#0f3f79;text-align:center;letter-spacing:2px;min-height:46px;width:100%;margin-bottom:16px;box-sizing:border-box;outline:none}
+.dp-display:focus{border-color:#9dc5f0}
+.dp-display::placeholder{color:#94a3b8;font-size:12px;letter-spacing:0;font-weight:500}
 .dp-grid{display:grid;grid-template-columns:repeat(3,58px);gap:10px 18px;justify-content:center;margin-bottom:16px}
 .dp-key{width:58px;height:58px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:50%;font-size:19px;font-weight:650;color:#172b4d;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center}
 .dp-key .dp-sub{font-size:8px;color:#94a3b8;letter-spacing:.5px;margin-top:2px}
@@ -1055,7 +1202,22 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 
 
 
-/* Static management sidebar on desktop; operational sections remain top tabs. */
+/* Static management sidebar on desktop; all sections live in the side menu. */
+.sup-side-label{padding:8px 20px 4px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px}
+.sup-side-link{
+    display:flex;align-items:center;padding:10px 20px;color:#475569;text-decoration:none;
+    font-size:13.5px;font-weight:500;border-left:3px solid transparent;
+    transition:background .15s,border-color .15s,color .15s,box-shadow .15s
+}
+.sup-side-link:hover{background:#f0f5ff;border-left-color:#0047AB;color:#0047AB}
+.sup-side-link.active{
+    background:linear-gradient(90deg,#eef3ff 0%,#f8faff 100%);
+    border-left-color:#0047AB;color:#0047AB;font-weight:700;
+    box-shadow:inset 0 0 0 1px rgba(0,71,171,.08)
+}
+.sup-side-signout{display:flex;align-items:center;padding:10px 20px;color:#dc3545;text-decoration:none;font-size:13.5px;font-weight:500;border-left:3px solid transparent}
+.sup-side-signout:hover{background:#fff5f5;border-left-color:#dc3545}
+.tab-bar{display:none !important}
 @media (min-width:901px) {
     #sideMenu {
         top:60px !important; left:0 !important; height:calc(100vh - 60px) !important;
@@ -1078,7 +1240,7 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 <div class="header">
     <div style="display:flex;align-items:center;gap:12px">
         <button class="supervisor-sidebar-toggle" onclick="toggleSideMenu()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:36px;height:36px;border-radius:8px;font-size:20px;cursor:pointer;line-height:1">&#9776;</button>
-        <div class="logo"><span>SKY</span>KIN Technologies <span class="role-badge">SUPERVISOR</span></div>
+        <div class="logo"><span>Sky</span> Connect <span class="role-badge">SUPERVISOR</span></div>
     </div>
     <div class="header-right">
         <span><span class="live-dot"></span>Live</span>
@@ -1109,43 +1271,40 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 <!-- Slide-out side menu -->
 <div id="sideMenu" style="position:fixed;top:0;left:-260px;width:250px;height:100vh;background:#fff;box-shadow:4px 0 24px rgba(0,0,0,.18);z-index:500;transition:left .25s ease;display:flex;flex-direction:column">
     <div class="supervisor-sidebar-brand" style="background:linear-gradient(135deg,#0047AB,#00B4D8);padding:20px;color:#fff;flex-shrink:0">
-        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">SKY</span>KIN Technologies</div>
+        <div style="font-size:17px;font-weight:700"><span style="color:#00e5ff">Sky</span> Connect</div>
         <div style="font-size:11px;opacity:.8;margin-top:3px">Supervisor Panel</div>
     </div>
     <nav style="flex:1;padding:8px 0;overflow-y:auto">
-        <div style="padding:8px 20px 4px;font-size:10px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.8px">Management</div>
-        <a href="/app/agent_dashboard/reports.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128202;</span> Reports
-        </a>
-        <a href="/app/agent_dashboard/evaluation.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#9733;</span> Evaluation
-        </a>
-        <a href="/app/agent_dashboard/crm.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#333;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#f8f9fa';this.style.borderColor='#0047AB'" onmouseout="this.style.background='';this.style.borderColor='transparent'">
-            <span style="font-size:18px">&#128100;</span> CRM
-        </a>
+        <div class="sup-side-label">Operations</div>
+        <a href="#" class="sup-side-link active" data-side-tab="dashboard" onclick="event.preventDefault();toggleSideMenu();showTab('dashboard')">Dashboard</a>
+        <a href="#" class="sup-side-link" data-side-tab="leaderboard" onclick="event.preventDefault();toggleSideMenu();showTab('leaderboard')">Leaderboard</a>
+        <a href="#" class="sup-side-link" data-side-tab="callhistory" onclick="event.preventDefault();toggleSideMenu();showTab('callhistory')">All Call History</a>
+        <a href="#" class="sup-side-link" data-side-tab="acwall" onclick="event.preventDefault();toggleSideMenu();showTab('acwall')">ACW Review</a>
+        <a href="#" class="sup-side-link" data-side-tab="recordings" onclick="event.preventDefault();toggleSideMenu();showTab('recordings')">Call Recordings</a>
+        <a href="#" class="sup-side-link" data-side-tab="voicequality" onclick="event.preventDefault();toggleSideMenu();showTab('voicequality')">Voice Quality</a>
+        <a href="#" class="sup-side-link" data-side-tab="skills" onclick="event.preventDefault();toggleSideMenu();showTab('skills')">Agent Skills</a>
+        <a href="#" class="sup-side-link" data-side-tab="blacklist" onclick="event.preventDefault();toggleSideMenu();showTab('blacklist')">Blacklist</a>
+        <a href="#" class="sup-side-link" data-side-tab="lookup" onclick="event.preventDefault();toggleSideMenu();showTab('lookup')">Customer Lookup</a>
+        <a href="#" class="sup-side-link" data-side-tab="ticket" onclick="event.preventDefault();toggleSideMenu();showTab('ticket')">New Ticket</a>
+        <a href="#" class="sup-side-link" data-side-tab="callbacks" onclick="event.preventDefault();toggleSideMenu();showTab('callbacks')">Callbacks</a>
+        <a href="#" class="sup-side-link" data-side-tab="ahununu" onclick="event.preventDefault();toggleSideMenu();showTab('ahununu')">Ahununu.com</a>
+        <div style="height:1px;background:#eee;margin:8px 0"></div>
+        <div class="sup-side-label">Management</div>
+        <a href="#" class="sup-side-link" data-side-tab="reports" onclick="event.preventDefault();toggleSideMenu();showTab('reports')">Reports</a>
+        <a href="#" class="sup-side-link" data-side-tab="evaluation" onclick="event.preventDefault();toggleSideMenu();showTab('evaluation')">Evaluation</a>
+        <a href="#" class="sup-side-link" data-side-tab="crm" onclick="event.preventDefault();toggleSideMenu();showTab('crm')">CRM</a>
+        <a href="#" class="sup-side-link" data-side-tab="settings" onclick="event.preventDefault();toggleSideMenu();showTab('settings')">Settings</a>
         <div style="height:1px;background:#eee;margin:6px 0"></div>
-        <a href="/logout.php" style="display:flex;align-items:center;gap:12px;padding:14px 20px;color:#dc3545;text-decoration:none;font-size:14px;border-left:4px solid transparent" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background=''">
-            <span style="font-size:18px">&#128682;</span> Sign Out
-        </a>
+        <a href="/logout.php" class="sup-side-signout">Sign Out</a>
     </nav>
-    <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">SkyKin &copy; <?php echo date('Y'); ?></div>
+    <div style="padding:12px 20px;border-top:1px solid #f0f0f0;font-size:11px;color:#bbb;flex-shrink:0">Sky Connect &copy; <?php echo date('Y'); ?><br>Powered by SkyKin Technology</div>
 </div>
 <div id="sideMenuBackdrop" onclick="toggleSideMenu()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:499"></div>
 
 <div class="main">
 
-    <!-- Tabs: Dashboard first, then detail views -->
+    <!-- Main content panels (navigation is in the left sidebar) -->
     <div class="bottom-section">
-        <div class="tab-bar">
-            <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
-            <button class="tab-btn" data-tab="leaderboard" onclick="showTab('leaderboard')">Leaderboard</button>
-            <button class="tab-btn" data-tab="callhistory" onclick="showTab('callhistory')">All Call History</button>
-            <button class="tab-btn" data-tab="acwall" onclick="showTab('acwall')">ACW Review</button>
-            <button class="tab-btn" data-tab="recordings" onclick="showTab('recordings')">Call Recordings</button>
-            <button class="tab-btn" data-tab="voicequality" onclick="showTab('voicequality')">Voice Quality</button>
-            <button class="tab-btn" data-tab="skills" onclick="showTab('skills')">Agent Skills</button>
-            <button class="tab-btn" data-tab="ahununu" onclick="showTab('ahununu')">&#127760; Ahununu.com</button>
-        </div>
 
         <!-- Dashboard Tab (landing overview) -->
         <div class="tab-content active" id="tab-dashboard" style="padding:16px">
@@ -1185,6 +1344,17 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                             </div>
                         </div>
                     </div>
+                </div>
+
+                <div class="live-agents-panel" id="waitingCallersPanel" style="margin-bottom:14px">
+                    <div class="live-agents-header">
+                        <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
+                            Waiting Customers
+                            <span id="waitingCallerCount" style="background:#fd7e14;color:#fff;font-size:11px;border-radius:10px;padding:1px 8px;display:none">0</span>
+                        </div>
+                        <span style="font-size:11px;color:#aaa">Longest wait is offered next</span>
+                    </div>
+                    <div id="waitingCallersList" style="padding:12px 16px;color:#aaa;font-size:13px">No callers waiting.</div>
                 </div>
 
                 <!-- Leave requests awaiting supervisor approval -->
@@ -1265,10 +1435,10 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             </div>
             <table class="data-table">
                 <thead><tr>
-                    <th>Time</th><th>Caller</th><th>Destination</th>
+                    <th>Time</th><th>Caller</th><th>Destination</th><th>Agent</th>
                     <th>Direction</th><th>Duration</th><th>Status</th><th>Cause</th>
                 </tr></thead>
-                <tbody id="chBody"><tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
+                <tbody id="chBody"><tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">Loading...</td></tr></tbody>
             </table>
         </div>
 
@@ -1385,11 +1555,59 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                 </div>
             </div>
         </div>
-    </div>
+
+        <div class="tab-content" id="tab-settings" style="padding:24px;max-width:560px">
+            <h4 style="margin:0 0 8px;color:#333;font-size:16px">Login session</h4>
+            <p style="font-size:13px;color:#666;margin:0 0 18px;line-height:1.5">
+                Agents and supervisors are logged out after this many minutes with no mouse, keyboard, or active call.
+                Background dashboard refresh does not count as activity. Set <strong>0</strong> to disable auto-logout.
+                Closing the browser still ends the session.
+            </p>
+            <label style="display:block;font-size:12px;font-weight:700;color:#555;margin-bottom:6px">Idle logout (minutes)</label>
+            <input type="number" id="idleMinutes" min="0" max="1440" step="1" value="<?php echo (int) skykin_idle_timeout_minutes(); ?>"
+                   style="width:160px;padding:10px 12px;border:1px solid #d0d5dd;border-radius:8px;font-size:14px">
+            <div style="margin-top:16px;display:flex;align-items:center;gap:12px">
+                <button class="btn-save-settings" style="width:auto;margin:0;padding:10px 22px" onclick="saveIdleSettings()">Save</button>
+                <span id="idleSaveMsg" style="font-size:12px;color:#64748b"></span>
+            </div>
+        </div>
+
+        <div class="tab-content" id="tab-blacklist">
+            <h4 style="margin:0 0 6px;color:#333;font-size:15px">Blocked callers</h4>
+            <p style="font-size:12px;color:#666;margin:0 0 14px">Agents can block a caller from the phone. Those numbers never ring the queue.</p>
+            <div class="date-filter" style="margin-bottom:0">
+                <input type="tel" class="search-input" id="supBlNumber" placeholder="Phone number">
+                <input type="text" class="search-input" id="supBlReason" placeholder="Reason">
+                <button class="btn-filter" type="button" onclick="supAddBlacklist()">Block</button>
+            </div>
+            <table class="data-table" style="margin-top:14px">
+                <thead><tr><th>Number</th><th>Reason</th><th>Agent</th><th></th></tr></thead>
+                <tbody id="supBlacklistBody"><tr><td colspan="4">Loading…</td></tr></tbody>
+            </table>
+        </div>
+        <div class="tab-content" id="tab-lookup" style="padding:0;height:700px">
+            <iframe src="about:blank" id="lookupFrame" title="Customer Lookup" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-ticket" style="padding:0;height:700px">
+            <iframe src="about:blank" id="ticketFrame" title="New Ticket" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-callbacks" style="padding:0;height:700px">
+            <iframe src="about:blank" id="callbacksFrame" title="Callbacks" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-reports" style="padding:0;height:700px">
+            <iframe src="about:blank" id="reportsFrame" title="Reports" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-crm" style="padding:0;height:700px">
+            <iframe src="about:blank" id="crmFrame" title="CRM" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
+        <div class="tab-content" id="tab-evaluation" style="padding:0;height:700px">
+            <iframe src="about:blank" id="evaluationFrame" title="Evaluation" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px"></iframe>
+        </div>
         <div class="tab-content" id="tab-ahununu" style="padding:0;height:700px">
             <iframe src="about:blank" id="ahununuFrame" style="width:100%;height:100%;border:none;border-radius:0 0 8px 8px" allow="camera;microphone"></iframe>
         </div>
 
+    </div>
 </div>
 
 <!-- Supervisor softphone -->
@@ -1425,17 +1643,17 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
             </div>
         </div>
         <div id="callTimer" class="call-timer">00:00</div>
-        <input type="tel" id="dialInput" maxlength="20" style="display:none">
         <div class="call-controls">
             <button class="btn-hangup" id="btnHangup" onclick="hangupCall()">End call</button>
             <button class="btn-hold" id="btnHold" onclick="toggleHold()">Hold</button>
             <button class="btn-mute" id="btnMute" onclick="toggleMute()">Mute</button>
             <button class="btn-keypad" id="btnKeypad" onclick="toggleCallKeypad()">Keypad</button>
+            <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">Transfer call</button>
         </div>
     </div>
     <div class="dp-panel" id="dpPanel">
         <div class="dp-title">Dial number</div>
-        <div class="dp-display empty" id="dpDisplay">Enter number...</div>
+        <input type="tel" class="dp-display" id="dialInput" placeholder="Enter number..." maxlength="20" autocomplete="off" inputmode="tel">
         <div class="dp-grid">
             <button class="dp-key" onclick="dpKey('1')">1<span class="dp-sub">&nbsp;</span></button>
             <button class="dp-key" onclick="dpKey('2')">2<span class="dp-sub">ABC</span></button>
@@ -1458,10 +1676,39 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
 </div>
 <audio id="remoteAudio" autoplay style="display:none"></audio>
 
+<div id="transferModal" class="transfer-overlay">
+    <div class="transfer-modal">
+        <div class="transfer-hdr">
+            <h3>&#x21AA; Transfer Call</h3>
+            <button type="button" onclick="closeTransferModal()">&#x2715;</button>
+        </div>
+        <div class="transfer-body">
+            <div>
+                <label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;display:block;margin-bottom:6px">Transfer to Extension</label>
+                <div class="transfer-ext-row">
+                    <input type="tel" id="transferExtInput" placeholder="e.g. 102" maxlength="6"
+                           onkeypress="if(event.key==='Enter') executeManualTransfer()">
+                    <button type="button" onclick="executeManualTransfer()">Transfer</button>
+                </div>
+            </div>
+            <div style="border-top:1px solid #f0f0f0;padding-top:12px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                    <label style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase">Available Agents</label>
+                    <button type="button" onclick="loadAvailableAgents()" style="font-size:10px;background:none;border:1px solid #ddd;border-radius:4px;padding:2px 8px;cursor:pointer;color:#555">Refresh</button>
+                </div>
+                <div id="transferAgentsList"><div class="transfer-loading">Loading...</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="supToast"></div>
 
 <script>
 <?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
+<script>
 const domain   = '<?php echo $domain; ?>';
 const supExt   = '<?php echo $sup_ext; ?>' || localStorage.getItem('sup_ext') || '';
 const serverExt  = <?php echo json_encode($sup_ext); ?>;
@@ -1518,7 +1765,33 @@ function fetchQueue(){
             document.getElementById('qs-avgtalk').textContent = fmtDur(d.avg_talk);
             document.getElementById('qs-avgwait').textContent = fmtDur(d.avg_wait);
             document.getElementById('qs-sla').textContent     = (d.sla??100)+'%';
+            renderWaitingCallers(d.waiting_callers||[]);
         }).catch(()=>{});
+}
+
+function renderWaitingCallers(list){
+    const box = document.getElementById('waitingCallersList');
+    const badge = document.getElementById('waitingCallerCount');
+    if (!box) return;
+    const n = (list||[]).length;
+    if (badge) {
+        badge.textContent = String(n);
+        badge.style.display = n ? 'inline-block' : 'none';
+    }
+    if (!n) {
+        box.innerHTML = 'No callers waiting.';
+        box.style.color = '#aaa';
+        return;
+    }
+    box.style.color = '#333';
+    box.innerHTML = list.map((c,i)=>{
+        const number = String(c.number||'Unknown').replace(/[&<>"']/g, ch=>({
+            '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+        }[ch]));
+        const wait = String(c.wait_fmt||((c.wait_seconds||0)+'s'));
+        const state = String(c.state||'Waiting');
+        return `<div class="wait-row"><span class="wait-pos">${i+1}</span><span class="wait-num">${number}</span><span class="wait-time">${wait}</span><span class="wait-state">${state}</span></div>`;
+    }).join('');
 }
 
 // ── Agent Cards ────────────────────────────────────────────────────────────
@@ -1603,6 +1876,34 @@ function renderLeaveRequests(requests){
 
 function escHtml(s){
     return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fetchSupBlacklist(){
+    const body = document.getElementById('supBlacklistBody');
+    if (!body) return;
+    fetch('index.php?action=blacklist_list&domain=' + encodeURIComponent(domain), { credentials: 'same-origin' })
+        .then(r => r.json()).then(d => {
+            const rows = (d && d.rows) || [];
+            if (!rows.length) { body.innerHTML = '<tr><td colspan="4">No blocked numbers.</td></tr>'; return; }
+            body.innerHTML = rows.map(r => '<tr><td>'+escHtml(r.display||r.digits)+'</td><td>'+escHtml(r.reason||'')+'</td><td>'+escHtml(r.agent||'')+
+                '</td><td><button type="button" onclick="supDelBlacklist(\''+escHtml(r.digits||'')+'\')">Remove</button></td></tr>').join('');
+        }).catch(() => { body.innerHTML = '<tr><td colspan="4">Could not load.</td></tr>'; });
+}
+function supAddBlacklist(){
+    const number = (document.getElementById('supBlNumber')||{}).value || '';
+    const reason = (document.getElementById('supBlReason')||{}).value || 'blocked by supervisor';
+    fetch('index.php?action=blacklist_add&domain=' + encodeURIComponent(domain), {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ number: number, reason: reason })
+    }).then(r => r.json()).then(d => { if (d && d.ok) fetchSupBlacklist(); else alert((d && d.error) || 'Failed'); });
+}
+function supDelBlacklist(number){
+    fetch('index.php?action=blacklist_del&domain=' + encodeURIComponent(domain), {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ number: number })
+    }).then(r => r.json()).then(() => fetchSupBlacklist());
 }
 
 function resolveLeave(id, decision){
@@ -1791,16 +2092,17 @@ function fetchCallHistory(){
     const q=document.getElementById('chSearch').value;
     fetch('supervisor.php?action=call_history_all&domain='+encodeURIComponent(domain)+'&from='+from+'&to='+to+'&search='+encodeURIComponent(q))
         .then(r=>r.json()).then(d=>{
-            const rows=d.rows||[];
+            const rows=(d.rows||[]).filter(r=>!/^(101|102)$/.test(String(r.destination||'').trim()));
             document.getElementById('chCount').textContent=rows.length+' records';
-            if(!rows.length){document.getElementById('chBody').innerHTML='<tr><td colspan="7" style="text-align:center;color:#aaa;padding:20px">No calls found.</td></tr>';return;}
+            if(!rows.length){document.getElementById('chBody').innerHTML='<tr><td colspan="8" style="text-align:center;color:#aaa;padding:20px">No calls found.</td></tr>';return;}
             document.getElementById('chBody').innerHTML=rows.map(r=>`<tr>
                 <td>${r.time}</td>
                 <td>${r.caller}</td>
                 <td>${r.destination}</td>
-                <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction}</span></td>
+                <td>${r.agent||'—'}</td>
+                <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction||'—'}</span></td>
                 <td>${r.duration}</td>
-                <td><span class="badge-${r.status==='Answered'?'answered':'missed'}">${r.status}</span></td>
+                <td><span class="badge-${r.status==='Answered'?'answered':r.status==='Failed'?'failed':'missed'}">${r.status}</span></td>
                 <td style="font-size:11px;color:#888">${r.cause}</td>
             </tr>`).join('');
         });
@@ -1829,20 +2131,59 @@ function fetchAcwAll(){
 }
 
 // ── Tab switcher ───────────────────────────────────────────────────────────
+function supervisorEmbedUrl(page) {
+    const params = new URLSearchParams();
+    params.set('embed', '1');
+    if (domain) params.set('domain', domain);
+    return '/app/agent_dashboard/' + page + '?' + params.toString();
+}
+
+function supervisorToolsUrl(tool) {
+    const params = new URLSearchParams();
+    params.set('embed', '1');
+    params.set('tool', tool);
+    if (domain) params.set('domain', domain);
+    return '/app/agent_dashboard/supervisor_tools.php?' + params.toString();
+}
+
+function loadSupervisorEmbed(frameId, page) {
+    const f = document.getElementById(frameId);
+    if (!f) return;
+    const url = page.indexOf('?') >= 0 ? page : supervisorEmbedUrl(page);
+    if (f.src === 'about:blank' || !f.src || f.dataset.embedPage !== url) {
+        f.src = url;
+        f.dataset.embedPage = url;
+    }
+}
+
+function setSideNavActive(name) {
+    document.querySelectorAll('#sideMenu [data-side-tab]').forEach(function(el) {
+        el.classList.remove('active');
+    });
+    if (!name) return;
+    const link = document.querySelector('#sideMenu [data-side-tab="' + name + '"]');
+    if (link) link.classList.add('active');
+}
+
 function showTab(name){
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
     const panel = document.getElementById('tab-'+name);
     if (panel) panel.classList.add('active');
-    const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
-    if (btn) btn.classList.add('active');
-    else if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+    setSideNavActive(name);
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='blacklist') fetchSupBlacklist();
+    if(name==='settings') loadIdleSettings();
+    if(name==='reports') loadSupervisorEmbed('reportsFrame', 'reports.php');
+    if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
+    if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
+    if(name==='lookup') loadSupervisorEmbed('lookupFrame', supervisorToolsUrl('lookup'));
+    if(name==='ticket') loadSupervisorEmbed('ticketFrame', supervisorToolsUrl('ticket'));
+    if(name==='callbacks') loadSupervisorEmbed('callbacksFrame', supervisorToolsUrl('callbacks'));
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
@@ -1851,21 +2192,64 @@ function showTab(name){
 
 function showTabDirect(name){
     document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
     const panel = document.getElementById('tab-'+name);
     if (panel) panel.classList.add('active');
-    const btn = document.querySelector('.tab-btn[data-tab="'+name+'"]');
-    if (btn) btn.classList.add('active');
+    setSideNavActive(name);
     if(name==='leaderboard') fetchLeaderboard();
     if(name==='callhistory') fetchCallHistory();
     if(name==='acwall')      fetchAcwAll();
     if(name==='recordings')  fetchRecordings();
     if(name==='voicequality') fetchVoiceQuality();
     if(name==='skills') fetchSkillsAgents();
+    if(name==='blacklist') fetchSupBlacklist();
+    if(name==='settings') loadIdleSettings();
+    if(name==='reports') loadSupervisorEmbed('reportsFrame', 'reports.php');
+    if(name==='crm') loadSupervisorEmbed('crmFrame', 'crm.php');
+    if(name==='evaluation') loadSupervisorEmbed('evaluationFrame', 'evaluation.php');
+    if(name==='lookup') loadSupervisorEmbed('lookupFrame', supervisorToolsUrl('lookup'));
+    if(name==='ticket') loadSupervisorEmbed('ticketFrame', supervisorToolsUrl('ticket'));
+    if(name==='callbacks') loadSupervisorEmbed('callbacksFrame', supervisorToolsUrl('callbacks'));
     if(name==='ahununu') {
         const f = document.getElementById('ahununuFrame');
         if (f && f.src === 'about:blank') f.src = (window.SKYKIN && SKYKIN.ahununuUrl) || 'https://ahununu.com/';
     }
+}
+
+function loadIdleSettings(){
+    fetch('supervisor.php?action=get_settings', {credentials:'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (!d || !d.ok) return;
+            var el = document.getElementById('idleMinutes');
+            if (el) el.value = d.session_idle_minutes;
+        }).catch(function(){});
+}
+
+function saveIdleSettings(){
+    var el = document.getElementById('idleMinutes');
+    var msg = document.getElementById('idleSaveMsg');
+    var minutes = parseInt(el && el.value, 10);
+    if (isNaN(minutes) || minutes < 0) minutes = 0;
+    if (minutes > 1440) minutes = 1440;
+    if (msg) msg.textContent = 'Saving...';
+    fetch('supervisor.php?action=save_settings', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({session_idle_minutes: minutes})
+    }).then(function(r){ return r.json(); }).then(function(d){
+        if (!d || !d.ok) {
+            if (msg) msg.textContent = (d && d.error) ? d.error : 'Save failed';
+            return;
+        }
+        if (el) el.value = d.session_idle_minutes;
+        if (window.SKYKIN) SKYKIN.idleTimeoutMinutes = d.session_idle_minutes;
+        if (msg) msg.textContent = d.session_idle_minutes === 0
+            ? 'Saved. Auto-logout is off.'
+            : 'Saved. Logout after ' + d.session_idle_minutes + ' minutes idle.';
+    }).catch(function(){
+        if (msg) msg.textContent = 'Save failed';
+    });
 }
 
 // ── Init & auto-refresh ────────────────────────────────────────────────────
@@ -2126,10 +2510,16 @@ function setSipStatus(state, text) {
         fab.classList.add('ringing'); openPhonePopup();
         document.getElementById('btnHangup').style.display = 'block';
         document.getElementById('dpPanel').style.display = 'none';
+        clearInterval(callTimerInterval);
+        callTimerInterval = null;
+        callStartTime = null;
+        document.getElementById('callTimer').style.display = 'none';
+        document.getElementById('callTimer').textContent = '00:00';
     } else if (state === 'incall') {
         dot.classList.add('registered'); badge.classList.add('show'); fab.classList.add('ringing');
     } else if (state === 'ringing') {
         dot.classList.add('ringing'); badge.classList.add('show'); fab.classList.add('ringing');
+        document.getElementById('callTimer').style.display = 'none';
     } else if (state === 'connecting') {
         dot.classList.add('connecting');
     } else if (state === 'unregistered' || state === 'failed') {
@@ -2150,14 +2540,24 @@ function handleIncoming(callerNumber) {
 function answerCall() { if (sipBridge.answer) sipBridge.answer(); }
 function declineCall() {
     document.getElementById('incomingScreen').style.display = 'none';
-    document.getElementById('dpPanel').style.display = '';
+    document.getElementById('dpPanel').style.display = 'block';
     stopRingtone();
-    if (sipBridge.hangup) sipBridge.hangup();
+    if (sipBridge.decline) sipBridge.decline();
+    else if (sipBridge.hangup) sipBridge.hangup();
 }
 function makeCall(number) {
     number = number || document.getElementById('dialInput').value.trim() || dpNumber;
     if (!number) return;
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
+    document.getElementById('dialInput').value = number;
     lastDialedNumber = number;
+    fetch('/app/agent_dashboard/crm.php?api=lookup&phone=' + encodeURIComponent(number), { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data && data.full_name) {
+                toast('CRM: ' + data.full_name, '#0047AB');
+            }
+        }).catch(function() {});
     if (sipBridge.makeCall) sipBridge.makeCall(number);
     else toast('SIP not ready - open phone settings', '#c62828');
 }
@@ -2193,6 +2593,8 @@ function startCallUI(number) {
     document.getElementById('btnHold').style.display = 'flex';
     document.getElementById('btnMute').style.display = 'flex';
     document.getElementById('btnKeypad').style.display = 'flex';
+    const btnTransfer = document.getElementById('btnTransfer');
+    if (btnTransfer) { btnTransfer.style.display = 'block'; btnTransfer.classList.add('visible'); }
     document.getElementById('callTimer').style.display = 'block';
     document.getElementById('dialInput').value = number || '';
     document.getElementById('incomingScreen').style.display = 'none';
@@ -2201,6 +2603,16 @@ function startCallUI(number) {
     callStartTime = new Date();
     clearInterval(callTimerInterval);
     callTimerInterval = setInterval(updateCallTimer, 1000);
+    updateCallTimer();
+    if (number) {
+        fetch('/app/agent_dashboard/crm.php?api=lookup&phone=' + encodeURIComponent(number), { credentials: 'same-origin' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data && data.full_name) {
+                    window.showToast && window.showToast('CRM: ' + data.full_name);
+                }
+            }).catch(function() {});
+    }
 }
 function updateCallTimer() {
     if (!callStartTime) return;
@@ -2245,37 +2657,93 @@ function endCall() {
     document.getElementById('btnMute').classList.remove('muted');
     document.getElementById('btnKeypad').style.display = 'none';
     document.getElementById('btnKeypad').classList.remove('active');
+    const btnTransferEnd = document.getElementById('btnTransfer');
+    if (btnTransferEnd) { btnTransferEnd.style.display = 'none'; btnTransferEnd.classList.remove('visible'); }
     document.getElementById('btnHold').textContent = 'Hold';
     document.getElementById('btnHold').classList.remove('active');
     document.getElementById('callTimer').style.display = 'none';
     document.getElementById('callTimer').textContent = '00:00';
     document.getElementById('incomingScreen').style.display = 'none';
-    document.getElementById('dpPanel').style.display = '';
+    document.getElementById('dpPanel').style.display = 'block';
     const ext = localStorage.getItem('sup_sip_ext') || serverExt || '';
     if (ext) setSipStatus('registered', 'Registered (' + ext + ')');
     setTimeout(() => { window._callEnded = false; }, 3000);
 }
 function updateDpDisplay() {
-    const d = document.getElementById('dpDisplay');
-    if (!d) return;
-    if (!dpNumber) { d.textContent = 'Enter number...'; d.classList.add('empty'); }
-    else { d.textContent = dpNumber; d.classList.remove('empty'); }
-    document.getElementById('dialInput').value = dpNumber;
+    const inp = document.getElementById('dialInput');
+    if (inp && inp.value !== dpNumber) inp.value = dpNumber;
 }
 function dpKey(k) {
-    if (document.getElementById('btnKeypad').classList.contains('active') && sipBridge.sendDtmf) {
+    if (callStartTime && document.getElementById('btnKeypad').classList.contains('active') && sipBridge.sendDtmf) {
         sipBridge.sendDtmf(k); return;
     }
     if (dpNumber.length >= 20) return;
-    dpNumber += k; updateDpDisplay();
+    dpNumber += k;
+    updateDpDisplay();
 }
-function dpDelete() { dpNumber = dpNumber.slice(0, -1); updateDpDisplay(); }
-function dpCall() { makeCall(dpNumber); }
+function dpDelete() {
+    if (callStartTime) return;
+    dpNumber = dpNumber.slice(0, -1);
+    updateDpDisplay();
+}
+function dpCall() { makeCall(); }
 function toggleCallKeypad() {
     const btn = document.getElementById('btnKeypad');
     const panel = document.getElementById('dpPanel');
-    const active = btn.classList.toggle('active');
-    panel.style.display = active ? 'block' : 'none';
+    const opening = panel.style.display === 'none';
+    panel.style.display = opening ? 'block' : 'none';
+    btn.classList.toggle('active', opening);
+}
+function openTransferModal() {
+    const modal = document.getElementById('transferModal');
+    if (!modal) return;
+    modal.classList.add('show');
+    const inp = document.getElementById('transferExtInput');
+    if (inp) inp.value = '';
+    loadAvailableAgents();
+}
+function closeTransferModal() {
+    const modal = document.getElementById('transferModal');
+    if (modal) modal.classList.remove('show');
+}
+function loadAvailableAgents() {
+    const myExt = localStorage.getItem('sup_sip_ext') || serverExt || '';
+    const list = document.getElementById('transferAgentsList');
+    if (!list) return;
+    list.innerHTML = '<div class="transfer-loading">Loading available agents...</div>';
+    fetch('index.php?action=get_available_agents&domain=' + encodeURIComponent(domain) + '&my_ext=' + encodeURIComponent(myExt), {credentials:'same-origin'})
+        .then(function(r){ return r.json(); })
+        .then(function(data) {
+            const agents = (data && data.agents) || [];
+            if (!agents.length) {
+                list.innerHTML = '<div class="transfer-loading">No available agents found.</div>';
+                return;
+            }
+            list.innerHTML = agents.map(function(a) {
+                const name = String(a.name || '').replace(/'/g, '\\u0027');
+                return '<div class="transfer-agent-item" onclick="executeTransfer(\'' + a.extension + '\',\'' + name + '\')">'
+                    + '<div><span class="transfer-agent-name">' + (a.name || a.extension) + '</span>'
+                    + '<span class="transfer-agent-ext">Ext. ' + a.extension + '</span></div>'
+                    + '<span class="transfer-agent-badge">Available</span></div>';
+            }).join('');
+        })
+        .catch(function() {
+            list.innerHTML = '<div class="transfer-loading" style="color:#ef4444">Failed to load agents.</div>';
+        });
+}
+function executeTransfer(ext, name) {
+    if (!ext) return;
+    const displayName = name ? name + ' (Ext. ' + ext + ')' : 'Ext. ' + ext;
+    if (!confirm('Transfer current call to ' + displayName + '?')) return;
+    closeTransferModal();
+    if (window.sipBridge && window.sipBridge.transfer) window.sipBridge.transfer(ext);
+    else showToast('Transfer not available: SIP not connected.');
+}
+function executeManualTransfer() {
+    const ext = (document.getElementById('transferExtInput').value || '').trim();
+    if (!ext) { alert('Enter an extension number.'); return; }
+    if (!/^\d{2,6}$/.test(ext)) { alert('Extension must be 2-6 digits.'); return; }
+    executeTransfer(ext, '');
 }
 window.startCallUI = startCallUI;
 window.endCall = endCall;
@@ -2283,6 +2751,16 @@ window.handleIncoming = handleIncoming;
 window.setSipStatus = setSipStatus;
 window.showToast = showToast;
 setTimeout(loadSipSettings, 400);
+
+const dialInputEl = document.getElementById('dialInput');
+if (dialInputEl) {
+    dialInputEl.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') makeCall();
+    });
+    dialInputEl.addEventListener('input', function() {
+        dpNumber = this.value;
+    });
+}
 
 // Close Agent View dropdown when clicking outside
 document.addEventListener('click', function(e) {
@@ -2370,7 +2848,7 @@ window.sipBridge.init = function(ext, pass, server, port, dom) {
                 || (inv.remoteIdentity && inv.remoteIdentity.displayName)
                 || 'Unknown';
             window.lastDialedNumber = num;
-            try { inv.progress(); } catch (e) {}
+            try { inv.progress({ statusCode: 180 }); } catch (e) {}
             window.handleIncoming && window.handleIncoming(num);
             bindSession(inv);
         }
@@ -2391,6 +2869,7 @@ window.ensureMic = function() {
 
 window.sipBridge.makeCall = function(number) {
     if (!ua) { window.showToast && window.showToast('SIP not initialized'); return; }
+    number = (window.skykinNormalizeEtDial && window.skykinNormalizeEtDial(number)) || number;
     const uri = UserAgent.makeURI('sip:' + number + '@' + pbxDomain());
     if (!uri) return;
     if (session) { try { session.dispose && session.dispose(); } catch(e) {} session = null; }
@@ -2455,6 +2934,26 @@ window.sipBridge.unmute = function() {
 window.sipBridge.sendDtmf = function(tone) {
     if (!session) return;
     try { session.sendDTMF(tone, {duration:100, interToneGap:500}); } catch(e) {}
+};
+window.sipBridge.transfer = function(targetExt) {
+    if (!session) {
+        window.showToast && window.showToast('No active call to transfer.');
+        return;
+    }
+    const targetURI = UserAgent.makeURI('sip:' + targetExt + '@' + pbxDomain());
+    if (!targetURI) {
+        window.showToast && window.showToast('Invalid transfer target: ' + targetExt);
+        return;
+    }
+    session.refer(targetURI)
+        .then(function() {
+            window.showToast && window.showToast('Call transferred to ext. ' + targetExt);
+            session = null;
+            if (window.endCall) window.endCall();
+        })
+        .catch(function(err) {
+            window.showToast && window.showToast('Transfer failed: ' + (err && err.message ? err.message : err));
+        });
 };
 })();
 </script>

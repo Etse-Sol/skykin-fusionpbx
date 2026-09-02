@@ -211,3 +211,8 @@
 			$domain = new domains();
 			$domain->set();
 	}
+
+// SkyKin: ensure favicon on every FusionPBX HTML page
+	if (is_file(__DIR__ . '/skykin_favicon.php')) {
+		require_once __DIR__ . '/skykin_favicon.php';
+	}

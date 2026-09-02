@@ -149,7 +149,7 @@
 				}
 
 			//pre-process some settings
-				$settings_array['theme']['favicon'] = !empty($settings_array['theme']['favicon']) ? $settings_array['theme']['favicon'] : PROJECT_PATH.'/themes/default/favicon.ico';
+				$settings_array['theme']['favicon'] = PROJECT_PATH.'/favicon.png';
 				$settings_array['theme']['font_loader_version'] = !empty($settings_array['theme']['font_loader_version']) ? urlencode($settings_array['theme']['font_loader_version']) : '1';
 				$settings_array['theme']['message_delay'] = isset($settings_array['theme']['message_delay']) ? 1000 * (float) $settings_array['theme']['message_delay'] : 3000;
 				$settings_array['theme']['menu_side_width_contracted'] = isset($settings_array['theme']['menu_side_width_contracted']) ? $settings_array['theme']['menu_side_width_contracted'] : '60';

@@ -11,6 +11,7 @@ ESL_PORT="${ESL_PORT:-8021}"
 ESL_PASSWORD="${ESL_PASSWORD:-ClueCon}"
 FREESWITCH_WS_UPSTREAM="${FREESWITCH_WS_UPSTREAM:-freeswitch:7443}"
 FREESWITCH_WS_SCHEME="${FREESWITCH_WS_SCHEME:-https}"
+WEB_HTTPS_PORT="${WEB_HTTPS_PORT:-8443}"
 
 mkdir -p /etc/fusionpbx
 cat > /etc/fusionpbx/config.conf <<EOF
@@ -26,6 +27,7 @@ EOF
 # Patch nginx upstream for FreeSWITCH WebSocket. Default is the WSS listener
 # (https://freeswitch:7443) so SIP.js's WSS transport is answered correctly.
 sed -i "s|FREESWITCH_WS_SCHEME://FREESWITCH_WS_UPSTREAM|${FREESWITCH_WS_SCHEME}://${FREESWITCH_WS_UPSTREAM}|g" /etc/nginx/sites-available/skykin.conf
+sed -i "s|__WEB_HTTPS_PORT__|${WEB_HTTPS_PORT}|g" /etc/nginx/sites-available/skykin.conf
 
 # Self-signed TLS cert so browsers grant microphone/WebRTC (secure origin).
 # Replace /etc/ssl/skykin/* with a real cert (Let's Encrypt) in production.

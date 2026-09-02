@@ -368,9 +368,10 @@ if ($is_api) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<?php echo skykin_favicon_tag(); ?>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SkyKin – Call Billing Portal</title>
+<title>Sky Connect – Call Billing Portal</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:100vh}
@@ -462,6 +463,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
   padding:12px;border-radius:6px;font-size:13px;margin-bottom:16px}
 .info-box{background:#f0f9ff;border:1px solid #bae6fd;color:#0369a1;padding:14px;border-radius:8px;font-size:13px;line-height:1.5;margin-bottom:20px}
 .alert-warning{background:#fef3c7;border:1px solid #fde68a;color:#92400e;padding:12px;border-radius:6px;font-size:12px}
+.sk-footer{text-align:center;font-size:11px;color:#aaa;padding:20px 24px}
 
 </style>
 </head>
@@ -469,7 +471,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
 
 <div class="topbar">
   <div class="topbar-left">
-    <div class="brand">SkyKin<span> Technologies</span></div>
+    <div class="brand">Sky <span>Connect</span></div>
     <nav class="nav-links">
       <a href="/app/agent_dashboard/supervisor.php">Supervisor</a>
       <a href="/app/agent_dashboard/reports.php">Reports</a>
@@ -644,6 +646,7 @@ body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;color:#333;min-height:
   </div>
 
 </div>
+<div class="sk-footer">Sky Connect &copy; <?php echo date('Y'); ?> | Powered by SkyKin Technology</div>
 
 <script>
 // --- State management ---
@@ -826,6 +829,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadBillingSummary();
 });
 </script>
-
+<script>
+<?php echo skykin_js_bootstrap(); ?>
+</script>
+<script src="idle_watch.js?v=20260818"></script>
 </body>
 </html>
