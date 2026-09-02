@@ -188,13 +188,6 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 $db, $domain, (string)$e['extension'], $today_start, $today_end
             );
         }
-        $busy_counts = skykin_cdr_agent_busy_counts(
-            $db,
-            $domain,
-            array_map(static fn($e) => (string)$e['extension'], array_values($exts)),
-            $today_start,
-            $today_end
-        );
 
         // Call center agent status — key by agent_id AND by extension extracted from contact.
         // BUGFIX: previously keyed only by agent_name ("Agent 1"), then looked up by
@@ -348,7 +341,6 @@ if (isset($_GET['action']) && $_GET['action']==='agents') {
                 'total_calls'  => (int)($st['total'] ?? 0),
                 'answered'     => (int)($st['answered'] ?? 0),
                 'missed'       => (int)($st['missed'] ?? 0),
-                'busy_hits'    => (int)($busy_counts[$ext] ?? 0),
                 'total_talk'   => (int)($st['total_talk'] ?? 0),
                 'avg_dur'      => (int)($st['avg_dur'] ?? 0),
                 'call_duration'=> $call_duration,
@@ -414,27 +406,6 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
         $missed   = (int)($tm['missed'] ?? 0);
         $sla      = $total>0 ? min(100,round(($answered/$total)*95)) : 100;
 
-        $busy_exts = [];
-        try {
-            $bx = $db->prepare("SELECT extension FROM v_extensions e JOIN v_domains d ON d.domain_uuid=e.domain_uuid WHERE d.domain_name=:d ORDER BY extension");
-            $bx->execute([':d' => $domain]);
-            $busy_exts = array_map(static fn($r) => (string)$r['extension'], $bx->fetchAll(PDO::FETCH_ASSOC));
-        } catch (Exception $ignored) {}
-        $busy_token_map = skykin_fs_sip_contact_tokens($domain, $busy_exts);
-        $busy_rows = skykin_cdr_collapse_agent_busy(
-            skykin_cdr_fetch_agent_busy_legs($db, $domain, $today_start, $today_end, 1000),
-            $busy_token_map
-        );
-        $busy_today = count($busy_rows);
-        $busy_events = array_slice(array_map(static function ($r) {
-            return [
-                'time' => $r['time'] ?? '',
-                'caller' => $r['caller'] ?? '',
-                'agent_ext' => $r['agent_ext'] ?? '',
-                'hits' => (int)($r['hits'] ?? 1),
-            ];
-        }, $busy_rows), 0, 15);
-
         // Agents online — SIP registrations, which only FreeSWITCH knows about.
         $online_count = 0;
         try {
@@ -448,8 +419,6 @@ if (isset($_GET['action']) && $_GET['action']==='queue') {
             'total_today'      => $total,
             'answered_today'   => $answered,
             'missed_today'     => $missed,
-            'busy_today'       => $busy_today,
-            'busy_events'      => $busy_events,
             'avg_talk'         => (int)($tm['avg_dur'] ?? 0),
             'avg_wait'         => 0,
             'sla'              => $sla,
@@ -726,6 +695,15 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
         $s->execute($params);
         $raw = skykin_cdr_collapse_hunt_legs($s->fetchAll(PDO::FETCH_ASSOC));
         $raw = array_slice($raw, 0, 500);
+        $busy_token_map = [];
+        try {
+            $bx = $db->prepare("SELECT extension FROM v_extensions e JOIN v_domains d ON d.domain_uuid=e.domain_uuid WHERE d.domain_name=:d ORDER BY extension");
+            $bx->execute([':d' => $domain_]);
+            $busy_token_map = skykin_fs_sip_contact_tokens(
+                $domain_,
+                array_map(static fn($r) => (string)$r['extension'], $bx->fetchAll(PDO::FETCH_ASSOC))
+            );
+        } catch (Exception $ignore) {}
         $rows = [];
         $agent_label = [];
         try {
@@ -767,6 +745,9 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
             elseif (preg_match('/^1\d{2}$/', $dest)) $agent_ext = $dest;
             elseif (preg_match('/^1\d{2}$/', $caller)) $agent_ext = $caller;
             elseif (preg_match('/(?:user\/)?(\d{2,4})@/', (string)($r['cc_agent_bridged'] ?? ''), $m)) $agent_ext = $m[1];
+            if ($agent_ext === '') {
+                $agent_ext = skykin_cdr_busy_row_agent_ext($r, $busy_token_map);
+            }
             $ck = preg_replace('/\D+/', '', $caller);
             if (strlen($ck) >= 9) $ck = substr($ck, -9);
             $bucket = (string)intdiv((int)($r['start_epoch'] ?? 0), 60);
@@ -821,8 +802,14 @@ if (isset($_GET['action']) && $_GET['action']==='call_history_all') {
                 elseif (preg_match('/^1\d{2}$/', $caller) && !preg_match('/^1\d{2}$/', $dest)) $dir = 'outbound';
                 else $dir = 'inbound';
             }
+            $is_busy = !empty($r['_busy_rep']) || skykin_cdr_is_agent_busy_leg($r);
             if (!preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $dest)) {
-                if (preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $cdest)) $dest = $cdest;
+                if ($is_busy) {
+                    if ($agent_ext === '') {
+                        $agent_ext = skykin_cdr_busy_row_agent_ext($r, $busy_token_map);
+                    }
+                    $dest = $agent_ext !== '' ? ('Ext ' . $agent_ext) : 'Agent busy';
+                } elseif (preg_match('/^[\+\d\(\)\-\s#\*]{2,}$/', $cdest)) $dest = $cdest;
                 else continue;
             }
             if (strcasecmp($dest, 'unknown') === 0) {
@@ -1025,7 +1012,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .agent-row:hover{background:#f8fbff}
 .agent-row.open{background:#f0f5ff}
 .agent-row.offline{opacity:.7}
-.agent-row-main{display:grid;grid-template-columns:36px 1fr 70px 90px 52px 52px 52px 70px 18px;gap:8px;align-items:center;padding:10px 12px;cursor:pointer;user-select:none}
+.agent-row-main{display:grid;grid-template-columns:36px 1fr 70px 90px 60px 60px 70px 18px;gap:8px;align-items:center;padding:10px 12px;cursor:pointer;user-select:none}
 .agent-row-main:hover .row-chevron{color:#0047AB}
 .agent-avatar{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;
     font-weight:700;font-size:12px;color:#fff;flex-shrink:0}
@@ -1035,7 +1022,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .row-ext{font-size:11px;color:#888}
 .row-meta{font-size:12px;color:#555;text-align:center}
 .row-meta.missed{color:#f44336;font-weight:600}
-.row-meta.busy{color:#f59e0b;font-weight:600}
 .row-meta.talk{color:#0047AB;font-weight:600}
 .row-oncall{font-size:11px;color:#1565c0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row-chevron{font-size:14px;color:#bbb;transition:transform .2s,color .15s;text-align:center}
@@ -1065,22 +1051,17 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .btn-force-avail{background:#e8f5e9;color:#2e7d32}
 .btn-force-break{background:#fff3e0;color:#e65100}
 .btn-force-out{background:#ffebee;color:#c62828}
-.agents-list-head{display:grid;grid-template-columns:36px 1fr 70px 90px 52px 52px 52px 70px 18px;gap:8px;align-items:center;padding:6px 12px;font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #eee;background:#fafbfc;position:sticky;top:0;z-index:1}
-.busy-event-row{display:grid;grid-template-columns:110px 1fr 80px 60px;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #f5f5f5;font-size:13px}
-.busy-event-row:last-child{border-bottom:none}
-.busy-event-agent{font-weight:600;color:#f59e0b}
-.busy-event-hits{text-align:right;color:#888;font-size:12px}
+.agents-list-head{display:grid;grid-template-columns:36px 1fr 70px 90px 60px 60px 70px 18px;gap:8px;align-items:center;padding:6px 12px;font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #eee;background:#fafbfc;position:sticky;top:0;z-index:1}
 
 /* Dashboard proportions */
 .dashboard-overview{display:flex;flex-direction:column;gap:16px}
-.dashboard-kpis{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px}
+.dashboard-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
 .dashboard-kpi{min-height:92px;background:#fff;border:1px solid #edf0f5;border-radius:10px;padding:14px 16px;
     box-shadow:0 1px 5px rgba(0,0,0,.05);border-top:3px solid #0047AB;display:flex;flex-direction:column;justify-content:center}
 .dashboard-kpi-value{font-size:25px;font-weight:700;line-height:1;color:#0047AB}
 .dashboard-kpi-label{font-size:11px;color:#777;margin-top:7px}
 .dashboard-kpi.answered{border-top-color:#28a745}.dashboard-kpi.answered .dashboard-kpi-value{color:#28a745}
 .dashboard-kpi.missed{border-top-color:#dc3545}.dashboard-kpi.missed .dashboard-kpi-value{color:#dc3545}
-.dashboard-kpi.busy{border-top-color:#f59e0b}.dashboard-kpi.busy .dashboard-kpi-value{color:#f59e0b}
 .dashboard-kpi.online{border-top-color:#17a2b8}.dashboard-kpi.online .dashboard-kpi-value{color:#17a2b8}
 .queue-health-card{grid-column:span 2;border-top-color:#fd7e14}
 .queue-health-title{font-size:11px;font-weight:700;color:#555;margin-bottom:10px;display:flex;align-items:center;gap:6px}
@@ -1120,6 +1101,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
 .badge-answered{background:#e8f5e9;color:#2e7d32;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-failed{background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .badge-missed{background:#ffebee;color:#c62828;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
+.badge-busy{background:#fff3e0;color:#e65100;padding:2px 8px;border-radius:12px;font-size:10px;font-weight:700}
 .rank-medal{font-size:16px}
 
 /* Date filter */
@@ -1150,8 +1132,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f2f5;color:#333;min-h
     .live-agents-header{align-items:flex-start;flex-direction:column}
     .live-agents-tools{width:100%;justify-content:flex-end}
     .agent-row-main,.agents-list-head{grid-template-columns:32px minmax(110px,1fr) 70px 60px 18px}
-    .agent-row-main>:nth-child(4),.agent-row-main>:nth-child(6),.agent-row-main>:nth-child(7),.agent-row-main>:nth-child(8),
-    .agents-list-head>:nth-child(4),.agents-list-head>:nth-child(6),.agents-list-head>:nth-child(7),.agents-list-head>:nth-child(8){display:none}
+    .agent-row-main>:nth-child(4),.agent-row-main>:nth-child(6),.agent-row-main>:nth-child(7),
+    .agents-list-head>:nth-child(4),.agents-list-head>:nth-child(6),.agents-list-head>:nth-child(7){display:none}
     .agent-row-detail{padding-left:12px}
 }
 @media(max-width:600px){
@@ -1360,10 +1342,6 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                         <div class="dashboard-kpi-value" id="qs-missed">–</div>
                         <div class="dashboard-kpi-label">Missed</div>
                     </div>
-                    <div class="dashboard-kpi busy">
-                        <div class="dashboard-kpi-value" id="qs-busy">–</div>
-                        <div class="dashboard-kpi-label">Agent Busy</div>
-                    </div>
                     <div class="dashboard-kpi online">
                         <div class="dashboard-kpi-value" id="qs-online">–</div>
                         <div class="dashboard-kpi-label">Agents Online</div>
@@ -1396,17 +1374,6 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                         <span style="font-size:11px;color:#aaa">Longest wait is offered next</span>
                     </div>
                     <div id="waitingCallersList" style="padding:12px 16px;color:#aaa;font-size:13px">No callers waiting.</div>
-                </div>
-
-                <div class="live-agents-panel" id="agentBusyPanel" style="margin-bottom:14px">
-                    <div class="live-agents-header">
-                        <div style="display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:#333">
-                            Agent Busy Today
-                            <span id="agentBusyCount" style="background:#f59e0b;color:#fff;font-size:11px;border-radius:10px;padding:1px 8px;display:none">0</span>
-                        </div>
-                        <span style="font-size:11px;color:#aaa">Inbound rang an agent who was already on a call — not a missed call</span>
-                    </div>
-                    <div id="agentBusyList" style="padding:12px 16px;color:#aaa;font-size:13px">No agent-busy events today.</div>
                 </div>
 
                 <!-- Leave requests awaiting supervisor approval -->
@@ -1442,7 +1409,6 @@ body.phone-open .main{margin-right:300px;transition:margin-right .3s ease}
                     <span>On Call</span>
                     <span style="text-align:center">Ans</span>
                     <span style="text-align:center">Miss</span>
-                    <span style="text-align:center">Busy</span>
                     <span style="text-align:center">Talk</span>
                     <span></span>
                 </div>
@@ -1815,36 +1781,11 @@ function fetchQueue(){
             document.getElementById('qs-total').textContent   = d.total_today??'0';
             document.getElementById('qs-answered').textContent= d.answered_today??'0';
             document.getElementById('qs-missed').textContent  = d.missed_today??'0';
-            document.getElementById('qs-busy').textContent    = d.busy_today??'0';
             document.getElementById('qs-avgtalk').textContent = fmtDur(d.avg_talk);
             document.getElementById('qs-avgwait').textContent = fmtDur(d.avg_wait);
             document.getElementById('qs-sla').textContent     = (d.sla??100)+'%';
             renderWaitingCallers(d.waiting_callers||[]);
-            renderAgentBusyEvents(d.busy_events||[]);
         }).catch(()=>{});
-}
-
-function renderAgentBusyEvents(list){
-    const box = document.getElementById('agentBusyList');
-    const badge = document.getElementById('agentBusyCount');
-    if (!box) return;
-    const n = (list||[]).length;
-    if (badge) {
-        badge.textContent = String(n);
-        badge.style.display = n ? 'inline-block' : 'none';
-    }
-    if (!n) {
-        box.innerHTML = 'No agent-busy events today.';
-        box.style.color = '#aaa';
-        return;
-    }
-    box.style.color = '#333';
-    box.innerHTML = list.map(e=>{
-        const caller = String(e.caller||'—').replace(/[&<>"']/g, ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-        const agent = e.agent_ext ? ('Ext ' + e.agent_ext) : '—';
-        const hits = parseInt(e.hits,10) > 1 ? ('×' + e.hits) : '';
-        return `<div class="busy-event-row"><span>${e.time||'—'}</span><span>${caller}</span><span class="busy-event-agent">${agent}</span><span class="busy-event-hits">${hits}</span></div>`;
-    }).join('');
 }
 
 function renderWaitingCallers(list){
@@ -2060,7 +2001,6 @@ function renderAgents(agents){
                 <div class="row-oncall">${onCall}</div>
                 <div class="row-meta" style="text-align:center">${a.answered}</div>
                 <div class="row-meta missed" style="text-align:center">${a.missed}</div>
-                <div class="row-meta busy" style="text-align:center">${a.busy_hits||0}</div>
                 <div class="row-meta talk" style="text-align:center">${fmtSec(a.total_talk)}</div>
                 <div class="row-chevron">&#8250;</div>
             </div>
@@ -2073,10 +2013,6 @@ function renderAgents(agents){
                     <div class="detail-metric">
                         <div class="detail-metric-lbl">Avg Call</div>
                         <div class="detail-metric-val">${fmtDur(a.avg_dur)}</div>
-                    </div>
-                    <div class="detail-metric">
-                        <div class="detail-metric-lbl">Agent Busy</div>
-                        <div class="detail-metric-val">${a.busy_hits||0}</div>
                     </div>
                     <div class="detail-metric">
                         <div class="detail-metric-lbl">Total Calls</div>
@@ -2185,7 +2121,7 @@ function fetchCallHistory(){
                 <td>${r.agent||'—'}</td>
                 <td><span class="badge-${r.direction==='outbound'?'out':'in'}">${r.direction||'—'}</span></td>
                 <td>${r.duration}</td>
-                <td><span class="badge-${r.status==='Answered'?'answered':r.status==='Failed'?'failed':'missed'}">${r.status}</span></td>
+                <td><span class="badge-${r.status==='Answered'?'answered':r.status==='Failed'?'failed':r.status==='Agent Busy'?'busy':'missed'}">${r.status}</span></td>
                 <td style="font-size:11px;color:#888">${r.cause}</td>
             </tr>`).join('');
         });
