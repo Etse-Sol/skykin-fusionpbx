@@ -38,6 +38,10 @@ docker exec -i skykin-freeswitch tee /etc/freeswitch/dialplan/public/02_skykin_d
       <action application="set" data="ignore_early_media=true"/>
       <action application="set" data="bridge_early_media=false"/>
       <action application="set" data="originate_early_media=false"/>
+      <action application="set" data="record_stereo=false"/>
+      <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+      <action application="set" data="record_name=\${uuid}.wav"/>
+      <action application="set" data="api_on_answer=uuid_record \${uuid} start \${record_path}/\${record_name}"/>
       <action application="set" data="instant_ringback=true"/>
       <action application="lua" data="/etc/freeswitch/scripts/skykin_cc_prune.lua 8000@ahununu"/>
       <action application="export" data="nolocal:execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua"/>

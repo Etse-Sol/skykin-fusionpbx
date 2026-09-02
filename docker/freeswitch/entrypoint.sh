@@ -300,7 +300,7 @@ CFGEOF
     # "attempt to concatenate a nil value (global 'scripts_dir')".
     # Same delete-then-insert approach as above to stay idempotent.
     sed -i '/name="xml-handler-script"/d;/name="xml-handler-bindings"/d' "$LUACONF" || true
-    sed -i 's#</settings>#    <param name="xml-handler-script" value="app.lua xml_handler"/>\n    <param name="xml-handler-bindings" value="directory"/>\n  </settings>#' "$LUACONF" || true
+    sed -i 's#</settings>#    <param name="xml-handler-script" value="app.lua xml_handler"/>\n    <param name="xml-handler-bindings" value="directory dialplan"/>\n  </settings>#' "$LUACONF" || true
     sed -i '/skykin_cc_watch/d;/skykin_bl_hash/d' "$LUACONF" || true
     sed -i 's#</settings>#    <param name="startup-script" value="/etc/freeswitch/scripts/skykin_cc_watch.lua"/>\n    <param name="startup-script" value="/etc/freeswitch/scripts/skykin_bl_hash.lua"/>\n  </settings>#' "$LUACONF" || true
     echo "  FusionPBX directory handler enabled (db ${FUSIONPBX_DB_HOST}/${FUSIONPBX_DB_NAME})"
@@ -748,6 +748,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID758},origination_caller_id_name=${AHUNUNU_CID758}}sofia/gateway/SIP758/+251\$1"/>
@@ -761,6 +766,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID758},origination_caller_id_name=${AHUNUNU_CID758}}sofia/gateway/SIP758/+251\$1"/>
@@ -774,6 +784,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID759},origination_caller_id_name=${AHUNUNU_CID759}}sofia/gateway/SIP759/+251\$1"/>
@@ -787,6 +802,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID759},origination_caller_id_name=${AHUNUNU_CID759}}sofia/gateway/SIP759/+251\$1"/>
@@ -800,6 +820,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
@@ -813,6 +838,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
@@ -826,6 +856,11 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
@@ -839,10 +874,48 @@ ${OUT_HUP}
         <action application="set" data="call_direction=outbound"/>
         <action application="set" data="continue_on_fail=true"/>
         <action application="pre_answer"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="record_stereo=true"/>
+        <action application="set" data="record_path=/var/lib/freeswitch/recordings/ahununu/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+        <action application="set" data="record_name=\${uuid}.wav"/>
+        <action application="record_session" data="\${record_path}/\${record_name}"/>
         <action application="set" data="bleg_uuid=\${create_uuid()}"/>
         <action application="set" data="continue_on_fail=false"/>
         <action application="bridge" data="{origination_uuid=\${bleg_uuid},absolute_codec_string=^^:PCMA:PCMU:AMR@8000h@20i,amr_octet_align=1,rtcp=-1,rtp_secure_media=false,media_webrtc=false,ignore_early_media=false,rtp_advertise_ip=${AHUNUNU_LAN},include_external_ip=false,origination_caller_id_number=${AHUNUNU_CID},origination_caller_id_name=${AHUNUNU_CID}}sofia/gateway/${AHUNUNU_GW}/+251\$1"/>
         <action application="hangup"/>
+      </condition>
+    </extension>
+    <extension name="skykin_welcome_route">
+      <condition field="destination_number" expression="^8098$">
+        <action application="set" data="domain_name=ahununu"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="call_direction=inbound"/>
+        <action application="export" data="call_direction=inbound"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="ignore_early_media=true"/>
+        <action application="set" data="bridge_early_media=false"/>
+        <action application="set" data="instant_ringback=true"/>
+        <action application="ring_ready"/>
+        <action application="lua" data="/etc/freeswitch/scripts/skykin_welcome.lua"/>
+        <action application="transfer" data="8099 XML ahununu"/>
+      </condition>
+    </extension>
+    <extension name="skykin_agent_hunt">
+      <condition field="destination_number" expression="^8099$">
+        <action application="set" data="domain_name=ahununu"/>
+        <action application="export" data="domain_name=ahununu"/>
+        <action application="set" data="call_direction=inbound"/>
+        <action application="set" data="hangup_after_bridge=true"/>
+        <action application="set" data="continue_on_fail=false"/>
+        <action application="set" data="ignore_early_media=true"/>
+        <action application="set" data="bridge_early_media=false"/>
+        <action application="set" data="originate_early_media=false"/>
+        <action application="set" data="instant_ringback=true"/>
+        <action application="lua" data="/etc/freeswitch/scripts/skykin_cc_prune.lua 8000@ahununu"/>
+        <action application="export" data="nolocal:execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua"/>
+        <action application="set" data="cc_export_vars=execute_on_hangup"/>
+        <action application="ring_ready"/>
+        <action application="lua" data="/etc/freeswitch/scripts/skykin_inbound.lua"/>
       </condition>
     </extension>
   </context>
@@ -1475,6 +1548,10 @@ if [ -n "$FS_DOMAIN2" ] && [ -n "$FS_INBOUND_DID2_REGEX" ]; then
       <action application="set" data="bridge_early_media=false"/>
       <action application="set" data="originate_early_media=false"/>
       <action application="set" data="cc_moh_override="/>
+      <action application="set" data="record_stereo=true"/>
+      <action application="set" data="record_path=/var/lib/freeswitch/recordings/${FS_DOMAIN2}/archive/\${strftime(%Y)}/\${strftime(%b)}/\${strftime(%d)}"/>
+      <action application="set" data="record_name=\${uuid}.wav"/>
+      <action application="set" data="execute_on_answer=record_session \${record_path}/\${record_name}"/>
       <action application="set" data="instant_ringback=true"/>
       <action application="lua" data="/etc/freeswitch/scripts/skykin_cc_prune.lua ${FS_QUEUE_EXT}@${FS_DOMAIN2}"/>
       <action application="export" data="nolocal:execute_on_hangup=lua::/etc/freeswitch/scripts/skykin_cc_drop.lua"/>
@@ -1491,7 +1568,7 @@ if [ -n "$FS_DOMAIN2" ] && [ -n "$FS_INBOUND_DID2_REGEX" ]; then
   </extension>
 </include>
 DID2EOF
-  echo "  Inbound DID ${FS_INBOUND_DID2_REGEX} -> queue ${FS_QUEUE_EXT}@${FS_DOMAIN2}"
+  echo "  Inbound DID ${FS_INBOUND_DID2_REGEX} -> skykin_inbound.lua (welcome inside lua)"
 fi
 
 # Remove vanilla demo dialplans that hijack agent extensions. The stock
@@ -1544,7 +1621,7 @@ if [ -d "$LIVE" ] && [ -f "$LIVE/skykin_inbound.lua" ]; then
     /etc/freeswitch/dialplan/public \
     /etc/freeswitch/sip_profiles/external \
     /etc/freeswitch/autoload_configs
-  for f in skykin_inbound.lua skykin_cc_drop.lua skykin_bl_gate.lua skykin_bl_hash.lua; do
+  for f in skykin_inbound.lua skykin_welcome.lua skykin_cc_drop.lua skykin_bl_gate.lua skykin_bl_hash.lua; do
     [ -f "$LIVE/$f" ] && cp "$LIVE/$f" /etc/freeswitch/scripts/
   done
   [ -f "$LIVE/01_skykin_did.xml" ] && cp "$LIVE/01_skykin_did.xml" /etc/freeswitch/dialplan/public/
