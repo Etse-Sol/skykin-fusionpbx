@@ -385,12 +385,12 @@ function skykin_cdr_is_hunt_did(string $number): bool {
 }
 
 /**
- * Ethio multi-DID hunt legs: inbound ORIGINATOR_CANCEL with no talk time.
- * Carrier rings several DIDs; losing legs cancel with ORIGINATOR_CANCEL (duration may be >0).
+ * Ethio multi-DID hunt legs: inbound cancel/clear with no talk time.
+ * Carrier rings several DIDs; losing legs cancel with ORIGINATOR_CANCEL or NORMAL_CLEARING.
  */
 function skykin_cdr_hunt_leg_sql(): string {
 	return "(billsec = 0 AND LOWER(COALESCE(direction, '')) = 'inbound'"
-		. " AND hangup_cause = 'ORIGINATOR_CANCEL'"
+		. " AND hangup_cause IN ('ORIGINATOR_CANCEL', 'NORMAL_CLEARING')"
 		. " AND (duration = 0"
 		. " OR destination_number ~ '(11619803[5-9]|11113875[789])$'"
 		. " OR caller_destination ~ '(11619803[5-9]|11113875[789])$'))";
@@ -403,16 +403,45 @@ function skykin_cdr_missed_sql(): string {
 }
 
 /**
- * Failed ring to user/2xx@domain — each bridge retry logs a separate CDR with dest=202.
- * Exclude from missed KPIs (collapse in call history instead).
+ * Failed ring to user/2xx@domain — each bridge retry logs a separate CDR.
+ * WebRTC agents may show a sofia contact token (e.g. j2kriger) instead of 202.
  */
 function skykin_cdr_bridge_retry_leg_sql(): string {
+	$causes = "'NORMAL_TEMPORARY_FAILURE', 'NORMAL_CLEARING',"
+		. " 'NO_ANSWER', 'USER_BUSY', 'CALL_REJECTED', 'ORIGINATOR_CANCEL', 'ALLOTTED_TIMEOUT'";
 	return "(billsec = 0"
 		. " AND (direction IS NULL OR LOWER(COALESCE(direction, '')) IN ('', 'inbound'))"
+		. " AND hangup_cause IN ({$causes})"
 		. " AND (destination_number ~ '^(1[0-9]{2}|2[0-9]{2})$'"
-		. " OR last_arg ~* 'user/(1[0-9]{2}|2[0-9]{2})@')"
-		. " AND hangup_cause IN ('NORMAL_TEMPORARY_FAILURE', 'NORMAL_CLEARING',"
-		. " 'NO_ANSWER', 'USER_BUSY', 'CALL_REJECTED', 'ORIGINATOR_CANCEL', 'ALLOTTED_TIMEOUT'))";
+		. " OR last_arg ~* 'user/(1[0-9]{2}|2[0-9]{2})@'"
+		. " OR cc_agent_bridged ~* '/(1[0-9]{2}|2[0-9]{2})@'"
+		. " OR (destination_number ~ '^[a-z0-9]{4,16}$'"
+		. " AND destination_number !~ '^[0-9]+$'"
+		. " AND caller_id_number ~ '^[+0-9]{9,}$')))";
+}
+
+/** WebRTC contact token in destination_number instead of agent extension. */
+function skykin_cdr_is_webrtc_bridge_token(string $dest): bool {
+	$dest = strtolower(trim($dest));
+	if ($dest === '' || $dest === '8000') {
+		return false;
+	}
+	if (preg_match('/^(1\d{2}|2[0-9]{2})$/', $dest)) {
+		return false;
+	}
+	if (skykin_cdr_is_hunt_did($dest)) {
+		return false;
+	}
+	$digits = preg_replace('/\D+/', '', $dest);
+	if ($digits !== '' && strlen($digits) >= 8 && preg_match('/^\d+$/', $digits)) {
+		return false;
+	}
+	return (bool)preg_match('/^[a-z0-9]{4,16}$/', $dest);
+}
+
+function skykin_cdr_is_external_caller_number(string $number): bool {
+	$digits = preg_replace('/\D+/', '', $number);
+	return strlen($digits) >= 9 && !preg_match('/^(1\d{2}|2[0-9]{2})$/', $digits);
 }
 
 /** Agent extension in destination or last_arg (B-leg bridge rows). */
@@ -424,6 +453,10 @@ function skykin_cdr_row_agent_ext(array $row): string {
 	}
 	$arg = (string)($row['last_arg'] ?? '');
 	if (preg_match('/user\/(1\d{2}|2[0-9]{2})@/i', $arg, $m)) {
+		return $m[1];
+	}
+	$bridged = (string)($row['cc_agent_bridged'] ?? '');
+	if (preg_match('/\/(1\d{2}|2[0-9]{2})@/i', $bridged, $m)) {
 		return $m[1];
 	}
 	return '';
@@ -446,11 +479,12 @@ function skykin_cdr_is_hunt_leg(array $row): bool {
 	if (strtolower((string)($row['direction'] ?? '')) !== 'inbound') {
 		return false;
 	}
-	if ((string)($row['hangup_cause'] ?? '') !== 'ORIGINATOR_CANCEL') {
-		return false;
-	}
-	if ((int)($row['duration'] ?? 0) === 0) {
+	$cause = strtoupper(trim((string)($row['hangup_cause'] ?? '')));
+	if ($cause === 'ORIGINATOR_CANCEL' && (int)($row['duration'] ?? 0) === 0) {
 		return true;
+	}
+	if (!in_array($cause, ['ORIGINATOR_CANCEL', 'NORMAL_CLEARING'], true)) {
+		return false;
 	}
 	$dest = (string)($row['destination_number'] ?? '');
 	$cdest = (string)($row['caller_destination'] ?? '');
@@ -472,7 +506,11 @@ function skykin_cdr_is_failed_agent_bridge_leg(array $row): bool {
 	if ($dir === 'outbound' || $dir === 'local') {
 		return false;
 	}
-	if (skykin_cdr_row_agent_ext($row) === '') {
+	$dest = (string)($row['destination_number'] ?? '');
+	$hasAgent = skykin_cdr_row_agent_ext($row) !== '';
+	$opaqueBridge = skykin_cdr_is_webrtc_bridge_token($dest)
+		&& skykin_cdr_is_external_caller_number((string)($row['caller_id_number'] ?? ''));
+	if (!$hasAgent && !$opaqueBridge) {
 		return false;
 	}
 	$cause = strtoupper(trim((string)($row['hangup_cause'] ?? '')));
