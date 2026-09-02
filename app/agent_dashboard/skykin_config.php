@@ -407,10 +407,26 @@ function skykin_cdr_missed_sql(): string {
  * Exclude from missed KPIs (collapse in call history instead).
  */
 function skykin_cdr_bridge_retry_leg_sql(): string {
-	return "(billsec = 0 AND LOWER(COALESCE(direction, '')) = 'inbound'"
-		. " AND destination_number ~ '^(1[0-9]{2}|2[0-9]{2})$'"
+	return "(billsec = 0"
+		. " AND (direction IS NULL OR LOWER(COALESCE(direction, '')) IN ('', 'inbound'))"
+		. " AND (destination_number ~ '^(1[0-9]{2}|2[0-9]{2})$'"
+		. " OR last_arg ~* 'user/(1[0-9]{2}|2[0-9]{2})@')"
 		. " AND hangup_cause IN ('NORMAL_TEMPORARY_FAILURE', 'NORMAL_CLEARING',"
 		. " 'NO_ANSWER', 'USER_BUSY', 'CALL_REJECTED', 'ORIGINATOR_CANCEL', 'ALLOTTED_TIMEOUT'))";
+}
+
+/** Agent extension in destination or last_arg (B-leg bridge rows). */
+function skykin_cdr_row_agent_ext(array $row): string {
+	$dest = preg_replace('/@.*$/', '', trim((string)($row['destination_number'] ?? '')));
+	$dest_digits = preg_replace('/\D+/', '', $dest);
+	if (preg_match('/^(1\d{2}|2[0-9]{2})$/', $dest_digits)) {
+		return $dest_digits;
+	}
+	$arg = (string)($row['last_arg'] ?? '');
+	if (preg_match('/user\/(1\d{2}|2[0-9]{2})@/i', $arg, $m)) {
+		return $m[1];
+	}
+	return '';
 }
 
 /** Count in totals / answer-rate denominators (exclude hunt noise). */
@@ -452,12 +468,11 @@ function skykin_cdr_is_failed_agent_bridge_leg(array $row): bool {
 	if ((int)($row['billsec'] ?? 0) > 0) {
 		return false;
 	}
-	if (strtolower(trim((string)($row['direction'] ?? ''))) !== 'inbound') {
+	$dir = strtolower(trim((string)($row['direction'] ?? '')));
+	if ($dir === 'outbound' || $dir === 'local') {
 		return false;
 	}
-	$dest = preg_replace('/@.*$/', '', trim((string)($row['destination_number'] ?? '')));
-	$dest_digits = preg_replace('/\D+/', '', $dest);
-	if (!preg_match('/^(1\d{2}|2[0-9]{2})$/', $dest_digits)) {
+	if (skykin_cdr_row_agent_ext($row) === '') {
 		return false;
 	}
 	$cause = strtoupper(trim((string)($row['hangup_cause'] ?? '')));
