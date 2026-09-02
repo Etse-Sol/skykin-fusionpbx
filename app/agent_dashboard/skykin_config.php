@@ -317,7 +317,8 @@ function skykin_sql_tz(): string {
 /** Local wall-clock instant from a Unix epoch column (v_xml_cdr.start_epoch). */
 function skykin_cdr_local_ts_sql(string $epoch_col = 'start_epoch'): string {
 	$tz = skykin_sql_tz();
-	return "(to_timestamp({$epoch_col}) AT TIME ZONE 'UTC') AT TIME ZONE '{$tz}'";
+	// to_timestamp() returns timestamptz; one step into the display zone.
+	return "timezone('{$tz}', to_timestamp({$epoch_col}))";
 }
 
 /** Format a CDR epoch in the dashboard timezone. */
@@ -395,14 +396,26 @@ function skykin_cdr_hunt_leg_sql(): string {
 		. " OR caller_destination ~ '(11619803[5-9]|11113875[789])$'))";
 }
 
-/** Real missed: reached PBX, no talk, not a hunt leg. */
+/** Real missed: reached PBX, no talk, not a hunt leg or agent-bridge retry noise. */
 function skykin_cdr_missed_sql(): string {
-	return '(billsec = 0 AND NOT ' . skykin_cdr_hunt_leg_sql() . ')';
+	return '(billsec = 0 AND NOT ' . skykin_cdr_hunt_leg_sql()
+		. ' AND NOT ' . skykin_cdr_bridge_retry_leg_sql() . ')';
+}
+
+/**
+ * Failed ring to user/2xx@domain — each bridge retry logs a separate CDR with dest=202.
+ * Exclude from missed KPIs (collapse in call history instead).
+ */
+function skykin_cdr_bridge_retry_leg_sql(): string {
+	return "(billsec = 0 AND LOWER(COALESCE(direction, '')) = 'inbound'"
+		. " AND destination_number ~ '^(1[0-9]{2}|2[0-9]{2})$'"
+		. " AND hangup_cause IN ('NORMAL_TEMPORARY_FAILURE', 'NORMAL_CLEARING',"
+		. " 'NO_ANSWER', 'USER_BUSY', 'CALL_REJECTED', 'ORIGINATOR_CANCEL', 'ALLOTTED_TIMEOUT'))";
 }
 
 /** Count in totals / answer-rate denominators (exclude hunt noise). */
 function skykin_cdr_reportable_sql(): string {
-	return 'NOT ' . skykin_cdr_hunt_leg_sql();
+	return 'NOT ' . skykin_cdr_hunt_leg_sql() . ' AND NOT ' . skykin_cdr_bridge_retry_leg_sql();
 }
 
 /** Answered calls for KPIs (talk time > 0, reportable). */
@@ -428,6 +441,41 @@ function skykin_cdr_is_hunt_leg(array $row): bool {
 	return skykin_cdr_is_hunt_did($dest) || skykin_cdr_is_hunt_did($cdest);
 }
 
+/**
+ * Inbound B-leg rows (dest 101–199 / 201–299) with no talk — bridge retries to the agent.
+ * One customer call can produce hundreds of these; collapse to one row per caller window.
+ */
+function skykin_cdr_is_failed_agent_bridge_leg(array $row): bool {
+	if (skykin_cdr_is_hunt_leg($row)) {
+		return false;
+	}
+	if ((int)($row['billsec'] ?? 0) > 0) {
+		return false;
+	}
+	if (strtolower(trim((string)($row['direction'] ?? ''))) !== 'inbound') {
+		return false;
+	}
+	$dest = preg_replace('/@.*$/', '', trim((string)($row['destination_number'] ?? '')));
+	$dest_digits = preg_replace('/\D+/', '', $dest);
+	if (!preg_match('/^(1\d{2}|2[0-9]{2})$/', $dest_digits)) {
+		return false;
+	}
+	$cause = strtoupper(trim((string)($row['hangup_cause'] ?? '')));
+	return in_array($cause, [
+		'NORMAL_TEMPORARY_FAILURE',
+		'NORMAL_CLEARING',
+		'NO_ANSWER',
+		'USER_BUSY',
+		'CALL_REJECTED',
+		'ORIGINATOR_CANCEL',
+		'ALLOTTED_TIMEOUT',
+	], true);
+}
+
+function skykin_cdr_is_collapsible_noise_leg(array $row): bool {
+	return skykin_cdr_is_hunt_leg($row) || skykin_cdr_is_failed_agent_bridge_leg($row);
+}
+
 /** Last 9 digits of a phone for hunt grouping. */
 function skykin_cdr_caller_key(string $number): string {
 	$digits = preg_replace('/\D+/', '', $number);
@@ -451,8 +499,8 @@ function skykin_cdr_hunt_group_key(array $row, int $bucketSec = 90): string {
 }
 
 /**
- * Collapse Ethio multi-DID hunt legs into one row per lost caller attempt.
- * If the caller was answered in the same window, hunt noise is dropped entirely.
+ * Collapse Ethio multi-DID hunt legs and failed agent-bridge retries into one row
+ * per caller attempt. If the caller was answered in the same window, noise is dropped.
  */
 function skykin_cdr_collapse_hunt_legs(array $rows): array {
 	if ($rows === []) {
@@ -474,7 +522,7 @@ function skykin_cdr_collapse_hunt_legs(array $rows): array {
 	$hunt_groups = [];
 	$plain = [];
 	foreach ($rows as $row) {
-		if (!skykin_cdr_is_hunt_leg($row)) {
+		if (!skykin_cdr_is_collapsible_noise_leg($row)) {
 			$plain[] = $row;
 			continue;
 		}
