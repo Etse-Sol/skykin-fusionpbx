@@ -12,10 +12,10 @@ class AppConfig {
 
   /// The host (IP or hostname) of the PHP backend.
   /// Do NOT include 'http://' or a port here — those are added below.
-  static const String serverHost = 'localhost';
+  static const String serverHost = '192.168.1.10';
 
   /// The port the PHP built-in server (or production server) listens on.
-  static const int serverPort = 8000;
+  static const int serverPort = 80;
 
   /// Fully-assembled base URL used for all API calls.
   static String get baseUrl => 'http://$serverHost:$serverPort';

@@ -54,7 +54,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
     setState(() { _loading = true; _error = null; });
 
     final serverIp = _serverCtrl.text.trim().isEmpty ? AppConfig.serverHost : _serverCtrl.text.trim();
-    final url = Uri.parse('http://$serverIp:${AppConfig.serverPort}/app/mobile_api/index.php?action=login');
+    final url = Uri.parse('https://$serverIp/app/mobile_api/index.php?action=login');
 
     try {
       final resp = await http.post(

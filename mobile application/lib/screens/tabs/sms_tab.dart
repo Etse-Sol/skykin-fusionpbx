@@ -26,7 +26,7 @@ class _SmsTabState extends State<SmsTab> {
   Future<void> _loadLogs() async {
     setState(() { _loading = true; _error = null; });
     try {
-      final url = Uri.parse('http://${widget.serverIp}:8000/app/mobile_api/index.php?action=sms_logs');
+      final url = Uri.parse('https://${widget.serverIp}/app/mobile_api/index.php?action=sms_logs');
       final resp = await http.get(url).timeout(const Duration(seconds: 10));
       final data = jsonDecode(resp.body);
       if (data is List) {
@@ -50,7 +50,7 @@ class _SmsTabState extends State<SmsTab> {
     }
     setState(() => _sending = true);
     try {
-      final url = Uri.parse('http://${widget.serverIp}:8000/app/mobile_api/index.php?action=send_sms');
+      final url = Uri.parse('https://${widget.serverIp}/app/mobile_api/index.php?action=send_sms');
       final resp = await http.post(url,
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'to': to, 'message': msg}),

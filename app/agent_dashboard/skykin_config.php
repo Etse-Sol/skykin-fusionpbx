@@ -212,7 +212,7 @@ function skykin_pdo_fusionpbx(): PDO {
 	// ── Read from resources/config.php (single source of truth) ──────────────
 	// Defaults to the known production host so the app works even if config.php
 	// is temporarily absent (a misconfiguration should be loud, not silent).
-	$h  = '192.168.1.10';
+	$h  = '192.168.0.114';
 	$p  = '5432';
 	$n  = 'fusionpbx';
 	$u  = 'fusionpbx';

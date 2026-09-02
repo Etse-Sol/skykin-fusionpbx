@@ -16,7 +16,7 @@ $action = $_GET['action'] ?? '';
 
 // Helper function to resolve extension/SIP server IP
 function get_server_ip() {
-    $host = (string)($_SERVER['HTTP_HOST'] ?? '192.168.1.10');
+    $host = (string)($_SERVER['HTTP_HOST'] ?? '192.168.0.114');
     return preg_replace('/:\d+$/', '', $host);
 }
 

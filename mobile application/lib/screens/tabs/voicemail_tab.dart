@@ -39,7 +39,7 @@ class _VoicemailTabState extends State<VoicemailTab> {
     setState(() { _loading = true; _error = null; });
     try {
       final url = Uri.parse(
-        'http://${widget.serverIp}:8000/app/mobile_api/index.php?action=voicemails&extension=${widget.extension}');
+        'https://${widget.serverIp}/app/mobile_api/index.php?action=voicemails&extension=${widget.extension}');
       final resp = await http.get(url).timeout(const Duration(seconds: 10));
       final data = jsonDecode(resp.body);
       if (data is List) {

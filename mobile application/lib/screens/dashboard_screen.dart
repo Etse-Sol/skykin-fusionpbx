@@ -7,6 +7,7 @@ import 'tabs/dialer_tab.dart';
 import 'tabs/voicemail_tab.dart';
 import 'tabs/sms_tab.dart';
 import 'tabs/settings_tab.dart';
+import 'tabs/visual_ivr_tab.dart';
 import 'login_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -165,6 +166,7 @@ class _DashboardScreenState extends State<DashboardScreen> implements SipUaHelpe
       DialerTab(helper: _helper, domain: widget.domain, extension: widget.extension),
       VoicemailTab(extension: widget.extension, serverIp: widget.serverIp),
       SmsTab(serverIp: widget.serverIp),
+      VisualIvrTab(helper: _helper, serverIp: widget.serverIp),
       SettingsTab(extension: widget.extension, domain: widget.domain, serverIp: widget.serverIp, onSignOut: _signOut),
     ];
 
@@ -247,6 +249,7 @@ class _DashboardScreenState extends State<DashboardScreen> implements SipUaHelpe
           NavigationDestination(icon: Icon(Icons.dialpad_rounded), label: 'Dialer'),
           NavigationDestination(icon: Icon(Icons.voicemail_rounded), label: 'Voicemail'),
           NavigationDestination(icon: Icon(Icons.message_rounded), label: 'SMS'),
+          NavigationDestination(icon: Icon(Icons.account_tree_rounded), label: 'IVR'),
           NavigationDestination(icon: Icon(Icons.settings_rounded), label: 'Settings'),
         ],
       ),
