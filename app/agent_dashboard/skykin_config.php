@@ -529,6 +529,167 @@ function skykin_cdr_is_collapsible_noise_leg(array $row): bool {
 	return skykin_cdr_is_hunt_leg($row) || skykin_cdr_is_failed_agent_bridge_leg($row);
 }
 
+/** Inbound bridge attempt where the agent line returned USER_BUSY (not a customer missed call). */
+function skykin_cdr_is_agent_busy_leg(array $row): bool {
+	if (strtoupper(trim((string)($row['hangup_cause'] ?? ''))) !== 'USER_BUSY') {
+		return false;
+	}
+	if ((int)($row['billsec'] ?? 0) > 0) {
+		return false;
+	}
+	$dir = strtolower(trim((string)($row['direction'] ?? '')));
+	if ($dir === 'outbound' || $dir === 'local') {
+		return false;
+	}
+	$dest = (string)($row['destination_number'] ?? '');
+	if (skykin_cdr_row_agent_ext($row) !== '') {
+		return true;
+	}
+	return skykin_cdr_is_webrtc_bridge_token($dest)
+		&& skykin_cdr_is_external_caller_number((string)($row['caller_id_number'] ?? ''));
+}
+
+/** SQL for agent-busy bridge legs (USER_BUSY only). */
+function skykin_cdr_agent_busy_sql(): string {
+	return "(hangup_cause = 'USER_BUSY' AND billsec = 0"
+		. " AND (direction IS NULL OR LOWER(COALESCE(direction, '')) IN ('', 'inbound'))"
+		. " AND (destination_number ~ '^(1[0-9]{2}|2[0-9]{2})$'"
+		. " OR last_arg ~* 'user/(1[0-9]{2}|2[0-9]{2})@'"
+		. " OR cc_agent_bridged ~* '/(1[0-9]{2}|2[0-9]{2})@'"
+		. " OR (destination_number ~ '^[a-z0-9]{4,16}$'"
+		. " AND destination_number !~ '^[0-9]+$'"
+		. " AND caller_id_number ~ '^[+0-9]{9,}$')))";
+}
+
+/**
+ * Map WebRTC sofia contact tokens (j2kriger) to extension for busy-leg display.
+ *
+ * @return array<string, string> token => extension
+ */
+function skykin_fs_sip_contact_tokens(string $domain, array $extensions): array {
+	$map = [];
+	foreach ($extensions as $ext) {
+		$ext = preg_replace('/\D+/', '', (string)$ext);
+		if ($ext === '') {
+			continue;
+		}
+		$contact = skykin_fs_api('sofia_contact */' . $ext . '@' . $domain);
+		if (!is_string($contact) || $contact === '') {
+			continue;
+		}
+		if (preg_match('/sip:([^@;>\s]+)@/i', $contact, $m)) {
+			$token = strtolower(trim($m[1]));
+			if ($token !== '' && $token !== $ext) {
+				$map[$token] = $ext;
+			}
+		}
+	}
+	return $map;
+}
+
+/** Resolve agent extension on a busy CDR row. */
+function skykin_cdr_busy_row_agent_ext(array $row, array $tokenToExt = []): string {
+	$ext = skykin_cdr_row_agent_ext($row);
+	if ($ext !== '') {
+		return $ext;
+	}
+	$dest = strtolower(trim((string)($row['destination_number'] ?? '')));
+	if ($dest !== '' && isset($tokenToExt[$dest])) {
+		return $tokenToExt[$dest];
+	}
+	return '';
+}
+
+/** Fetch raw agent-busy CDR legs for a period. */
+function skykin_cdr_fetch_agent_busy_legs(
+	PDO $db,
+	string $domain,
+	int $ts,
+	int $te,
+	int $limit = 500
+): array {
+	$busy = skykin_cdr_agent_busy_sql();
+	$s = $db->prepare(
+		"SELECT start_epoch,
+			" . skykin_cdr_time_sql('YYYY-MM-DD HH24:MI') . " as call_time,
+			caller_id_number, destination_number, hangup_cause, last_arg, cc_agent_bridged
+		FROM v_xml_cdr
+		WHERE domain_name=:d AND start_epoch>=:ts AND start_epoch<=:te
+		AND {$busy}
+		ORDER BY start_epoch DESC
+		LIMIT " . (int)$limit
+	);
+	$s->execute([':d' => $domain, ':ts' => $ts, ':te' => $te]);
+	return $s->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Collapse agent-busy legs: same caller + agent within ~90s = one event.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function skykin_cdr_collapse_agent_busy(array $rows, array $tokenToExt = []): array {
+	if ($rows === []) {
+		return [];
+	}
+	$groups = [];
+	foreach ($rows as $row) {
+		if (!skykin_cdr_is_agent_busy_leg($row)) {
+			continue;
+		}
+		$epoch = (int)($row['start_epoch'] ?? 0);
+		$caller = skykin_cdr_caller_key((string)($row['caller_id_number'] ?? ''));
+		$agent = skykin_cdr_busy_row_agent_ext($row, $tokenToExt);
+		$key = $caller . '|' . $agent . '|' . (int)floor($epoch / 90);
+		if (!isset($groups[$key])) {
+			$groups[$key] = [
+				'time' => (string)($row['call_time'] ?? ''),
+				'start_epoch' => $epoch,
+				'caller' => (string)($row['caller_id_number'] ?? ''),
+				'agent_ext' => $agent,
+				'destination' => (string)($row['destination_number'] ?? ''),
+				'hits' => 0,
+			];
+		}
+		$groups[$key]['hits']++;
+		if ($epoch > (int)$groups[$key]['start_epoch']) {
+			$groups[$key]['start_epoch'] = $epoch;
+			$groups[$key]['time'] = (string)($row['call_time'] ?? $groups[$key]['time']);
+		}
+		if ($groups[$key]['agent_ext'] === '' && $agent !== '') {
+			$groups[$key]['agent_ext'] = $agent;
+		}
+	}
+	$out = array_values($groups);
+	usort($out, static function ($a, $b) {
+		return (int)($b['start_epoch'] ?? 0) <=> (int)($a['start_epoch'] ?? 0);
+	});
+	return $out;
+}
+
+/** Per-agent USER_BUSY hit counts for supervisor agent list. */
+function skykin_cdr_agent_busy_counts(
+	PDO $db,
+	string $domain,
+	array $extensions,
+	int $ts,
+	int $te
+): array {
+	$tokenToExt = skykin_fs_sip_contact_tokens($domain, $extensions);
+	$rows = skykin_cdr_fetch_agent_busy_legs($db, $domain, $ts, $te, 2000);
+	$counts = [];
+	foreach ($extensions as $ext) {
+		$counts[(string)$ext] = 0;
+	}
+	foreach ($rows as $row) {
+		$agent = skykin_cdr_busy_row_agent_ext($row, $tokenToExt);
+		if ($agent !== '' && isset($counts[$agent])) {
+			$counts[$agent]++;
+		}
+	}
+	return $counts;
+}
+
 /** Last 9 digits of a phone for hunt grouping. */
 function skykin_cdr_caller_key(string $number): string {
 	$digits = preg_replace('/\D+/', '', $number);
